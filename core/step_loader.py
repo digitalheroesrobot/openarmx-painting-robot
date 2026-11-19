@@ -201,10 +201,40 @@ def load_step(
 
     bbox = ocp["Bnd_Box"]()
     _static_call(ocp["BRepBndLib"], "Add", shape, bbox)
-    xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
-    bounds_min = [float(xmin), float(ymin), float(zmin)]
-    bounds_max = [float(xmax), float(ymax), float(zmax)]
-    dimensions = [float(xmax - xmin), float(ymax - ymin), float(zmax - zmin)]
+
+    # OCP 8.0.1 does not bind Bnd_Box::Limits, so bbox.Get() raises
+    # TypeError even though the underlying OCCT operation succeeds.
+    # CornerMin/CornerMax return ordinary gp_Pnt objects in OCP 7 and 8.
+    if hasattr(bbox, "CornerMin") and hasattr(bbox, "CornerMax"):
+        corner_min = bbox.CornerMin()
+        corner_max = bbox.CornerMax()
+        bounds_min = _xyz(corner_min)
+        bounds_max = _xyz(corner_max)
+    else:
+        # Compatibility fallback for older bindings exposing scalar getters.
+        scalar_getters = (
+            "GetXMin", "GetYMin", "GetZMin",
+            "GetXMax", "GetYMax", "GetZMax",
+        )
+        if all(hasattr(bbox, name) for name in scalar_getters):
+            xmin, ymin, zmin, xmax, ymax, zmax = (
+                float(getattr(bbox, name)()) for name in scalar_getters
+            )
+            bounds_min = [xmin, ymin, zmin]
+            bounds_max = [xmax, ymax, zmax]
+        else:
+            raise RuntimeError(
+                "This Open CASCADE binding cannot expose finite bounding "
+                "box corners (CornerMin/CornerMax or scalar getters)."
+            )
+
+    if not all(math.isfinite(value) for value in bounds_min + bounds_max):
+        raise ValueError(
+            "STEP geometry produced a non-finite or open bounding box."
+        )
+    dimensions = [
+        float(bounds_max[i] - bounds_min[i]) for i in range(3)
+    ]
 
     face_records = []
     surface_counts = Counter()
