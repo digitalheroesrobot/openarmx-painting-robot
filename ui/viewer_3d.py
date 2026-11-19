@@ -1,9 +1,11 @@
 
 from __future__ import annotations
 
+import math
 import numpy as np
 import pyvista as pv
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -11,6 +13,8 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QCheckBox,
+    QDoubleSpinBox,
+    QPushButton,
 )
 from pyvistaqt import QtInteractor
 
@@ -56,6 +60,8 @@ MAX_DIRECTION_ARROWS = 300
 
 class ProductViewer(QWidget):
 
+    pose_confirmed = Signal(dict)
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -74,6 +80,13 @@ class ProductViewer(QWidget):
         self.display_unit = "mm"
 
         self.source_origin = np.zeros(3, dtype=float)
+
+        # Hook pivot is entered in source CAD coordinates by the operator.
+        self.hook_pivot_source = np.zeros(3, dtype=float)
+        self.hook_pivot_configured = False
+        self._pose_actor = None
+        self._actor_style = None
+        self._pose_interaction_callback = None
 
         self.source_to_view_transform = np.eye(4, dtype=float)
         self.view_to_source_transform = np.eye(4, dtype=float)
@@ -99,11 +112,14 @@ class ProductViewer(QWidget):
 
         self.display_control_panel = self._build_trajectory_controls()
         layout.addWidget(self.display_control_panel)
+        self.pose_control_panel = self._build_pose_controls()
+        layout.addWidget(self.pose_control_panel)
         layout.addWidget(self.plotter.interactor, 1)
 
         self.plotter.set_background("#101820")
 
         self.display_control_panel.hide()
+        self.pose_control_panel.hide()
         self._draw_empty_scene()
 
     # =========================================================
@@ -306,6 +322,169 @@ class ProductViewer(QWidget):
         self.display_control_panel.setVisible(bool(visible))
 
     # =========================================================
+    # MANUAL REFERENCE POSE CONTROLS
+    # =========================================================
+
+    def _build_pose_controls(self):
+        panel = QFrame()
+        panel.setObjectName("PoseReferenceControls")
+        panel.setStyleSheet("""
+            QFrame#PoseReferenceControls {
+                background-color: #0D1822;
+                border: 1px solid #294858;
+                border-radius: 5px;
+            }
+            QLabel { color: #D8E5ED; padding: 2px; }
+            QPushButton {
+                color: #EAF4F8;
+                background-color: #173747;
+                border: 1px solid #3D7185;
+                border-radius: 4px;
+                padding: 5px 10px;
+                font-weight: bold;
+            }
+            QPushButton:disabled { color: #71838D; background-color: #17232B; }
+        """)
+        layout = QHBoxLayout(panel)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(6)
+        layout.addWidget(QLabel("HOOK PIVOT CAD (X / Y / Z):"))
+        self.hook_pivot_inputs = []
+        for axis in "XYZ":
+            field = QDoubleSpinBox()
+            field.setRange(-1000000.0, 1000000.0)
+            field.setDecimals(3)
+            field.setSingleStep(1.0)
+            field.setSuffix(f" {axis}")
+            field.setFixedWidth(105)
+            field.setToolTip(f"Hook pivot {axis} coordinate in source CAD units")
+            layout.addWidget(field)
+            self.hook_pivot_inputs.append(field)
+
+        self.apply_pivot_button = QPushButton("APPLY PIVOT")
+        self.apply_pivot_button.clicked.connect(self._apply_hook_pivot)
+        layout.addWidget(self.apply_pivot_button)
+
+        self.pose_status_label = QLabel(
+            "Enter the hook pivot, then drag the product with the left mouse button."
+        )
+        self.pose_status_label.setMinimumWidth(220)
+        layout.addWidget(self.pose_status_label, 1)
+
+        self.confirm_pose_button = QPushButton("CONFIRM & SAVE POSE")
+        self.confirm_pose_button.setEnabled(False)
+        self.confirm_pose_button.clicked.connect(self._confirm_reference_pose)
+        layout.addWidget(self.confirm_pose_button)
+
+        self.reset_pose_button = QPushButton("RESET")
+        self.reset_pose_button.clicked.connect(self._reset_reference_pose)
+        layout.addWidget(self.reset_pose_button)
+        return panel
+
+    def _apply_hook_pivot(self):
+        pivot = np.asarray([field.value() for field in self.hook_pivot_inputs], dtype=float)
+        if not np.all(np.isfinite(pivot)):
+            self.pose_status_label.setText("Invalid hook pivot coordinates.")
+            return
+        self.hook_pivot_source = pivot
+        self.hook_pivot_configured = True
+        self._reset_reference_pose()
+        self._install_actor_interaction()
+        self.pose_status_label.setText(
+            "Hook pivot applied. Drag the product and confirm to save the reference pose."
+        )
+        self.confirm_pose_button.setEnabled(True)
+
+    def _install_actor_interaction(self):
+        if self._pose_actor is None:
+            return
+        try:
+            from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballActor
+            self._actor_style = vtkInteractorStyleTrackballActor()
+            self._actor_style.SetDefaultRenderer(self.plotter.renderer)
+            self.plotter.interactor.SetInteractorStyle(self._actor_style)
+            self._pose_actor.SetOrigin(*self.hook_pivot_source.tolist())
+
+            def on_interaction(caller, event):
+                self._update_pose_readout()
+
+            self._pose_interaction_callback = on_interaction
+            self._actor_style.AddObserver("InteractionEvent", self._pose_interaction_callback)
+        except Exception as exc:
+            self.pose_status_label.setText(f"Actor rotation unavailable: {exc}")
+            self.confirm_pose_button.setEnabled(False)
+
+    def _actor_matrix_array(self):
+        if self._pose_actor is None:
+            return np.eye(4, dtype=float)
+        matrix = self._pose_actor.GetMatrix()
+        return np.array(
+            [[matrix.GetElement(row, col) for col in range(4)] for row in range(4)],
+            dtype=float,
+        )
+
+    @staticmethod
+    def _rotation_to_rpy(rotation):
+        # R = Rz(yaw) * Ry(pitch) * Rx(roll).
+        sy = math.sqrt(rotation[0, 0] ** 2 + rotation[1, 0] ** 2)
+        if sy >= 1e-8:
+            roll = math.atan2(rotation[2, 1], rotation[2, 2])
+            pitch = math.atan2(-rotation[2, 0], sy)
+            yaw = math.atan2(rotation[1, 0], rotation[0, 0])
+        else:
+            roll = math.atan2(-rotation[1, 2], rotation[1, 1])
+            pitch = math.atan2(-rotation[2, 0], sy)
+            yaw = 0.0
+        return np.degrees([roll, pitch, yaw])
+
+    def _current_pose_record(self):
+        matrix = self._actor_matrix_array()
+        u, _, vt = np.linalg.svd(matrix[:3, :3])
+        rotation = u @ vt
+        if np.linalg.det(rotation) < 0:
+            u[:, -1] *= -1
+            rotation = u @ vt
+        return {
+            "world_frame": "CAD_ORIGIN",
+            "pivot_type": "HOOK_ROTATION_AXIS_POINT",
+            "hook_pivot_cad": self.hook_pivot_source.tolist(),
+            "position_world_source_units": matrix[:3, 3].tolist(),
+            "roll_pitch_yaw_deg": self._rotation_to_rpy(rotation).tolist(),
+            "rotation_matrix_3x3": rotation.tolist(),
+            "transform_matrix_4x4": matrix.tolist(),
+        }
+
+    def _update_pose_readout(self):
+        if self._pose_actor is None or not self.hook_pivot_configured:
+            return
+        pose = self._current_pose_record()
+        p = pose["position_world_source_units"]
+        rpy = pose["roll_pitch_yaw_deg"]
+        self.pose_status_label.setText(
+            f"CAD origin W: X {p[0]:.2f}, Y {p[1]:.2f}, Z {p[2]:.2f} "
+            f"{self._source_unit_label()} | RPY: "
+            f"{rpy[0]:.2f}°, {rpy[1]:.2f}°, {rpy[2]:.2f}°"
+        )
+
+    def _confirm_reference_pose(self):
+        if self._pose_actor is None or not self.hook_pivot_configured:
+            return
+        record = self._current_pose_record()
+        record["coordinate_unit"] = self.source_unit
+        record["display_unit"] = self.display_unit
+        self.pose_confirmed.emit(record)
+        self.pose_status_label.setText("Reference pose sent for local result storage.")
+
+    def _reset_reference_pose(self):
+        if self._pose_actor is not None:
+            self._pose_actor.SetPosition(0.0, 0.0, 0.0)
+            self._pose_actor.SetOrientation(0.0, 0.0, 0.0)
+            self._pose_actor.SetScale(1.0, 1.0, 1.0)
+            self._pose_actor.SetOrigin(*self.hook_pivot_source.tolist())
+            self.plotter.render()
+        self._update_pose_readout()
+
+    # =========================================================
     # PRODUCT COORDINATE SYSTEM
     # =========================================================
 
@@ -388,6 +567,8 @@ class ProductViewer(QWidget):
 
     def _draw_empty_scene(self):
         self.plotter.clear()
+        self._pose_actor = None
+        self._actor_style = None
         self.plotter.set_background("#101820")
 
         self.plotter.add_text(
@@ -414,6 +595,12 @@ class ProductViewer(QWidget):
 
         self.display_mode = "product"
         self._set_trajectory_controls_visible(False)
+        self.pose_control_panel.setVisible(True)
+        self.hook_pivot_configured = False
+        self.confirm_pose_button.setEnabled(False)
+        self.hook_pivot_source = np.zeros(3, dtype=float)
+        for field in self.hook_pivot_inputs:
+            field.setValue(0.0)
 
         self._render_product(reset_camera=True)
 
@@ -450,6 +637,7 @@ class ProductViewer(QWidget):
 
         self.display_mode = "patches"
         self._set_trajectory_controls_visible(False)
+        self.pose_control_panel.hide()
 
         self._render_product(reset_camera=True)
 
@@ -556,6 +744,7 @@ class ProductViewer(QWidget):
 
         self.display_mode = "classification"
         self._set_trajectory_controls_visible(False)
+        self.pose_control_panel.hide()
 
         self._render_product(reset_camera=True)
 
@@ -700,6 +889,7 @@ class ProductViewer(QWidget):
 
         self.display_mode = "trajectory"
         self._set_trajectory_controls_visible(True)
+        self.pose_control_panel.hide()
 
         self._render_product(reset_camera=True)
 
@@ -1061,7 +1251,7 @@ class ProductViewer(QWidget):
             # Keep tessellation edges visible for geometric inspection.
             # Smooth shading improves the surface appearance without hiding
             # the triangle boundaries.
-            self.plotter.add_mesh(
+            self._pose_actor = self.plotter.add_mesh(
                 polydata,
                 color="#4C8DAD",
                 show_edges=True,
@@ -1071,6 +1261,7 @@ class ProductViewer(QWidget):
                 specular=0.25,
                 specular_power=20,
             )
+            self._pose_actor.SetOrigin(*self.hook_pivot_source.tolist())
 
         # -------------------------------------------------
         # COMMON VIEWER ELEMENTS
