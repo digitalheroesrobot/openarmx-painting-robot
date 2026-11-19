@@ -445,10 +445,16 @@ class ProductViewer(QWidget):
             u[:, -1] *= -1
             rotation = u @ vt
         return {
-            "world_frame": "CAD_ORIGIN",
+            "world_frame": "WORLD_NED",
+            "world_axis_definition": {
+                "X": "NORTH / CHAIN_DIRECTION",
+                "Y": "EAST / LATERAL",
+                "Z": "DOWN",
+            },
+            "product_frame": "PRODUCT_CAD",
             "pivot_type": "HOOK_ROTATION_AXIS_POINT",
             "hook_pivot_cad": self.hook_pivot_source.tolist(),
-            "position_world_source_units": matrix[:3, 3].tolist(),
+            "position_world_ned_source_units": matrix[:3, 3].tolist(),
             "roll_pitch_yaw_deg": self._rotation_to_rpy(rotation).tolist(),
             "rotation_matrix_3x3": rotation.tolist(),
             "transform_matrix_4x4": matrix.tolist(),
@@ -458,12 +464,12 @@ class ProductViewer(QWidget):
         if self._pose_actor is None or not self.hook_pivot_configured:
             return
         pose = self._current_pose_record()
-        p = pose["position_world_source_units"]
+        p = pose["position_world_ned_source_units"]
         rpy = pose["roll_pitch_yaw_deg"]
         self.pose_status_label.setText(
-            f"CAD origin W: X {p[0]:.2f}, Y {p[1]:.2f}, Z {p[2]:.2f} "
-            f"{self._source_unit_label()} | RPY: "
-            f"{rpy[0]:.2f}°, {rpy[1]:.2f}°, {rpy[2]:.2f}°"
+            f"CAD origin in WORLD NED: X {p[0]:.2f}, Y {p[1]:.2f}, "
+            f"Z {p[2]:.2f} {self._source_unit_label()} | "
+            f"RPY: {rpy[0]:.2f}°, {rpy[1]:.2f}°, {rpy[2]:.2f}°"
         )
 
     def _confirm_reference_pose(self):
@@ -1095,6 +1101,101 @@ class ProductViewer(QWidget):
         return float(np.median(valid) * 0.25)
 
     # =========================================================
+    # WORLD NED AND PRODUCT CAD COORDINATE FRAMES
+    # =========================================================
+
+    def _add_coordinate_frame(self, origin, basis, labels, colors, length):
+        """Draw a labelled right-handed coordinate triad."""
+        origin = np.asarray(origin, dtype=float)
+        basis = np.asarray(basis, dtype=float)
+
+        for axis_index in range(3):
+            direction = basis[:, axis_index]
+            norm = float(np.linalg.norm(direction))
+            if norm < 1e-10:
+                continue
+            direction = direction / norm
+            arrow = pv.Arrow(
+                start=origin,
+                direction=direction,
+                scale=length,
+                tip_length=0.22,
+                tip_radius=0.07,
+                shaft_radius=0.018,
+            )
+            self.plotter.add_mesh(arrow, color=colors[axis_index], lighting=False)
+            label_position = origin + direction * (length * 1.12)
+            self.plotter.add_point_labels(
+                np.asarray([label_position]),
+                [labels[axis_index]],
+                font_size=10,
+                text_color=colors[axis_index],
+                point_size=0,
+                shape=None,
+                always_visible=True,
+            )
+
+    def _add_pose_coordinate_frames(self):
+        """
+        World NED is fixed at the chain-entry origin.
+        Product CAD is attached to the CAD origin and follows the actor.
+        +X follows the chain, +Y is lateral, and +Z points down.
+        """
+        if self.display_mode != "product" or self._pose_actor is None:
+            return
+
+        bounds = np.asarray(self.current_mesh.bounds, dtype=float)
+        diagonal = float(np.linalg.norm(bounds[1] - bounds[0]))
+        axis_length = max(diagonal * 0.20, 10.0)
+
+        self._add_coordinate_frame(
+            origin=np.zeros(3, dtype=float),
+            basis=np.eye(3, dtype=float),
+            labels=("WORLD +X / CHAIN", "WORLD +Y", "WORLD +Z / DOWN"),
+            colors=("#FF5252", "#00E676", "#40C4FF"),
+            length=axis_length,
+        )
+
+        transform = self._actor_matrix_array()
+        cad_origin_world = transform[:3, 3]
+        self._add_coordinate_frame(
+            origin=cad_origin_world,
+            basis=transform[:3, :3],
+            labels=("CAD +X", "CAD +Y", "CAD +Z"),
+            colors=("#FFB74D", "#CE93D8", "#FFFFFF"),
+            length=axis_length * 0.72,
+        )
+
+        if self.hook_pivot_configured:
+            pivot_h = np.append(self.hook_pivot_source, 1.0)
+            pivot_world = (transform @ pivot_h)[:3]
+            marker = pv.Sphere(
+                radius=max(axis_length * 0.035, 1.0),
+                center=pivot_world,
+                theta_resolution=16,
+                phi_resolution=16,
+            )
+            self.plotter.add_mesh(marker, color="#FF00FF", lighting=False)
+            self.plotter.add_point_labels(
+                np.asarray([pivot_world + np.array([axis_length * 0.05] * 3)]),
+                ["HOOK PIVOT"],
+                font_size=10,
+                text_color="#FF00FF",
+                point_size=0,
+                shape=None,
+                always_visible=True,
+            )
+
+        self.plotter.add_text(
+            "WORLD NED  |  X: CHAIN  Y: LATERAL  Z: DOWN\n"
+            "PRODUCT CAD FRAME  |  follows the product\n"
+            "MAGENTA POINT  |  hook rotation pivot",
+            position="upper_left",
+            font_size=9,
+            color="#EAF4F8",
+        )
+
+    # =========================================================
     # MAIN RENDERING
     # =========================================================
 
@@ -1266,9 +1367,9 @@ class ProductViewer(QWidget):
         # -------------------------------------------------
         # COMMON VIEWER ELEMENTS
         # -------------------------------------------------
-        # Keep the initial product viewer uncluttered.
-        # Grid, dimension annotations, coordinate axes, and origin marker
-        # remain available as helper methods for later opt-in controls.
+        # Fixed World NED and moving Product CAD frames are both visible
+        # in the manual reference-pose viewer.
+        self._add_pose_coordinate_frames()
 
         # -------------------------------------------------
         # CAMERA RESTORATION
