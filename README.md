@@ -1,2 +1,1 @@
-# openarmx-painting-robot
-This is an openarmx-painting-robot
+pip install PySide6 pyvista pyvistaqt trimesh numpy

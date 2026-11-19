@@ -1,0 +1,245 @@
+{
+    "analysis": {
+        "stage": 1,
+        "name": "Geometry Analysis",
+        "segmentation_normal_angle_deg": 25.0,
+        "planar_distance_tolerance_mm": 0.5
+    },
+    "mesh": {
+        "vertex_count": 16,
+        "triangle_count": 28,
+        "connected_components": 1,
+        "finite_vertices": true,
+        "watertight": true,
+        "winding_consistent": true,
+        "is_volume": true,
+        "positive_volume": true,
+        "degenerate_faces": 0,
+        "zero_normal_faces": 0,
+        "valid_faces": 28,
+        "invalid_faces": 0
+    },
+    "geometry": {
+        "dimensions_mm": {
+            "x": 0.5699999928474426,
+            "y": 0.30000001192092896,
+            "z": 0.03999999910593033
+        },
+        "bounds_mm": [
+            [
+                0.0,
+                0.0,
+                0.0
+            ],
+            [
+                0.5699999928474426,
+                0.30000001192092896,
+                0.03999999910593033
+            ]
+        ],
+        "surface_area_mm2": 0.30720000697970384,
+        "volume_mm3": 0.004464000058293339,
+        "center_of_mass_mm": [
+            0.28499999840653706,
+            0.18193549034452208,
+            0.01999999955296516
+        ]
+    },
+    "surface_segmentation": {
+        "patch_count": 10,
+        "planar_patch_count": 10,
+        "curved_patch_count": 0,
+        "invalid_patch_count": 0,
+        "patches": [
+            {
+                "patch_id": 0,
+                "classification": "planar",
+                "face_count": 6,
+                "area": 0.11160000395178793,
+                "centroid": [
+                    0.2849999984065371,
+                    0.1819354903445221,
+                    0.0
+                ],
+                "average_normal": [
+                    0.0,
+                    0.0,
+                    -1.0
+                ],
+                "normal_coherence": 1.0,
+                "max_plane_deviation": 0.0
+            },
+            {
+                "patch_id": 1,
+                "classification": "planar",
+                "face_count": 6,
+                "area": 0.11160000395178793,
+                "centroid": [
+                    0.2849999984065371,
+                    0.1819354903445221,
+                    0.03999999910593033
+                ],
+                "average_normal": [
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "normal_coherence": 1.0,
+                "max_plane_deviation": 0.0
+            },
+            {
+                "patch_id": 2,
+                "classification": "planar",
+                "face_count": 2,
+                "area": 0.004799999785423281,
+                "centroid": [
+                    0.059999998658895486,
+                    0.0,
+                    0.019999999552965168
+                ],
+                "average_normal": [
+                    0.0,
+                    -1.0,
+                    0.0
+                ],
+                "normal_coherence": 1.0,
+                "max_plane_deviation": 0.0
+            },
+            {
+                "patch_id": 3,
+                "classification": "planar",
+                "face_count": 2,
+                "area": 0.007200000125169748,
+                "centroid": [
+                    0.119999997317791,
+                    0.09000000357627869,
+                    0.019999999552965164
+                ],
+                "average_normal": [
+                    1.0,
+                    0.0,
+                    0.0
+                ],
+                "normal_coherence": 1.0,
+                "max_plane_deviation": 0.0
+            },
+            {
+                "patch_id": 4,
+                "classification": "planar",
+                "face_count": 2,
+                "area": 0.013199999335408219,
+                "centroid": [
+                    0.28499999269843107,
+                    0.18000000715255737,
+                    0.019999999552965164
+                ],
+                "average_normal": [
+                    0.0,
+                    -1.0,
+                    0.0
+                ],
+                "normal_coherence": 1.0,
+                "max_plane_deviation": 0.0
+            },
+            {
+                "patch_id": 5,
+                "classification": "planar",
+                "face_count": 2,
+                "area": 0.007200000125169748,
+                "centroid": [
+                    0.44999998807907104,
+                    0.09000000357627869,
+                    0.019999999552965164
+                ],
+                "average_normal": [
+                    -1.0,
+                    0.0,
+                    0.0
+                ],
+                "normal_coherence": 1.0,
+                "max_plane_deviation": 0.0
+            },
+            {
+                "patch_id": 6,
+                "classification": "planar",
+                "face_count": 2,
+                "area": 0.004800000083446498,
+                "centroid": [
+                    0.5099999904632568,
+                    0.0,
+                    0.01999999955296516
+                ],
+                "average_normal": [
+                    0.0,
+                    -1.0,
+                    0.0
+                ],
+                "normal_coherence": 1.0,
+                "max_plane_deviation": 0.0
+            },
+            {
+                "patch_id": 7,
+                "classification": "planar",
+                "face_count": 2,
+                "area": 0.012000000208616246,
+                "centroid": [
+                    0.5699999928474426,
+                    0.1500000059604645,
+                    0.019999999552965164
+                ],
+                "average_normal": [
+                    1.0,
+                    0.0,
+                    0.0
+                ],
+                "normal_coherence": 1.0,
+                "max_plane_deviation": 0.0
+            },
+            {
+                "patch_id": 8,
+                "classification": "planar",
+                "face_count": 2,
+                "area": 0.012000000208616246,
+                "centroid": [
+                    0.0,
+                    0.1500000059604645,
+                    0.019999999552965164
+                ],
+                "average_normal": [
+                    -1.0,
+                    0.0,
+                    0.0
+                ],
+                "normal_coherence": 1.0,
+                "max_plane_deviation": 0.0
+            },
+            {
+                "patch_id": 9,
+                "classification": "planar",
+                "face_count": 2,
+                "area": 0.022799999204278,
+                "centroid": [
+                    0.2849999964237213,
+                    0.30000001192092896,
+                    0.019999999552965164
+                ],
+                "average_normal": [
+                    0.0,
+                    1.0,
+                    0.0
+                ],
+                "normal_coherence": 1.0,
+                "max_plane_deviation": 0.0
+            }
+        ]
+    },
+    "source_file": "/home/ubuntu/openarmx_ws/src/openarmx_painting_robot/models/sample_bracket.stl",
+    "part_name": "sample_bracket",
+    "unit_configuration": {
+        "source_stl_coordinate_unit": "mm",
+        "internal_geometry_unit": "mm",
+        "dimensions_unit": "mm",
+        "surface_area_unit": "mm2",
+        "volume_unit": "mm3"
+    }
+}

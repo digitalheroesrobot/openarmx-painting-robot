@@ -1,0 +1,2113 @@
+{
+    "analysis": {
+        "stage": 2,
+        "name": "Paintable Surface Identification",
+        "method": "Stage 1 patch-based geometric classification with advanced geometry integration",
+        "description": "Identifies geometrically suitable planar and curved surface candidates for spray painting.",
+        "coordinate_unit": "mm",
+        "robot_reachability_checked": false,
+        "spray_accessibility_checked": false,
+        "fixture_interference_checked": false,
+        "collision_clearance_checked": false,
+        "standoff_distance_checked": false,
+        "spray_orientation_checked": false,
+        "unit_warning": null,
+        "limitations": "A paintable candidate is not proof of actual spray accessibility or robot reachability. Visibility, occlusion, spray gun orientation, standoff distance, collision clearance and fixture interference must be evaluated later."
+    },
+    "unit_configuration": {
+        "source_stl_coordinate_unit": "mm",
+        "patch_area_coordinate_unit": "mm^2",
+        "physical_area_reference_unit": "mm^2",
+        "minimum_patch_area_mm2": 100.0,
+        "minimum_patch_area_coordinate_units2": 100.0,
+        "area_filter_status": "applied",
+        "source_mesh_coordinates_modified": false
+    },
+    "configuration": {
+        "minimum_patch_area_mm2": 100.0,
+        "minimum_normal_coherence": 0.85,
+        "inspection_normal_coherence": 0.7,
+        "excluded_patch_ids": [],
+        "curved_surface_policy": "Curved patches are not rejected based on global normal coherence.",
+        "internal_cylindrical_surface_policy": "Internal cylindrical surface candidates require review and are not automatically excluded."
+    },
+    "summary": {
+        "paintable_candidate_patches": 26,
+        "planar_candidate_patches": 5,
+        "curved_candidate_patches": 21,
+        "excluded_patches": 0,
+        "requires_inspection_patches": 2,
+        "invalid_patches": 0,
+        "paintable_candidate_faces": 4230,
+        "excluded_faces": 0,
+        "requires_inspection_faces": 224,
+        "invalid_faces": 0,
+        "planar_candidate_faces": 1832,
+        "curved_candidate_faces": 2398,
+        "total_candidate_area_coordinate_units2": 440011.9528513206,
+        "total_candidate_area_mm2": 440011.9528513206,
+        "coordinate_unit": "mm",
+        "total_patches": 28,
+        "total_faces": 4454
+    },
+    "advanced_geometry": {
+        "source": "stage1_geometry_analysis",
+        "coordinate_unit": "mm",
+        "boundary_edge_count": 0,
+        "sharp_edge_count": 1889,
+        "cylindrical_feature_count": 21,
+        "hole_candidate_count": 2,
+        "bend_candidate_count": 47,
+        "connected_component_count": 1,
+        "thickness": {
+            "status": "estimated",
+            "method": "inward_normal_ray_intersection",
+            "sample_count": 128,
+            "minimum_coordinate_units": 1.8768945596534012,
+            "maximum_coordinate_units": 299.9999528333016,
+            "mean_coordinate_units": 36.78326314591207,
+            "median_coordinate_units": 19.999952833301563,
+            "minimum_mm": 1.8768945596534012,
+            "maximum_mm": 299.9999528333016,
+            "mean_mm": 36.78326314591207,
+            "median_mm": 19.999952833301563,
+            "note": "Local ray-based estimates. Results may be unreliable near edges, cavities, and complex internal geometry.",
+            "coordinate_unit": "mm",
+            "measurement_unit_status": "converted_to_mm"
+        },
+        "patch_review": {
+            "internal_cylindrical_patch_count": 2,
+            "bend_related_patch_count": 28
+        },
+        "interpretation": {
+            "holes_are_automatically_excluded": false,
+            "bend_surfaces_are_automatically_excluded": false,
+            "thickness_is_used_for_automatic_rejection": false,
+            "reason": "Advanced geometry features are retained for process review. Automatic exclusion requires explicit painting process rules."
+        }
+    },
+    "classification_legend": {
+        "0": "excluded",
+        "1": "paintable_candidate",
+        "2": "requires_inspection",
+        "3": "invalid"
+    },
+    "patches": [
+        {
+            "patch_id": 0,
+            "geometry_class": "curved",
+            "surface_status": "requires_inspection",
+            "face_status_value": 2,
+            "area_coordinate_units2": 19318.69643340708,
+            "max_plane_deviation_coordinate_units": 9.094460985951937,
+            "area_mm2": 19318.69643340708,
+            "max_plane_deviation_mm": 9.094460985951937,
+            "normal_coherence": 0.9887081462743146,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "internal_cylindrical_surface",
+                "cylinder_radius_coordinate_units": 148.86153400469772,
+                "cylinder_diameter_coordinate_units": 297.72306800939543,
+                "cylinder_radius_mm": 148.86153400469772,
+                "cylinder_diameter_mm": 297.72306800939543,
+                "cylinder_fit_confidence": 0.2584016849527816,
+                "internal_cylindrical_surface": true,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 0,
+                        "patch_b": 1,
+                        "shared_transition_face_pairs": 68,
+                        "mean_dihedral_angle_deg": 89.73460599804373,
+                        "min_dihedral_angle_deg": 78.68023953119888,
+                        "max_dihedral_angle_deg": 97.9954650106692,
+                        "possible_bend": false,
+                        "estimated_bend_radius_coordinate_units": 148.86153400469772,
+                        "estimated_bend_radius_mm": 148.86153400469772,
+                        "radius_confidence": 0.2584016849527816
+                    },
+                    {
+                        "patch_a": 0,
+                        "patch_b": 11,
+                        "shared_transition_face_pairs": 9,
+                        "mean_dihedral_angle_deg": 95.09788370751593,
+                        "min_dihedral_angle_deg": 94.99720268833029,
+                        "max_dihedral_angle_deg": 95.14274843555148,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 148.86153400469772,
+                        "estimated_bend_radius_mm": 148.86153400469772,
+                        "radius_confidence": 0.2584016849527816
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "internal_cylindrical_surface_requires_review",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 1,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 119879.53067952621,
+            "max_plane_deviation_coordinate_units": 73.83887035889697,
+            "area_mm2": 119879.53067952621,
+            "max_plane_deviation_mm": 73.83887035889697,
+            "normal_coherence": 0.0910080870858773,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": false,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 63.4025337067137,
+                "cylinder_diameter_coordinate_units": 126.8050674134274,
+                "cylinder_radius_mm": 63.4025337067137,
+                "cylinder_diameter_mm": 126.8050674134274,
+                "cylinder_fit_confidence": 0.0,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 1,
+                        "patch_b": 8,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.02351976087304,
+                        "min_dihedral_angle_deg": 89.99999330904618,
+                        "max_dihedral_angle_deg": 90.10641524356804,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": null,
+                        "estimated_bend_radius_mm": null,
+                        "radius_confidence": 0.0
+                    },
+                    {
+                        "patch_a": 1,
+                        "patch_b": 5,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.02351976143257,
+                        "min_dihedral_angle_deg": 89.99999330904618,
+                        "max_dihedral_angle_deg": 90.10641524356804,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": null,
+                        "estimated_bend_radius_mm": null,
+                        "radius_confidence": 0.0
+                    },
+                    {
+                        "patch_a": 1,
+                        "patch_b": 2,
+                        "shared_transition_face_pairs": 68,
+                        "mean_dihedral_angle_deg": 89.73091454187592,
+                        "min_dihedral_angle_deg": 78.68023953119888,
+                        "max_dihedral_angle_deg": 97.99448125230576,
+                        "possible_bend": false,
+                        "estimated_bend_radius_coordinate_units": 139.96097191263405,
+                        "estimated_bend_radius_mm": 139.96097191263405,
+                        "radius_confidence": 0.2605342667119219
+                    },
+                    {
+                        "patch_a": 0,
+                        "patch_b": 1,
+                        "shared_transition_face_pairs": 68,
+                        "mean_dihedral_angle_deg": 89.73460599804373,
+                        "min_dihedral_angle_deg": 78.68023953119888,
+                        "max_dihedral_angle_deg": 97.9954650106692,
+                        "possible_bend": false,
+                        "estimated_bend_radius_coordinate_units": 148.86153400469772,
+                        "estimated_bend_radius_mm": 148.86153400469772,
+                        "radius_confidence": 0.2584016849527816
+                    },
+                    {
+                        "patch_a": 1,
+                        "patch_b": 11,
+                        "shared_transition_face_pairs": 2,
+                        "mean_dihedral_angle_deg": 95.00000525951265,
+                        "min_dihedral_angle_deg": 95.00000525951265,
+                        "max_dihedral_angle_deg": 95.00000525951265,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": null,
+                        "estimated_bend_radius_mm": null,
+                        "radius_confidence": 0.0
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate"
+            ]
+        },
+        {
+            "patch_id": 2,
+            "geometry_class": "curved",
+            "surface_status": "requires_inspection",
+            "face_status_value": 2,
+            "area_coordinate_units2": 19318.71272109657,
+            "max_plane_deviation_coordinate_units": 9.181701655225652,
+            "area_mm2": 19318.71272109657,
+            "max_plane_deviation_mm": 9.181701655225652,
+            "normal_coherence": 0.9887073126959909,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "internal_cylindrical_surface",
+                "cylinder_radius_coordinate_units": 139.96097191263405,
+                "cylinder_diameter_coordinate_units": 279.9219438252681,
+                "cylinder_radius_mm": 139.96097191263405,
+                "cylinder_diameter_mm": 279.9219438252681,
+                "cylinder_fit_confidence": 0.2605342667119219,
+                "internal_cylindrical_surface": true,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 1,
+                        "patch_b": 2,
+                        "shared_transition_face_pairs": 68,
+                        "mean_dihedral_angle_deg": 89.73091454187592,
+                        "min_dihedral_angle_deg": 78.68023953119888,
+                        "max_dihedral_angle_deg": 97.99448125230576,
+                        "possible_bend": false,
+                        "estimated_bend_radius_coordinate_units": 139.96097191263405,
+                        "estimated_bend_radius_mm": 139.96097191263405,
+                        "radius_confidence": 0.2605342667119219
+                    },
+                    {
+                        "patch_a": 2,
+                        "patch_b": 11,
+                        "shared_transition_face_pairs": 9,
+                        "mean_dihedral_angle_deg": 95.09788370751593,
+                        "min_dihedral_angle_deg": 94.99720268833029,
+                        "max_dihedral_angle_deg": 95.14274843555148,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 139.96097191263405,
+                        "estimated_bend_radius_mm": 139.96097191263405,
+                        "radius_confidence": 0.2605342667119219
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "internal_cylindrical_surface_requires_review",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 3,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 92244.37769048673,
+            "max_plane_deviation_coordinate_units": 98.79356677758341,
+            "area_mm2": 92244.37769048673,
+            "max_plane_deviation_mm": 98.79356677758341,
+            "normal_coherence": 0.17102331879996652,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "external_cylindrical_surface",
+                "cylinder_radius_coordinate_units": 70.00003149170733,
+                "cylinder_diameter_coordinate_units": 140.00006298341467,
+                "cylinder_radius_mm": 70.00003149170733,
+                "cylinder_diameter_mm": 140.00006298341467,
+                "cylinder_fit_confidence": 0.9887017103895636,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": true,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 3,
+                        "patch_b": 9,
+                        "shared_transition_face_pairs": 40,
+                        "mean_dihedral_angle_deg": 90.03130016476824,
+                        "min_dihedral_angle_deg": 89.99999274035349,
+                        "max_dihedral_angle_deg": 90.17693569448927,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 70.00003149170733,
+                        "estimated_bend_radius_mm": 70.00003149170733,
+                        "radius_confidence": 0.9887017103895636
+                    },
+                    {
+                        "patch_a": 3,
+                        "patch_b": 6,
+                        "shared_transition_face_pairs": 40,
+                        "mean_dihedral_angle_deg": 90.03229146016717,
+                        "min_dihedral_angle_deg": 89.99996657327965,
+                        "max_dihedral_angle_deg": 90.17184899984312,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 70.00003149170733,
+                        "estimated_bend_radius_mm": 70.00003149170733,
+                        "radius_confidence": 0.9887017103895636
+                    },
+                    {
+                        "patch_a": 3,
+                        "patch_b": 10,
+                        "shared_transition_face_pairs": 126,
+                        "mean_dihedral_angle_deg": 86.84762554819116,
+                        "min_dihedral_angle_deg": 37.690343621796295,
+                        "max_dihedral_angle_deg": 94.98393311857873,
+                        "possible_bend": false,
+                        "estimated_bend_radius_coordinate_units": 70.00003149170733,
+                        "estimated_bend_radius_mm": 70.00003149170733,
+                        "radius_confidence": 0.9887017103895636
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 4,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 13814.395911536723,
+            "max_plane_deviation_coordinate_units": 10.000000000000012,
+            "area_mm2": 13814.395911536723,
+            "max_plane_deviation_mm": 10.000000000000012,
+            "normal_coherence": 8.229591684618906e-18,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "external_cylindrical_surface",
+                "cylinder_radius_coordinate_units": 110.00000035734861,
+                "cylinder_diameter_coordinate_units": 220.00000071469722,
+                "cylinder_radius_mm": 110.00000035734861,
+                "cylinder_diameter_mm": 220.00000071469722,
+                "cylinder_fit_confidence": 0.9999994401481251,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": true,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 4,
+                        "patch_b": 6,
+                        "shared_transition_face_pairs": 52,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 110.00000035734861,
+                        "estimated_bend_radius_mm": 110.00000035734861,
+                        "radius_confidence": 0.9999994401481251
+                    },
+                    {
+                        "patch_a": 4,
+                        "patch_b": 5,
+                        "shared_transition_face_pairs": 52,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 110.00000035734861,
+                        "estimated_bend_radius_mm": 110.00000035734861,
+                        "radius_confidence": 0.9999994401481251
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 5,
+            "geometry_class": "planar",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 27563.259776581308,
+            "max_plane_deviation_coordinate_units": 0.0,
+            "area_mm2": 27563.259776581308,
+            "max_plane_deviation_mm": 0.0,
+            "normal_coherence": 0.9999999999999999,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": false,
+                "cylindrical_surface_type": null,
+                "cylinder_radius_coordinate_units": null,
+                "cylinder_diameter_coordinate_units": null,
+                "cylinder_radius_mm": null,
+                "cylinder_diameter_mm": null,
+                "cylinder_fit_confidence": 0.0,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 4,
+                        "patch_b": 5,
+                        "shared_transition_face_pairs": 52,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 110.00000035734861,
+                        "estimated_bend_radius_mm": 110.00000035734861,
+                        "radius_confidence": 0.9999994401481251
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 26,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949626675,
+                        "estimated_bend_radius_mm": 5.999998949626675,
+                        "radius_confidence": 0.9999948682312645
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 25,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409614
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 27,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409615
+                    },
+                    {
+                        "patch_a": 1,
+                        "patch_b": 5,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.02351976143257,
+                        "min_dihedral_angle_deg": 89.99999330904618,
+                        "max_dihedral_angle_deg": 90.10641524356804,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": null,
+                        "estimated_bend_radius_mm": null,
+                        "radius_confidence": 0.0
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 24,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949575895,
+                        "estimated_bend_radius_mm": 5.999998949575895,
+                        "radius_confidence": 0.999994868231262
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 20,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999894962622,
+                        "estimated_bend_radius_mm": 5.99999894962622,
+                        "radius_confidence": 0.999994868231265
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 23,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409616
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 21,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409617
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 22,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949627054,
+                        "estimated_bend_radius_mm": 5.999998949627054,
+                        "radius_confidence": 0.9999948682312647
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_planar_candidate",
+                "bend_geometry_candidate"
+            ]
+        },
+        {
+            "patch_id": 6,
+            "geometry_class": "planar",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 21687.826386464174,
+            "max_plane_deviation_coordinate_units": 0.0,
+            "area_mm2": 21687.826386464174,
+            "max_plane_deviation_mm": 0.0,
+            "normal_coherence": 0.9999999999999998,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": false,
+                "cylindrical_surface_type": null,
+                "cylinder_radius_coordinate_units": null,
+                "cylinder_diameter_coordinate_units": null,
+                "cylinder_radius_mm": null,
+                "cylinder_diameter_mm": null,
+                "cylinder_fit_confidence": 0.0,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 4,
+                        "patch_b": 6,
+                        "shared_transition_face_pairs": 52,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 110.00000035734861,
+                        "estimated_bend_radius_mm": 110.00000035734861,
+                        "radius_confidence": 0.9999994401481251
+                    },
+                    {
+                        "patch_a": 6,
+                        "patch_b": 26,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949626675,
+                        "estimated_bend_radius_mm": 5.999998949626675,
+                        "radius_confidence": 0.9999948682312645
+                    },
+                    {
+                        "patch_a": 6,
+                        "patch_b": 25,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409614
+                    },
+                    {
+                        "patch_a": 6,
+                        "patch_b": 27,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409615
+                    },
+                    {
+                        "patch_a": 3,
+                        "patch_b": 6,
+                        "shared_transition_face_pairs": 40,
+                        "mean_dihedral_angle_deg": 90.03229146016717,
+                        "min_dihedral_angle_deg": 89.99996657327965,
+                        "max_dihedral_angle_deg": 90.17184899984312,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 70.00003149170733,
+                        "estimated_bend_radius_mm": 70.00003149170733,
+                        "radius_confidence": 0.9887017103895636
+                    },
+                    {
+                        "patch_a": 6,
+                        "patch_b": 24,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949575895,
+                        "estimated_bend_radius_mm": 5.999998949575895,
+                        "radius_confidence": 0.999994868231262
+                    },
+                    {
+                        "patch_a": 6,
+                        "patch_b": 20,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999894962622,
+                        "estimated_bend_radius_mm": 5.99999894962622,
+                        "radius_confidence": 0.999994868231265
+                    },
+                    {
+                        "patch_a": 6,
+                        "patch_b": 23,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409616
+                    },
+                    {
+                        "patch_a": 6,
+                        "patch_b": 21,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409617
+                    },
+                    {
+                        "patch_a": 6,
+                        "patch_b": 22,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949627054,
+                        "estimated_bend_radius_mm": 5.999998949627054,
+                        "radius_confidence": 0.9999948682312647
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_planar_candidate",
+                "bend_geometry_candidate"
+            ]
+        },
+        {
+            "patch_id": 7,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 13814.395911536723,
+            "max_plane_deviation_coordinate_units": 10.000000000000012,
+            "area_mm2": 13814.395911536723,
+            "max_plane_deviation_mm": 10.000000000000012,
+            "normal_coherence": 8.229591684618906e-18,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "external_cylindrical_surface",
+                "cylinder_radius_coordinate_units": 110.00000035734861,
+                "cylinder_diameter_coordinate_units": 220.00000071469722,
+                "cylinder_radius_mm": 110.00000035734861,
+                "cylinder_diameter_mm": 220.00000071469722,
+                "cylinder_fit_confidence": 0.9999994401481251,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": true,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 7,
+                        "patch_b": 8,
+                        "shared_transition_face_pairs": 52,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 110.00000035734861,
+                        "estimated_bend_radius_mm": 110.00000035734861,
+                        "radius_confidence": 0.9999994401481251
+                    },
+                    {
+                        "patch_a": 7,
+                        "patch_b": 9,
+                        "shared_transition_face_pairs": 52,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 110.00000035734861,
+                        "estimated_bend_radius_mm": 110.00000035734861,
+                        "radius_confidence": 0.9999994401481251
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 8,
+            "geometry_class": "planar",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 27563.259776581308,
+            "max_plane_deviation_coordinate_units": 0.0,
+            "area_mm2": 27563.259776581308,
+            "max_plane_deviation_mm": 0.0,
+            "normal_coherence": 1.0000000000000002,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": false,
+                "cylindrical_surface_type": null,
+                "cylinder_radius_coordinate_units": null,
+                "cylinder_diameter_coordinate_units": null,
+                "cylinder_radius_mm": null,
+                "cylinder_diameter_mm": null,
+                "cylinder_fit_confidence": 0.0,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 7,
+                        "patch_b": 8,
+                        "shared_transition_face_pairs": 52,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 110.00000035734861,
+                        "estimated_bend_radius_mm": 110.00000035734861,
+                        "radius_confidence": 0.9999994401481251
+                    },
+                    {
+                        "patch_a": 8,
+                        "patch_b": 19,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949626827,
+                        "estimated_bend_radius_mm": 5.999998949626827,
+                        "radius_confidence": 0.9999948682312645
+                    },
+                    {
+                        "patch_a": 8,
+                        "patch_b": 18,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409614
+                    },
+                    {
+                        "patch_a": 8,
+                        "patch_b": 13,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409615
+                    },
+                    {
+                        "patch_a": 1,
+                        "patch_b": 8,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.02351976087304,
+                        "min_dihedral_angle_deg": 89.99999330904618,
+                        "max_dihedral_angle_deg": 90.10641524356804,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": null,
+                        "estimated_bend_radius_mm": null,
+                        "radius_confidence": 0.0
+                    },
+                    {
+                        "patch_a": 8,
+                        "patch_b": 17,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949575819,
+                        "estimated_bend_radius_mm": 5.999998949575819,
+                        "radius_confidence": 0.9999948682312622
+                    },
+                    {
+                        "patch_a": 8,
+                        "patch_b": 12,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.9999989495759705,
+                        "estimated_bend_radius_mm": 5.9999989495759705,
+                        "radius_confidence": 0.9999948682312623
+                    },
+                    {
+                        "patch_a": 8,
+                        "patch_b": 16,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409616
+                    },
+                    {
+                        "patch_a": 8,
+                        "patch_b": 14,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409617
+                    },
+                    {
+                        "patch_a": 8,
+                        "patch_b": 15,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949627054,
+                        "estimated_bend_radius_mm": 5.999998949627054,
+                        "radius_confidence": 0.9999948682312647
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_planar_candidate",
+                "bend_geometry_candidate"
+            ]
+        },
+        {
+            "patch_id": 9,
+            "geometry_class": "planar",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 21687.826386464174,
+            "max_plane_deviation_coordinate_units": 0.0,
+            "area_mm2": 21687.826386464174,
+            "max_plane_deviation_mm": 0.0,
+            "normal_coherence": 0.9999999999999998,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": false,
+                "cylindrical_surface_type": null,
+                "cylinder_radius_coordinate_units": null,
+                "cylinder_diameter_coordinate_units": null,
+                "cylinder_radius_mm": null,
+                "cylinder_diameter_mm": null,
+                "cylinder_fit_confidence": 0.0,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 7,
+                        "patch_b": 9,
+                        "shared_transition_face_pairs": 52,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 110.00000035734861,
+                        "estimated_bend_radius_mm": 110.00000035734861,
+                        "radius_confidence": 0.9999994401481251
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 19,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949626827,
+                        "estimated_bend_radius_mm": 5.999998949626827,
+                        "radius_confidence": 0.9999948682312645
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 18,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409614
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 13,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409615
+                    },
+                    {
+                        "patch_a": 3,
+                        "patch_b": 9,
+                        "shared_transition_face_pairs": 40,
+                        "mean_dihedral_angle_deg": 90.03130016476824,
+                        "min_dihedral_angle_deg": 89.99999274035349,
+                        "max_dihedral_angle_deg": 90.17693569448927,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 70.00003149170733,
+                        "estimated_bend_radius_mm": 70.00003149170733,
+                        "radius_confidence": 0.9887017103895636
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 17,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949575819,
+                        "estimated_bend_radius_mm": 5.999998949575819,
+                        "radius_confidence": 0.9999948682312622
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 12,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.9999989495759705,
+                        "estimated_bend_radius_mm": 5.9999989495759705,
+                        "radius_confidence": 0.9999948682312623
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 16,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409616
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 14,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409617
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 15,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949627054,
+                        "estimated_bend_radius_mm": 5.999998949627054,
+                        "radius_confidence": 0.9999948682312647
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_planar_candidate",
+                "bend_geometry_candidate"
+            ]
+        },
+        {
+            "patch_id": 10,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 79173.0978633124,
+            "max_plane_deviation_coordinate_units": 70.04589409834267,
+            "area_mm2": 79173.0978633124,
+            "max_plane_deviation_mm": 70.04589409834267,
+            "normal_coherence": 0.10381066986623723,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": false,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 89.62497293744438,
+                "cylinder_diameter_coordinate_units": 179.24994587488877,
+                "cylinder_radius_mm": 89.62497293744438,
+                "cylinder_diameter_mm": 179.24994587488877,
+                "cylinder_fit_confidence": 0.0,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 3,
+                        "patch_b": 10,
+                        "shared_transition_face_pairs": 126,
+                        "mean_dihedral_angle_deg": 86.84762554819116,
+                        "min_dihedral_angle_deg": 37.690343621796295,
+                        "max_dihedral_angle_deg": 94.98393311857873,
+                        "possible_bend": false,
+                        "estimated_bend_radius_coordinate_units": 70.00003149170733,
+                        "estimated_bend_radius_mm": 70.00003149170733,
+                        "radius_confidence": 0.9887017103895636
+                    },
+                    {
+                        "patch_a": 10,
+                        "patch_b": 11,
+                        "shared_transition_face_pairs": 52,
+                        "mean_dihedral_angle_deg": 94.93050035612113,
+                        "min_dihedral_angle_deg": 94.1836061557809,
+                        "max_dihedral_angle_deg": 95.37603481514866,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": null,
+                        "estimated_bend_radius_mm": null,
+                        "radius_confidence": 0.0
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate"
+            ]
+        },
+        {
+            "patch_id": 11,
+            "geometry_class": "planar",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 10535.574364484739,
+            "max_plane_deviation_coordinate_units": 0.0,
+            "area_mm2": 10535.574364484739,
+            "max_plane_deviation_mm": 0.0,
+            "normal_coherence": 1.0,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": false,
+                "cylindrical_surface_type": null,
+                "cylinder_radius_coordinate_units": null,
+                "cylinder_diameter_coordinate_units": null,
+                "cylinder_radius_mm": null,
+                "cylinder_diameter_mm": null,
+                "cylinder_fit_confidence": 0.0,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 10,
+                        "patch_b": 11,
+                        "shared_transition_face_pairs": 52,
+                        "mean_dihedral_angle_deg": 94.93050035612113,
+                        "min_dihedral_angle_deg": 94.1836061557809,
+                        "max_dihedral_angle_deg": 95.37603481514866,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": null,
+                        "estimated_bend_radius_mm": null,
+                        "radius_confidence": 0.0
+                    },
+                    {
+                        "patch_a": 2,
+                        "patch_b": 11,
+                        "shared_transition_face_pairs": 9,
+                        "mean_dihedral_angle_deg": 95.09788370751593,
+                        "min_dihedral_angle_deg": 94.99720268833029,
+                        "max_dihedral_angle_deg": 95.14274843555148,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 139.96097191263405,
+                        "estimated_bend_radius_mm": 139.96097191263405,
+                        "radius_confidence": 0.2605342667119219
+                    },
+                    {
+                        "patch_a": 1,
+                        "patch_b": 11,
+                        "shared_transition_face_pairs": 2,
+                        "mean_dihedral_angle_deg": 95.00000525951265,
+                        "min_dihedral_angle_deg": 95.00000525951265,
+                        "max_dihedral_angle_deg": 95.00000525951265,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": null,
+                        "estimated_bend_radius_mm": null,
+                        "radius_confidence": 0.0
+                    },
+                    {
+                        "patch_a": 0,
+                        "patch_b": 11,
+                        "shared_transition_face_pairs": 9,
+                        "mean_dihedral_angle_deg": 95.09788370751593,
+                        "min_dihedral_angle_deg": 94.99720268833029,
+                        "max_dihedral_angle_deg": 95.14274843555148,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 148.86153400469772,
+                        "estimated_bend_radius_mm": 148.86153400469772,
+                        "radius_confidence": 0.2584016849527816
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_planar_candidate",
+                "bend_geometry_candidate"
+            ]
+        },
+        {
+            "patch_id": 12,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.0254855152771,
+            "max_plane_deviation_coordinate_units": 6.00000084771051,
+            "area_mm2": 753.0254855152771,
+            "max_plane_deviation_mm": 6.00000084771051,
+            "normal_coherence": 4.863136028072933e-18,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.9999989495759705,
+                "cylinder_diameter_coordinate_units": 11.999997899151941,
+                "cylinder_radius_mm": 5.9999989495759705,
+                "cylinder_diameter_mm": 11.999997899151941,
+                "cylinder_fit_confidence": 0.9999948682312623,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 8,
+                        "patch_b": 12,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.9999989495759705,
+                        "estimated_bend_radius_mm": 5.9999989495759705,
+                        "radius_confidence": 0.9999948682312623
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 12,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.9999989495759705,
+                        "estimated_bend_radius_mm": 5.9999989495759705,
+                        "radius_confidence": 0.9999948682312623
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 13,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.0255275279862,
+            "max_plane_deviation_coordinate_units": 5.977730689008208,
+            "area_mm2": 753.0255275279862,
+            "max_plane_deviation_mm": 5.977730689008208,
+            "normal_coherence": 0.0,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.999999284370493,
+                "cylinder_diameter_coordinate_units": 11.999998568740986,
+                "cylinder_radius_mm": 5.999999284370493,
+                "cylinder_diameter_mm": 11.999998568740986,
+                "cylinder_fit_confidence": 0.9999939125409615,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 8,
+                        "patch_b": 13,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409615
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 13,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409615
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 14,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.0255275279862,
+            "max_plane_deviation_coordinate_units": 5.977226608301685,
+            "area_mm2": 753.0255275279862,
+            "max_plane_deviation_mm": 5.977226608301685,
+            "normal_coherence": 2.9486995700391976e-19,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.99999928437057,
+                "cylinder_diameter_coordinate_units": 11.99999856874114,
+                "cylinder_radius_mm": 5.99999928437057,
+                "cylinder_diameter_mm": 11.99999856874114,
+                "cylinder_fit_confidence": 0.9999939125409617,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 8,
+                        "patch_b": 14,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409617
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 14,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409617
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 15,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.0254855152772,
+            "max_plane_deviation_coordinate_units": 6.00000084771051,
+            "area_mm2": 753.0254855152772,
+            "max_plane_deviation_mm": 6.00000084771051,
+            "normal_coherence": 1.7692198407316178e-17,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.999998949627054,
+                "cylinder_diameter_coordinate_units": 11.999997899254108,
+                "cylinder_radius_mm": 5.999998949627054,
+                "cylinder_diameter_mm": 11.999997899254108,
+                "cylinder_fit_confidence": 0.9999948682312647,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 8,
+                        "patch_b": 15,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949627054,
+                        "estimated_bend_radius_mm": 5.999998949627054,
+                        "radius_confidence": 0.9999948682312647
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 15,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949627054,
+                        "estimated_bend_radius_mm": 5.999998949627054,
+                        "radius_confidence": 0.9999948682312647
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 16,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.0255275279862,
+            "max_plane_deviation_coordinate_units": 5.977619814965581,
+            "area_mm2": 753.0255275279862,
+            "max_plane_deviation_mm": 5.977619814965581,
+            "normal_coherence": 2.9486995700391976e-19,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.99999928437057,
+                "cylinder_diameter_coordinate_units": 11.99999856874114,
+                "cylinder_radius_mm": 5.99999928437057,
+                "cylinder_diameter_mm": 11.99999856874114,
+                "cylinder_fit_confidence": 0.9999939125409616,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 8,
+                        "patch_b": 16,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409616
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 16,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409616
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 17,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.0254855152771,
+            "max_plane_deviation_coordinate_units": 6.00000084771051,
+            "area_mm2": 753.0254855152771,
+            "max_plane_deviation_mm": 6.00000084771051,
+            "normal_coherence": 4.863136028072933e-18,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.999998949575819,
+                "cylinder_diameter_coordinate_units": 11.999997899151637,
+                "cylinder_radius_mm": 5.999998949575819,
+                "cylinder_diameter_mm": 11.999997899151637,
+                "cylinder_fit_confidence": 0.9999948682312622,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 8,
+                        "patch_b": 17,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949575819,
+                        "estimated_bend_radius_mm": 5.999998949575819,
+                        "radius_confidence": 0.9999948682312622
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 17,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949575819,
+                        "estimated_bend_radius_mm": 5.999998949575819,
+                        "radius_confidence": 0.9999948682312622
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 18,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.025527527986,
+            "max_plane_deviation_coordinate_units": 5.977730777534754,
+            "area_mm2": 753.025527527986,
+            "max_plane_deviation_mm": 5.977730777534754,
+            "normal_coherence": 0.0,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.999999284370493,
+                "cylinder_diameter_coordinate_units": 11.999998568740986,
+                "cylinder_radius_mm": 5.999999284370493,
+                "cylinder_diameter_mm": 11.999998568740986,
+                "cylinder_fit_confidence": 0.9999939125409614,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 8,
+                        "patch_b": 18,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409614
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 18,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409614
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 19,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.0254855152771,
+            "max_plane_deviation_coordinate_units": 6.00000084771051,
+            "area_mm2": 753.0254855152771,
+            "max_plane_deviation_mm": 6.00000084771051,
+            "normal_coherence": 1.1794798938210787e-18,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.999998949626827,
+                "cylinder_diameter_coordinate_units": 11.999997899253653,
+                "cylinder_radius_mm": 5.999998949626827,
+                "cylinder_diameter_mm": 11.999997899253653,
+                "cylinder_fit_confidence": 0.9999948682312645,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 8,
+                        "patch_b": 19,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949626827,
+                        "estimated_bend_radius_mm": 5.999998949626827,
+                        "radius_confidence": 0.9999948682312645
+                    },
+                    {
+                        "patch_a": 9,
+                        "patch_b": 19,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949626827,
+                        "estimated_bend_radius_mm": 5.999998949626827,
+                        "radius_confidence": 0.9999948682312645
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 20,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.0254855152771,
+            "max_plane_deviation_coordinate_units": 6.00000084771051,
+            "area_mm2": 753.0254855152771,
+            "max_plane_deviation_mm": 6.00000084771051,
+            "normal_coherence": 2.5194185280344384e-18,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.99999894962622,
+                "cylinder_diameter_coordinate_units": 11.99999789925244,
+                "cylinder_radius_mm": 5.99999894962622,
+                "cylinder_diameter_mm": 11.99999789925244,
+                "cylinder_fit_confidence": 0.999994868231265,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 6,
+                        "patch_b": 20,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999894962622,
+                        "estimated_bend_radius_mm": 5.99999894962622,
+                        "radius_confidence": 0.999994868231265
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 20,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999894962622,
+                        "estimated_bend_radius_mm": 5.99999894962622,
+                        "radius_confidence": 0.999994868231265
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 21,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.0255275279862,
+            "max_plane_deviation_coordinate_units": 5.977226608301685,
+            "area_mm2": 753.0255275279862,
+            "max_plane_deviation_mm": 5.977226608301685,
+            "normal_coherence": 2.9486995700391976e-19,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.99999928437057,
+                "cylinder_diameter_coordinate_units": 11.99999856874114,
+                "cylinder_radius_mm": 5.99999928437057,
+                "cylinder_diameter_mm": 11.99999856874114,
+                "cylinder_fit_confidence": 0.9999939125409617,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 6,
+                        "patch_b": 21,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409617
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 21,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409617
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 22,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.0254855152772,
+            "max_plane_deviation_coordinate_units": 6.00000084771051,
+            "area_mm2": 753.0254855152772,
+            "max_plane_deviation_mm": 6.00000084771051,
+            "normal_coherence": 3.8922836496095594e-17,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.999998949627054,
+                "cylinder_diameter_coordinate_units": 11.999997899254108,
+                "cylinder_radius_mm": 5.999998949627054,
+                "cylinder_diameter_mm": 11.999997899254108,
+                "cylinder_fit_confidence": 0.9999948682312647,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 6,
+                        "patch_b": 22,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949627054,
+                        "estimated_bend_radius_mm": 5.999998949627054,
+                        "radius_confidence": 0.9999948682312647
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 22,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949627054,
+                        "estimated_bend_radius_mm": 5.999998949627054,
+                        "radius_confidence": 0.9999948682312647
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 23,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.0255275279862,
+            "max_plane_deviation_coordinate_units": 5.977619814965581,
+            "area_mm2": 753.0255275279862,
+            "max_plane_deviation_mm": 5.977619814965581,
+            "normal_coherence": 2.9486995700391976e-19,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.99999928437057,
+                "cylinder_diameter_coordinate_units": 11.99999856874114,
+                "cylinder_radius_mm": 5.99999928437057,
+                "cylinder_diameter_mm": 11.99999856874114,
+                "cylinder_fit_confidence": 0.9999939125409616,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 6,
+                        "patch_b": 23,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409616
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 23,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.99999928437057,
+                        "estimated_bend_radius_mm": 5.99999928437057,
+                        "radius_confidence": 0.9999939125409616
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 24,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.0254855152771,
+            "max_plane_deviation_coordinate_units": 6.00000084771051,
+            "area_mm2": 753.0254855152771,
+            "max_plane_deviation_mm": 6.00000084771051,
+            "normal_coherence": 5.898705737226674e-19,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.999998949575895,
+                "cylinder_diameter_coordinate_units": 11.99999789915179,
+                "cylinder_radius_mm": 5.999998949575895,
+                "cylinder_diameter_mm": 11.99999789915179,
+                "cylinder_fit_confidence": 0.999994868231262,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 6,
+                        "patch_b": 24,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949575895,
+                        "estimated_bend_radius_mm": 5.999998949575895,
+                        "radius_confidence": 0.999994868231262
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 24,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949575895,
+                        "estimated_bend_radius_mm": 5.999998949575895,
+                        "radius_confidence": 0.999994868231262
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 25,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.0255275279862,
+            "max_plane_deviation_coordinate_units": 5.977730777534754,
+            "area_mm2": 753.0255275279862,
+            "max_plane_deviation_mm": 5.977730777534754,
+            "normal_coherence": 0.0,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.999999284370493,
+                "cylinder_diameter_coordinate_units": 11.999998568740986,
+                "cylinder_radius_mm": 5.999999284370493,
+                "cylinder_diameter_mm": 11.999998568740986,
+                "cylinder_fit_confidence": 0.9999939125409614,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 6,
+                        "patch_b": 25,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409614
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 25,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409614
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 26,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.0254855152771,
+            "max_plane_deviation_coordinate_units": 6.00000084771051,
+            "area_mm2": 753.0254855152771,
+            "max_plane_deviation_mm": 6.00000084771051,
+            "normal_coherence": 3.656387670845344e-17,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.999998949626675,
+                "cylinder_diameter_coordinate_units": 11.99999789925335,
+                "cylinder_radius_mm": 5.999998949626675,
+                "cylinder_diameter_mm": 11.99999789925335,
+                "cylinder_fit_confidence": 0.9999948682312645,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 6,
+                        "patch_b": 26,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949626675,
+                        "estimated_bend_radius_mm": 5.999998949626675,
+                        "radius_confidence": 0.9999948682312645
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 26,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999998949626675,
+                        "estimated_bend_radius_mm": 5.999998949626675,
+                        "radius_confidence": 0.9999948682312645
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        },
+        {
+            "patch_id": 27,
+            "geometry_class": "curved",
+            "surface_status": "paintable_candidate",
+            "face_status_value": 1,
+            "area_coordinate_units2": 753.025527527986,
+            "max_plane_deviation_coordinate_units": 5.977730689008208,
+            "area_mm2": 753.025527527986,
+            "max_plane_deviation_mm": 5.977730689008208,
+            "normal_coherence": 0.0,
+            "coordinate_unit": "mm",
+            "advanced_features": {
+                "cylindrical_surface_candidate": true,
+                "cylindrical_surface_type": "cylindrical_surface_orientation_uncertain",
+                "cylinder_radius_coordinate_units": 5.999999284370493,
+                "cylinder_diameter_coordinate_units": 11.999998568740986,
+                "cylinder_radius_mm": 5.999999284370493,
+                "cylinder_diameter_mm": 11.999998568740986,
+                "cylinder_fit_confidence": 0.9999939125409615,
+                "internal_cylindrical_surface": false,
+                "external_cylindrical_surface": false,
+                "bend_candidate": true,
+                "bend_candidates": [
+                    {
+                        "patch_a": 6,
+                        "patch_b": 27,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409615
+                    },
+                    {
+                        "patch_a": 5,
+                        "patch_b": 27,
+                        "shared_transition_face_pairs": 36,
+                        "mean_dihedral_angle_deg": 90.0,
+                        "min_dihedral_angle_deg": 90.0,
+                        "max_dihedral_angle_deg": 90.0,
+                        "possible_bend": true,
+                        "estimated_bend_radius_coordinate_units": 5.999999284370493,
+                        "estimated_bend_radius_mm": 5.999999284370493,
+                        "radius_confidence": 0.9999939125409615
+                    }
+                ]
+            },
+            "reasons": [
+                "valid_curved_candidate",
+                "global_normal_coherence_not_used_as_rejection",
+                "bend_geometry_candidate",
+                "cylindrical_surface_detected"
+            ]
+        }
+    ],
+    "source_file": "/home/ubuntu/openarmx_ws/src/openarmx_painting_robot/models/product.STL",
+    "part_name": "product"
+}

@@ -1,0 +1,127 @@
+{
+  "source_file": "/home/ubuntu/openarmx_ws/src/openarmx_painting_robot/models/product.STL",
+  "coordinate_unit": "mm",
+  "patch_count": 28,
+  "inspected_count": 28,
+  "all_inspected": true,
+  "patches": {
+    "0": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "1": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "2": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "3": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "4": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "5": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "6": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "7": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "8": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "9": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "10": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "11": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "12": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "13": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "14": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "15": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "16": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "17": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "18": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "19": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "20": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "21": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "22": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "23": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "24": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "25": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "26": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "27": {
+      "inspected": true,
+      "decision": "paint"
+    }
+  },
+  "face_status_values": {
+    "excluded": 0,
+    "paintable_candidate": 1,
+    "requires_inspection": 2,
+    "invalid": 3
+  }
+}
