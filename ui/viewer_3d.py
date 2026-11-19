@@ -1058,13 +1058,15 @@ class ProductViewer(QWidget):
         else:
             polydata = self._to_polydata(self.current_mesh)
 
+            # The STEP display mesh is tessellated into triangles.
+            # Showing every triangle edge makes curved CAD surfaces look
+            # faceted and visually noisy. Keep the product surface shaded;
+            # original CAD edges will be rendered separately from B-Rep data.
             self.plotter.add_mesh(
                 polydata,
                 color="#4C8DAD",
-                show_edges=True,
-                edge_color="#182C38",
-                line_width=1,
-                smooth_shading=False,
+                show_edges=False,
+                smooth_shading=True,
                 specular=0.25,
                 specular_power=20,
             )
