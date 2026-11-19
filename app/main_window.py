@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.stl_loader import load_stl
-from core.step_loader import load_step
+from core.step_loader import load_step, convert_step_report_units
 from core.result_manager import ResultManager
 
 from stages.stage1_geometry import execute_stage1
@@ -309,15 +309,36 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._refresh_workflow_ui()
 
-        default_step_candidates = [
-            self.project_root / "models" / "product.step",
-            self.project_root / "models" / "product.STEP",
-            self.project_root / "models" / "product.stp",
-            self.project_root / "models" / "product.STP",
+        models_dir = self.project_root / "models"
+        preferred_step_candidates = [
+            models_dir / "product.step",
+            models_dir / "product.STEP",
+            models_dir / "product.stp",
+            models_dir / "product.STP",
         ]
-        default_step = next((p for p in default_step_candidates if p.exists()), None)
-        default_stl = self.project_root / "models" / "product.STL"
+        discovered_step_candidates = sorted(
+            (
+                path for path in models_dir.iterdir()
+                if path.is_file() and path.suffix.lower() in (".step", ".stp")
+            ),
+            key=lambda path: path.name.lower(),
+        ) if models_dir.is_dir() else []
 
+        # Prefer the conventional product filename, then use an available
+        # STEP model (for example valvemodel.STEP) before falling back to STL.
+        step_candidates = preferred_step_candidates + discovered_step_candidates
+        seen_step_paths = set()
+        default_step = None
+        for candidate in step_candidates:
+            resolved = candidate.resolve()
+            if resolved in seen_step_paths:
+                continue
+            seen_step_paths.add(resolved)
+            if candidate.is_file():
+                default_step = candidate
+                break
+
+        default_stl = models_dir / "product.STL"
         if default_step is not None:
             self.load_part(default_step)
         elif default_stl.exists():
@@ -3063,11 +3084,15 @@ class MainWindow(QMainWindow):
             self.metric_labels["triangles"].setText(
                 f"{mesh_info['triangles']:,}"
             )
+            display_values = convert_step_report_units(
+                report,
+                self._get_display_unit(),
+            )
             self.metric_labels["area"].setText(
-                f"{mass['surface_area_mm2']:,.2f}"
+                f"{display_values['surface_area']:,.2f}"
             )
             self.metric_labels["volume"].setText(
-                f"{mass['volume_mm3']:,.2f}"
+                f"{display_values['volume']:,.2f}"
             )
             self.metric_labels["cad_faces"].setText(
                 f"{topology['faces']:,}"
@@ -3078,7 +3103,9 @@ class MainWindow(QMainWindow):
             self.metric_labels["cad_solids"].setText(
                 f"{topology['solids']:,}"
             )
-            for axis, value in zip(("W", "D", "H"), bbox["dimensions_mm"]):
+            for axis, value in zip(
+                ("W", "D", "H"), display_values["dimensions"]
+            ):
                 self.dimension_labels[axis].setText(f"{value:,.3f}")
             self._update_unit_labels()
             return
