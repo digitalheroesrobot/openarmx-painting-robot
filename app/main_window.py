@@ -112,7 +112,7 @@ WORKFLOW_STAGES = [
             "Load the product CAD/STL model and establish "
             "the active product coordinate system."
         ),
-        "action": "LOAD STL PRODUCT",
+        "action": "LOAD STEP PRODUCT",
     },
     {
         "name": "GEOMETRY INSPECTION",
@@ -629,7 +629,7 @@ class MainWindow(QMainWindow):
         title.setObjectName("MainTitle")
 
         subtitle = QLabel(
-            "DUAL-ARM INDUSTRIAL SPRAY PAINTING  "
+            "DUAL-ROBOT INDUSTRIAL SPRAY PAINTING  "
             "•  PRODUCT → GEOMETRY → SURFACES → "
             "TRAJECTORY → ROBOTS → EXECUTION"
         )
@@ -699,7 +699,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.load_button)
 
         layout.addSpacing(5)
-        layout.addWidget(self._section("STL COORDINATE UNIT"))
+        layout.addWidget(self._section("MODEL COORDINATE UNIT"))
 
         self.coordinate_unit_selector = QComboBox()
         self.coordinate_unit_selector.addItem(
@@ -949,6 +949,40 @@ class MainWindow(QMainWindow):
         layout.addWidget(summary_section)
 
         # ----------------------------------------------------
+        # EXACT CAD FACE INVENTORY
+        # ----------------------------------------------------
+        cad_face_content = QWidget()
+        cad_face_layout = QVBoxLayout(cad_face_content)
+        cad_face_layout.setContentsMargins(5, 2, 5, 4)
+        cad_face_layout.setSpacing(4)
+
+        self.cad_face_count_label = QLabel("NO STEP B-REP LOADED")
+        self.cad_face_count_label.setObjectName("Muted")
+        cad_face_layout.addWidget(self.cad_face_count_label)
+
+        self.cad_face_table = QTableWidget(0, 6)
+        self.cad_face_table.setHorizontalHeaderLabels(
+            ["FACE", "TYPE", "AREA mm²", "CX mm", "CY mm", "CZ mm"]
+        )
+        self.cad_face_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.cad_face_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.cad_face_table.setAlternatingRowColors(True)
+        self.cad_face_table.verticalHeader().setVisible(False)
+        self.cad_face_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeToContents
+        )
+        self.cad_face_table.setMinimumHeight(180)
+        self.cad_face_table.setMaximumHeight(280)
+        cad_face_layout.addWidget(self.cad_face_table)
+
+        cad_face_section = self._make_collapsible_section(
+            "CAD FACE DETAILS",
+            "cad_face_details",
+            cad_face_content,
+        )
+        layout.addWidget(cad_face_section)
+
+        # ----------------------------------------------------
         # PAINTING PATCHES SECTION
         # ----------------------------------------------------
         self.patch_inspection_panel = QFrame()
@@ -1157,40 +1191,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(
             self.operation_panel
         )
-
-        # ----------------------------------------------------
-        # EXACT CAD FACE INVENTORY
-        # ----------------------------------------------------
-        cad_face_content = QWidget()
-        cad_face_layout = QVBoxLayout(cad_face_content)
-        cad_face_layout.setContentsMargins(5, 2, 5, 4)
-        cad_face_layout.setSpacing(4)
-
-        self.cad_face_count_label = QLabel("NO STEP B-REP LOADED")
-        self.cad_face_count_label.setObjectName("Muted")
-        cad_face_layout.addWidget(self.cad_face_count_label)
-
-        self.cad_face_table = QTableWidget(0, 6)
-        self.cad_face_table.setHorizontalHeaderLabels(
-            ["FACE", "TYPE", "AREA mm²", "CX mm", "CY mm", "CZ mm"]
-        )
-        self.cad_face_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.cad_face_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.cad_face_table.setAlternatingRowColors(True)
-        self.cad_face_table.verticalHeader().setVisible(False)
-        self.cad_face_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeToContents
-        )
-        self.cad_face_table.setMinimumHeight(180)
-        self.cad_face_table.setMaximumHeight(280)
-        cad_face_layout.addWidget(self.cad_face_table)
-
-        cad_face_section = self._make_collapsible_section(
-            "CAD FACE DETAILS",
-            "cad_face_details",
-            cad_face_content,
-        )
-        layout.addWidget(cad_face_section)
 
         # ----------------------------------------------------
         # RESULTS
