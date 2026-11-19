@@ -1284,6 +1284,10 @@ class ProductViewer(QWidget):
 
         self.plotter.render()
 
+        # Reinstall actor manipulation after a redraw (for example, a
+        # display-unit change) without enabling it in analysis stages.
+        if self.display_mode == "product" and self.hook_pivot_configured:
+            self._install_actor_interaction()
 
     def _add_classification_legend(self):
         legend = (
