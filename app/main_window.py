@@ -24,10 +24,14 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QCheckBox,
     QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
     QStyle
 )
 
 from core.stl_loader import load_stl
+from core.step_loader import load_step
 from core.result_manager import ResultManager
 
 from stages.stage1_geometry import execute_stage1
@@ -255,6 +259,8 @@ class MainWindow(QMainWindow):
 
         self.current_mesh = None
         self.current_stl_path = None
+        self.current_step_report = None
+        self.current_step_report_path = None
 
         self.current_stage1_result = None
         self.current_report = None
@@ -303,9 +309,18 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._refresh_workflow_ui()
 
+        default_step_candidates = [
+            self.project_root / "models" / "product.step",
+            self.project_root / "models" / "product.STEP",
+            self.project_root / "models" / "product.stp",
+            self.project_root / "models" / "product.STP",
+        ]
+        default_step = next((p for p in default_step_candidates if p.exists()), None)
         default_stl = self.project_root / "models" / "product.STL"
 
-        if default_stl.exists():
+        if default_step is not None:
+            self.load_part(default_step)
+        elif default_stl.exists():
             self.load_part(default_stl)
 
     # ========================================================
@@ -679,7 +694,7 @@ class MainWindow(QMainWindow):
         self.part_name_label.setObjectName("MetricValue")
         layout.addWidget(self.part_name_label)
 
-        self.load_button = QPushButton("LOAD STL PRODUCT")
+        self.load_button = QPushButton("LOAD STEP PRODUCT")
         self.load_button.clicked.connect(self.load_stl_dialog)
         layout.addWidget(self.load_button)
 
@@ -721,7 +736,10 @@ class MainWindow(QMainWindow):
             ("VERTICES", "vertices"),
             ("TRIANGLES", "triangles"),
             ("SURFACE AREA", "area"),
-            ("VOLUME", "volume"),
+            ("VOLUME (mm³)", "volume"),
+            ("CAD FACES", "cad_faces"),
+            ("CAD EDGES", "cad_edges"),
+            ("CAD SOLIDS", "cad_solids"),
         ]
 
         grid = QGridLayout()
@@ -1139,6 +1157,40 @@ class MainWindow(QMainWindow):
         layout.addWidget(
             self.operation_panel
         )
+
+        # ----------------------------------------------------
+        # EXACT CAD FACE INVENTORY
+        # ----------------------------------------------------
+        cad_face_content = QWidget()
+        cad_face_layout = QVBoxLayout(cad_face_content)
+        cad_face_layout.setContentsMargins(5, 2, 5, 4)
+        cad_face_layout.setSpacing(4)
+
+        self.cad_face_count_label = QLabel("NO STEP B-REP LOADED")
+        self.cad_face_count_label.setObjectName("Muted")
+        cad_face_layout.addWidget(self.cad_face_count_label)
+
+        self.cad_face_table = QTableWidget(0, 6)
+        self.cad_face_table.setHorizontalHeaderLabels(
+            ["FACE", "TYPE", "AREA mm²", "CX mm", "CY mm", "CZ mm"]
+        )
+        self.cad_face_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.cad_face_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.cad_face_table.setAlternatingRowColors(True)
+        self.cad_face_table.verticalHeader().setVisible(False)
+        self.cad_face_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeToContents
+        )
+        self.cad_face_table.setMinimumHeight(180)
+        self.cad_face_table.setMaximumHeight(280)
+        cad_face_layout.addWidget(self.cad_face_table)
+
+        cad_face_section = self._make_collapsible_section(
+            "CAD FACE DETAILS",
+            "cad_face_details",
+            cad_face_content,
+        )
+        layout.addWidget(cad_face_section)
 
         # ----------------------------------------------------
         # RESULTS
@@ -2781,18 +2833,20 @@ class MainWindow(QMainWindow):
     # ========================================================
 
     def load_stl_dialog(self):
+        """Compatibility alias: the primary product format is now STEP."""
+        self.load_step_dialog()
+
+    def load_step_dialog(self):
         if self._operation_running:
             return
 
         initial_dir = self.project_root / "models"
-
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select STL Product",
+            "Select STEP Product CAD",
             str(initial_dir),
-            "STL Files (*.stl *.STL)",
+            "STEP CAD Files (*.step *.stp *.STEP *.STP)",
         )
-
         if file_path:
             self.load_part(file_path)
 
@@ -2800,18 +2854,25 @@ class MainWindow(QMainWindow):
         if self._operation_running:
             return
 
+        selected_path = Path(file_path).expanduser().resolve()
+        is_step = selected_path.suffix.lower() in (".step", ".stp")
+
         try:
-            mesh = load_stl(file_path)
+            mesh = load_step(selected_path) if is_step else load_stl(selected_path)
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "STL Loading Error",
+                "CAD Loading Error",
                 str(exc),
             )
             return
 
         self.current_mesh = mesh
-        self.current_stl_path = Path(file_path).resolve()
+        self.current_stl_path = selected_path
+        self.current_step_report = (
+            mesh.metadata.get("step_geometry_report") if is_step else None
+        )
+        self.current_step_report_path = None
 
         self._reset_downstream_results()
 
@@ -2858,6 +2919,7 @@ class MainWindow(QMainWindow):
 
         self._set_coordinate_unit_controls()
         self._update_geometry_metrics()
+        self._populate_cad_face_table()
         self._update_viewer_display_unit()
 
         part_dir = self.result_manager.part_dir(
@@ -2870,7 +2932,20 @@ class MainWindow(QMainWindow):
 
         self.analysis_summary.setStyleSheet("")
 
-        if self.coordinate_unit == "unknown":
+        if self.current_step_report is not None:
+            self.summary_section.setText("STEP CAD GEOMETRY")
+            self.analysis_summary.setText(
+                "STEP CAD MODEL LOADED\n\n"
+                f"FACES: {self.current_step_report['topology']['faces']:,}\n"
+                f"EDGES: {self.current_step_report['topology']['edges']:,}\n"
+                f"SOLIDS: {self.current_step_report['topology']['solids']:,}\n"
+                f"TRIANGLES: {self.current_step_report['mesh']['triangles']:,}\n\n"
+                "LENGTH UNIT: mm\n"
+                "EXACT B-REP DATA EXTRACTED\n"
+                "CAD FACE IDs LINKED TO DISPLAY TRIANGLES\n\n"
+                "NEXT OPERATION: GEOMETRY INSPECTION"
+            )
+        elif self.coordinate_unit == "unknown":
             self.analysis_summary.setText(
                 "PRODUCT LOADED\n"
                 "STL MODEL READY\n\n"
@@ -2898,6 +2973,43 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
+    # STEP CAD FACE TABLE
+    # ========================================================
+
+    def _populate_cad_face_table(self):
+        if not hasattr(self, "cad_face_table"):
+            return
+
+        report = self.current_step_report
+        self.cad_face_table.setRowCount(0)
+
+        if not report:
+            self.cad_face_count_label.setText("NO STEP B-REP LOADED")
+            return
+
+        faces = report.get("faces", [])
+        self.cad_face_count_label.setText(
+            f"ORIGINAL CAD FACES: {len(faces):,}  |  "
+            "AREA AND CENTROID FROM EXACT B-REP"
+        )
+        self.cad_face_table.setRowCount(len(faces))
+
+        for row, face in enumerate(faces):
+            center = face.get("centroid_mm", [0.0, 0.0, 0.0])
+            values = [
+                str(face.get("face_id", "")),
+                str(face.get("surface_type", "OTHER")),
+                f"{float(face.get('area_mm2', 0.0)):,.3f}",
+                f"{float(center[0]):,.3f}",
+                f"{float(center[1]):,.3f}",
+                f"{float(center[2]):,.3f}",
+            ]
+            for column, value in enumerate(values):
+                self.cad_face_table.setItem(
+                    row, column, QTableWidgetItem(value)
+                )
+
+    # ========================================================
     # GEOMETRY DISPLAY
     # ========================================================
 
@@ -2907,6 +3019,40 @@ class MainWindow(QMainWindow):
             return
 
         mesh = self.current_mesh
+
+        # STEP values come from the exact B-Rep, not from the display mesh.
+        if self.current_step_report is not None:
+            report = self.current_step_report
+            topology = report["topology"]
+            mesh_info = report["mesh"]
+            bbox = report["bounding_box"]
+            mass = report["mass_properties"]
+
+            self.metric_labels["vertices"].setText(
+                f"{mesh_info['vertices']:,}"
+            )
+            self.metric_labels["triangles"].setText(
+                f"{mesh_info['triangles']:,}"
+            )
+            self.metric_labels["area"].setText(
+                f"{mass['surface_area_mm2']:,.2f}"
+            )
+            self.metric_labels["volume"].setText(
+                f"{mass['volume_mm3']:,.2f}"
+            )
+            self.metric_labels["cad_faces"].setText(
+                f"{topology['faces']:,}"
+            )
+            self.metric_labels["cad_edges"].setText(
+                f"{topology['edges']:,}"
+            )
+            self.metric_labels["cad_solids"].setText(
+                f"{topology['solids']:,}"
+            )
+            for axis, value in zip(("W", "D", "H"), bbox["dimensions_mm"]):
+                self.dimension_labels[axis].setText(f"{value:,.3f}")
+            self._update_unit_labels()
+            return
 
         # Source mesh statistics remain unchanged.
         self.metric_labels["vertices"].setText(
