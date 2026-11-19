@@ -57363,7 +57363,7 @@
             "Spray accessibility and robot reachability are not analyzed here."
         ]
     },
-    "source_file": "/home/ubuntu/openarmx_ws/src/openarmx_painting_robot/models/product.STL",
+    "source_file": "/home/ubuntu/openarmx_ws/src/openarmx-painting-robot/models/product.STL",
     "part_name": "product",
     "unit_configuration": {
         "source_stl_coordinate_unit": "mm",

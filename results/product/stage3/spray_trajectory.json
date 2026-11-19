@@ -1,7 +1,7 @@
 {
     "stage": 3,
     "stage_name": "Spray Trajectory Planning",
-    "source_file": "/home/ubuntu/openarmx_ws/src/openarmx_painting_robot/models/product.STL",
+    "source_file": "/home/ubuntu/openarmx_ws/src/openarmx-painting-robot/models/product.STL",
     "part_name": "product",
     "coordinate_unit": "mm",
     "parameters": {
@@ -22,8 +22,8 @@
         "coordinate_unit": "mm",
         "sampling_spacing_mm": 20.0,
         "sampling_spacing_coordinate_units": 20.0,
-        "candidate_face_count": 4454,
-        "sample_count": 55755,
+        "candidate_face_count": 4310,
+        "sample_count": 55179,
         "skipped_invalid_normals": 0,
         "skipped_invalid_geometry": 0
     },
@@ -43,9 +43,9 @@
     },
     "path_metrics": {
         "coordinate_unit": "mm",
-        "total_path_length_coordinate_units": 143268.57554080526,
-        "total_path_length_mm": 143268.57554080526,
-        "segment_count": 28,
+        "total_path_length_coordinate_units": 139677.80839209145,
+        "total_path_length_mm": 139677.80839209145,
+        "segment_count": 26,
         "segments": [
             {
                 "segment_id": 0,
@@ -202,18 +202,6 @@
                 "sample_count": 288,
                 "path_length_coordinate_units": 1795.3824162312735,
                 "path_length_mm": 1795.3824162312735
-            },
-            {
-                "segment_id": 26,
-                "sample_count": 288,
-                "path_length_coordinate_units": 1795.3832914158647,
-                "path_length_mm": 1795.3832914158647
-            },
-            {
-                "segment_id": 27,
-                "sample_count": 288,
-                "path_length_coordinate_units": 1795.3838572979566,
-                "path_length_mm": 1795.3838572979566
             }
         ],
         "measurement_note": "Path length includes movements within each patch only. Travel between separate patches is excluded."
@@ -347,16 +335,6 @@
         {
             "segment_id": 25,
             "patch_id": 25,
-            "sample_count": 288
-        },
-        {
-            "segment_id": 26,
-            "patch_id": 26,
-            "sample_count": 288
-        },
-        {
-            "segment_id": 27,
-            "patch_id": 27,
             "sample_count": 288
         }
     ],
@@ -656,28 +634,6 @@
                 "cylinder_diameter_coordinate_units": 11.999998568740986,
                 "cylinder_fit_residual_coordinate_units": null,
                 "cylinder_confidence": 0.9999939125409614,
-                "cylinder_surface_type": "cylindrical_surface_orientation_uncertain"
-            },
-            {
-                "patch_id": 26,
-                "surface_type": null,
-                "classification": "curved",
-                "cylindrical_candidate": false,
-                "cylinder_radius_coordinate_units": 5.999998949626675,
-                "cylinder_diameter_coordinate_units": 11.99999789925335,
-                "cylinder_fit_residual_coordinate_units": null,
-                "cylinder_confidence": 0.9999948682312645,
-                "cylinder_surface_type": "cylindrical_surface_orientation_uncertain"
-            },
-            {
-                "patch_id": 27,
-                "surface_type": null,
-                "classification": "curved",
-                "cylindrical_candidate": false,
-                "cylinder_radius_coordinate_units": 5.999999284370493,
-                "cylinder_diameter_coordinate_units": 11.999998568740986,
-                "cylinder_fit_residual_coordinate_units": null,
-                "cylinder_confidence": 0.9999939125409615,
                 "cylinder_surface_type": "cylindrical_surface_orientation_uncertain"
             }
         ],
@@ -55509,12 +55465,12 @@
         "metrics_explanation": [
             {
                 "metric": "Candidate faces",
-                "value": 4454,
+                "value": 4310,
                 "meaning": "Number of Stage 2 triangles selected for trajectory sampling."
             },
             {
                 "metric": "Generated samples",
-                "value": 55755,
+                "value": 55179,
                 "meaning": "Number of surface positions where the initial spray trajectory is evaluated."
             },
             {
@@ -55533,14 +55489,14 @@
             },
             {
                 "metric": "Trajectory length",
-                "value": "143268.58 mm",
-                "coordinate_value": 143268.57554080526,
+                "value": "139677.81 mm",
+                "coordinate_value": 139677.80839209145,
                 "coordinate_unit": "mm",
                 "meaning": "Sum of distances within each patch. Travel between patches is excluded."
             },
             {
                 "metric": "Trajectory segments",
-                "value": 28,
+                "value": 26,
                 "meaning": "Number of separate patch paths."
             },
             {
@@ -55572,7 +55528,7 @@
         ]
     },
     "trajectory_data": {
-        "sample_count": 55755,
+        "sample_count": 55179,
         "coordinate_unit": "mm",
         "columns": [
             "surface_x_coordinate_units",

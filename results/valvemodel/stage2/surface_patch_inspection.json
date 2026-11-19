@@ -1,0 +1,439 @@
+{
+  "source_file": "/home/ubuntu/openarmx_ws/src/openarmx-painting-robot/models/valvemodel.STL",
+  "coordinate_unit": "mm",
+  "patch_count": 106,
+  "inspected_count": 106,
+  "all_inspected": true,
+  "patches": {
+    "0": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "1": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "2": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "3": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "4": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "5": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "6": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "7": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "8": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "9": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "10": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "11": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "12": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "13": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "14": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "15": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "16": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "17": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "18": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "19": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "20": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "21": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "22": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "23": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "24": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "25": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "26": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "27": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "28": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "29": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "30": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "31": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "32": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "33": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "34": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "35": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "36": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "37": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "38": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "39": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "40": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "41": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "42": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "43": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "44": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "45": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "46": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "47": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "48": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "49": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "50": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "51": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "52": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "53": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "54": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "55": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "56": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "57": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "58": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "59": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "60": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "61": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "62": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "63": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "64": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "65": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "66": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "67": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "68": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "69": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "70": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "71": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "72": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "73": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "74": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "75": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "76": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "77": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "78": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "79": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "80": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "81": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "82": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "83": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "84": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "85": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "86": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "87": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "88": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "89": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "90": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "91": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "92": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "93": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "94": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "95": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "96": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "97": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "98": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "99": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "100": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "101": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "102": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "103": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "104": {
+      "inspected": true,
+      "decision": "paint"
+    },
+    "105": {
+      "inspected": true,
+      "decision": "paint"
+    }
+  },
+  "face_status_values": {
+    "excluded": 0,
+    "paintable_candidate": 1,
+    "requires_inspection": 2,
+    "invalid": 3
+  }
+}

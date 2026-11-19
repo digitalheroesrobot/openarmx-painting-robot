@@ -1,5 +1,5 @@
 {
-  "source_file": "/home/ubuntu/openarmx_ws/src/openarmx_painting_robot/models/product.STL",
+  "source_file": "/home/ubuntu/openarmx_ws/src/openarmx-painting-robot/models/product.STL",
   "coordinate_unit": "mm",
   "patch_count": 28,
   "inspected_count": 28,
@@ -111,11 +111,11 @@
     },
     "26": {
       "inspected": true,
-      "decision": "paint"
+      "decision": "no_paint"
     },
     "27": {
       "inspected": true,
-      "decision": "paint"
+      "decision": "no_paint"
     }
   },
   "face_status_values": {
