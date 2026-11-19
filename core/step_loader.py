@@ -151,10 +151,38 @@ def load_step(
     volume_props = GProp_GProps()
     _static_call(BRepGProp, "VolumeProperties", shape, volume_props)
     signed_volume = float(volume_props.Mass())
-    volume = abs(signed_volume)
-    volume_centroid = (
-        _xyz(volume_props.CentreOfMass()) if volume > 0 else None
-    )
+
+    # A STEP assembly can contain several independent solids. Summing the
+    # absolute volume of each solid avoids cancellation when solid
+    # orientations differ. The volume centroid is weighted by each solid's
+    # positive physical volume.
+    solid_volume_total = 0.0
+    solid_volume_moment = np.zeros(3, dtype=float)
+    for solid in solids:
+        solid_props = GProp_GProps()
+        _static_call(BRepGProp, "VolumeProperties", solid, solid_props)
+        solid_signed_volume = float(solid_props.Mass())
+        solid_volume = abs(solid_signed_volume)
+        if solid_volume > 0.0 and math.isfinite(solid_volume):
+            solid_volume_total += solid_volume
+            solid_volume_moment += (
+                solid_volume * np.asarray(
+                    _xyz(solid_props.CentreOfMass()), dtype=float
+                )
+            )
+
+    if solids:
+        volume = float(solid_volume_total)
+        volume_centroid = (
+            (solid_volume_moment / volume).tolist()
+            if volume > 0.0 else None
+        )
+    else:
+        # Surface-only STEP geometry has no solid volume.
+        volume = abs(signed_volume)
+        volume_centroid = (
+            _xyz(volume_props.CentreOfMass()) if volume > 0.0 else None
+        )
 
     linear_props = GProp_GProps()
     _static_call(BRepGProp, "LinearProperties", shape, linear_props)
@@ -297,6 +325,50 @@ def load_step(
     return mesh
 
 
+def convert_step_report_units(report: dict, display_unit: str) -> dict:
+    """
+    Convert display values from the STEP report's canonical millimetres.
+
+    The report itself is never modified; exact source measurements remain
+    stored in mm, mm², and mm³. Only values returned for GUI display change.
+    """
+    unit_factors_mm = {
+        "mm": 1.0,
+        "cm": 10.0,
+        "m": 1000.0,
+        "in": 25.4,
+        "ft": 304.8,
+    }
+    unit = str(display_unit).strip().lower()
+    if unit not in unit_factors_mm:
+        raise ValueError(
+            f"Unsupported STEP display unit: {display_unit!r}"
+        )
+
+    try:
+        dimensions_mm = report["bounding_box"]["dimensions_mm"]
+        area_mm2 = float(report["mass_properties"]["surface_area_mm2"])
+        volume_mm3 = float(report["mass_properties"]["volume_mm3"])
+        if len(dimensions_mm) != 3:
+            raise ValueError
+        dimensions_mm = [float(value) for value in dimensions_mm]
+    except (KeyError, TypeError, ValueError, IndexError) as exc:
+        raise ValueError("Invalid STEP geometry report structure.") from exc
+
+    if not all(math.isfinite(value) for value in dimensions_mm):
+        raise ValueError("STEP bounding dimensions must be finite.")
+    if not math.isfinite(area_mm2) or not math.isfinite(volume_mm3):
+        raise ValueError("STEP area and volume must be finite.")
+
+    length_factor = 1.0 / unit_factors_mm[unit]
+    return {
+        "display_unit": unit,
+        "dimensions": [value * length_factor for value in dimensions_mm],
+        "surface_area": area_mm2 * length_factor ** 2,
+        "volume": volume_mm3 * length_factor ** 3,
+    }
+
+
 def run_step_loader_tests():
     """Run input-validation tests; full B-Rep tests require a STEP fixture."""
     import tempfile
@@ -321,6 +393,32 @@ def run_step_loader_tests():
 
     print("[PASS] STEP extension validation")
     print("[PASS] Missing-file validation")
+
+    # Display conversion tests: exact source report remains in millimetres.
+    sample_report = {
+        "bounding_box": {"dimensions_mm": [100.0, 200.0, 300.0]},
+        "mass_properties": {
+            "surface_area_mm2": 10000.0,
+            "volume_mm3": 1000000.0,
+        },
+    }
+    cm_values = convert_step_report_units(sample_report, "cm")
+    assert np.allclose(cm_values["dimensions"], [10.0, 20.0, 30.0])
+    assert math.isclose(cm_values["surface_area"], 100.0)
+    assert math.isclose(cm_values["volume"], 1000.0)
+    assert sample_report["bounding_box"]["dimensions_mm"] == [
+        100.0, 200.0, 300.0
+    ]
+    print("[PASS] STEP display-unit conversion (mm -> cm)")
+    print("[PASS] Canonical STEP report remains unchanged")
+
+    try:
+        convert_step_report_units(sample_report, "yard")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Unsupported display unit was accepted.")
+    print("[PASS] Unsupported STEP display unit rejection")
     print("STEP loader preflight tests passed.")
 
 
