@@ -546,6 +546,7 @@ class MainWindow(QMainWindow):
 
         # 3D Viewer
         self.viewer = ProductViewer()
+        self.viewer.pose_confirmed.connect(self._save_reference_pose)
 
         # Left sidebar
         self.left_panel = self._build_left_panel()
@@ -2848,6 +2849,59 @@ class MainWindow(QMainWindow):
 
         if not success:
             self.status_bar.showMessage("OPERATION FAILED")
+
+    # ========================================================
+    # MANUAL REFERENCE POSE STORAGE
+    # ========================================================
+
+    def _save_reference_pose(self, pose):
+        if self.current_stl_path is None:
+            QMessageBox.warning(self, "Reference Pose", "Load a product CAD model before saving a pose.")
+            return
+
+        from datetime import datetime, timezone
+        output_path = self.result_manager.result_path(
+            self.current_stl_path, stage_number=1, filename="reference_poses.json"
+        )
+        records = []
+        if output_path.is_file():
+            try:
+                with output_path.open("r", encoding="utf-8") as file:
+                    existing = json.load(file)
+                if isinstance(existing, dict):
+                    records = existing.get("poses", [])
+                elif isinstance(existing, list):
+                    records = existing
+            except (OSError, json.JSONDecodeError):
+                QMessageBox.critical(
+                    self, "Reference Pose",
+                    "Existing reference_poses.json is invalid; no data was overwritten."
+                )
+                return
+
+        record = dict(pose)
+        record["pose_id"] = len(records) + 1
+        record["timestamp_utc"] = datetime.now(timezone.utc).isoformat()
+        records.append(record)
+        saved_path = self.result_manager.save_json(
+            stl_path=self.current_stl_path,
+            stage_number=1,
+            filename="reference_poses.json",
+            data={
+                "schema_version": 1,
+                "product_file": self.current_stl_path.name,
+                "world_frame": "CAD_ORIGIN",
+                "pose_count": len(records),
+                "poses": records,
+            },
+        )
+        self.status_bar.showMessage(
+            f"REFERENCE POSE {record['pose_id']} SAVED: {saved_path}", 10000
+        )
+        QMessageBox.information(
+            self, "Reference Pose Saved",
+            f"Pose {record['pose_id']} saved successfully.\n\n{saved_path}"
+        )
 
     # ========================================================
     # STL LOADING
