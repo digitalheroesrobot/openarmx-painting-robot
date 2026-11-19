@@ -118,6 +118,17 @@ def load_step(
     TopoDS = ocp["TopoDS"]
     TopExp_Explorer = ocp["TopExp_Explorer"]
 
+    # OCP 7 exposed TopoDS.Face_s; OCP 8 renamed downcasts to TopoDS.Face.
+    # Resolve the available API instead of pinning the project to one OCP major.
+    face_cast = getattr(TopoDS, "Face", None)
+    if face_cast is None:
+        face_cast = getattr(TopoDS, "Face_s", None)
+    if face_cast is None:
+        raise RuntimeError(
+            "This Open CASCADE binding exposes neither TopoDS.Face "
+            "nor TopoDS.Face_s."
+        )
+
     # Request millimetres as the STEP translation target unit.
     _static_call(Interface_Static, "SetCVal", "xstep.cascade.unit", "MM")
 
@@ -132,7 +143,7 @@ def load_step(
         raise ValueError("STEP file produced an empty CAD shape.")
 
     faces = _explore(
-        shape, ocp["TopAbs_FACE"], TopExp_Explorer, TopoDS.Face_s
+        shape, ocp["TopAbs_FACE"], TopExp_Explorer, face_cast
     )
     edges = _explore(shape, ocp["TopAbs_EDGE"], TopExp_Explorer)
     vertices = _explore(shape, ocp["TopAbs_VERTEX"], TopExp_Explorer)
