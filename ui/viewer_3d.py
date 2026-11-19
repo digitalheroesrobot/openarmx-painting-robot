@@ -1058,14 +1058,15 @@ class ProductViewer(QWidget):
         else:
             polydata = self._to_polydata(self.current_mesh)
 
-            # The STEP display mesh is tessellated into triangles.
-            # Showing every triangle edge makes curved CAD surfaces look
-            # faceted and visually noisy. Keep the product surface shaded;
-            # original CAD edges will be rendered separately from B-Rep data.
+            # Keep tessellation edges visible for geometric inspection.
+            # Smooth shading improves the surface appearance without hiding
+            # the triangle boundaries.
             self.plotter.add_mesh(
                 polydata,
                 color="#4C8DAD",
-                show_edges=False,
+                show_edges=True,
+                edge_color="#182C38",
+                line_width=1,
                 smooth_shading=True,
                 specular=0.25,
                 specular_power=20,
@@ -1074,10 +1075,9 @@ class ProductViewer(QWidget):
         # -------------------------------------------------
         # COMMON VIEWER ELEMENTS
         # -------------------------------------------------
-        self._add_3d_box_grid()
-        self._add_dimension_box()
-        self._add_coordinate_axes()
-        self._add_origin_marker()
+        # Keep the initial product viewer uncluttered.
+        # Grid, dimension annotations, coordinate axes, and origin marker
+        # remain available as helper methods for later opt-in controls.
 
         # -------------------------------------------------
         # CAMERA RESTORATION
