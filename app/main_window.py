@@ -2873,6 +2873,13 @@ class MainWindow(QMainWindow):
             mesh.metadata.get("step_geometry_report") if is_step else None
         )
         self.current_step_report_path = None
+        if self.current_step_report is not None:
+            self.current_step_report_path = self.result_manager.save_json(
+                stl_path=self.current_stl_path,
+                stage_number=1,
+                filename="step_geometry_report.json",
+                data=self.current_step_report,
+            )
 
         self._reset_downstream_results()
 
@@ -2933,17 +2940,35 @@ class MainWindow(QMainWindow):
         self.analysis_summary.setStyleSheet("")
 
         if self.current_step_report is not None:
+            report = self.current_step_report
+            topo = report["topology"]
+            bbox = report["bounding_box"]
+            mass = report["mass_properties"]
+            center = mass.get("volume_centroid_mm") or mass["surface_centroid_mm"]
+            type_summary = "\n".join(
+                f"{name}: {count}"
+                for name, count in report.get("surface_types", {}).items()
+            ) or "NOT CLASSIFIED"
+
             self.summary_section.setText("STEP CAD GEOMETRY")
             self.analysis_summary.setText(
-                "STEP CAD MODEL LOADED\n\n"
-                f"FACES: {self.current_step_report['topology']['faces']:,}\n"
-                f"EDGES: {self.current_step_report['topology']['edges']:,}\n"
-                f"SOLIDS: {self.current_step_report['topology']['solids']:,}\n"
-                f"TRIANGLES: {self.current_step_report['mesh']['triangles']:,}\n\n"
-                "LENGTH UNIT: mm\n"
-                "EXACT B-REP DATA EXTRACTED\n"
-                "CAD FACE IDs LINKED TO DISPLAY TRIANGLES\n\n"
-                "NEXT OPERATION: GEOMETRY INSPECTION"
+                "STEP B-REP IMPORT COMPLETE\n\n"
+                f"FACES: {topo['faces']:,}  |  EDGES: {topo['edges']:,}\n"
+                f"VERTICES: {topo['vertices']:,}  |  SOLIDS: {topo['solids']:,}\n"
+                f"SHELLS: {topo['shells']:,}\n\n"
+                f"BOUNDING BOX (mm):\n"
+                f"X: {bbox['dimensions_mm'][0]:,.3f}\n"
+                f"Y: {bbox['dimensions_mm'][1]:,.3f}\n"
+                f"Z: {bbox['dimensions_mm'][2]:,.3f}\n"
+                f"MIN: {bbox['minimum_mm']}\n"
+                f"MAX: {bbox['maximum_mm']}\n\n"
+                f"SURFACE AREA: {mass['surface_area_mm2']:,.3f} mm²\n"
+                f"VOLUME: {mass['volume_mm3']:,.3f} mm³\n"
+                f"EDGE LENGTH: {mass['total_edge_length_mm']:,.3f} mm\n"
+                f"GEOMETRIC CENTROID: {center}\n\n"
+                f"SURFACE TYPES:\n{type_summary}\n\n"
+                "CAD FACE IDS ARE LINKED TO DISPLAY TRIANGLES.\n"
+                "NEXT: GEOMETRY INSPECTION"
             )
         elif self.coordinate_unit == "unknown":
             self.analysis_summary.setText(
@@ -3019,6 +3044,10 @@ class MainWindow(QMainWindow):
             return
 
         mesh = self.current_mesh
+
+        if self.current_step_report is None:
+            for key in ("cad_faces", "cad_edges", "cad_solids"):
+                self.metric_labels[key].setText("--")
 
         # STEP values come from the exact B-Rep, not from the display mesh.
         if self.current_step_report is not None:
