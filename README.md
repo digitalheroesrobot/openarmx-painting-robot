@@ -31,3 +31,12 @@ bash run.sh
 ## Existing dependencies
 
 PySide6, PyVista, PyVistaQt, Trimesh, NumPy and SciPy remain the application and geometry dependencies.
+
+
+## Manual reference pose capture
+
+In the product viewer, enter the hook rotation pivot as an XYZ point in the source CAD coordinate system and select **APPLY PIVOT**. Drag the product actor with the left mouse button to adjust its pose about that pivot. The live readout reports the transformed CAD origin and roll-pitch-yaw. **CONFIRM & SAVE POSE** appends a reference pose to:
+
+    results/<product>/stage1/reference_poses.json
+
+The saved record includes the hook pivot, position, RPY, rotation matrix, homogeneous transform, source/display units, and UTC timestamp. This is an operator-defined reference pose, not a depth-camera measurement. Camera-based pose correction is a later workflow.
