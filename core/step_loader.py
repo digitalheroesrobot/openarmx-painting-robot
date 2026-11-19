@@ -1,28 +1,22 @@
 """
-STEP CAD loader for OpenArmX Painting Control System.
+STEP B-Rep import and geometric-property extraction.
 
-The STEP B-Rep is the authoritative geometry source. It is tessellated
-only to provide the existing PyVista/Trimesh viewer with display geometry.
-All lengths are normalized to millimetres by Open CASCADE before analysis.
-
-Install dependency:
-    pip install cadquery-ocp
-
-The returned mesh metadata contains a JSON-serializable B-Rep report and
-a triangle-to-CAD-face mapping. Original STEP faces are not discarded.
+The STEP B-Rep is retained as the authoritative source of CAD topology.
+A tessellated Trimesh is produced only for the existing PyVista viewer.
+Lengths are normalized to millimetres by Open CASCADE STEP translation.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from collections import Counter
+from pathlib import Path
 import math
 
 import numpy as np
 import trimesh
 
 
-def _require_ocp():
+def _ocp_imports():
     try:
         from OCP.BRep import BRep_Tool
         from OCP.BRepAdaptor import BRepAdaptor_Surface
@@ -41,25 +35,42 @@ def _require_ocp():
         from OCP.TopExp import TopExp_Explorer
         from OCP.TopoDS import TopoDS
         from OCP.TopLoc import TopLoc_Location
+        from OCP.GeomAbs import (
+            GeomAbs_Plane, GeomAbs_Cylinder, GeomAbs_Cone,
+            GeomAbs_Sphere, GeomAbs_Torus, GeomAbs_BezierSurface,
+            GeomAbs_BSplineSurface, GeomAbs_SurfaceOfRevolution,
+            GeomAbs_SurfaceOfExtrusion, GeomAbs_OffsetSurface,
+        )
     except ImportError as exc:
         raise RuntimeError(
             "STEP import requires Open CASCADE Python bindings. "
-            "Install them with: pip install cadquery-ocp"
+            "Install with: pip install cadquery-ocp"
         ) from exc
 
     return locals()
 
 
-def _explore(shape, topology_type, explorer_type):
+def _static_call(owner, name, *args):
+    """Support OCP bindings that expose static methods with a _s suffix."""
+    method = getattr(owner, name + "_s", None)
+    if method is None:
+        method = getattr(owner, name, None)
+    if method is None:
+        raise RuntimeError(f"Open CASCADE method not available: {owner}.{name}")
+    return method(*args)
+
+
+def _explore(shape, topology_type, explorer_type, cast=None):
     explorer = explorer_type(shape, topology_type)
     items = []
     while explorer.More():
-        items.append(explorer.Current())
+        item = explorer.Current()
+        items.append(cast(item) if cast is not None else item)
         explorer.Next()
     return items
 
 
-def _surface_name(adaptor, geomabs):
+def _surface_name(adaptor, ocp):
     mapping = (
         ("PLANE", "GeomAbs_Plane"),
         ("CYLINDER", "GeomAbs_Cylinder"),
@@ -74,34 +85,25 @@ def _surface_name(adaptor, geomabs):
     )
     value = adaptor.GetType()
     for label, enum_name in mapping:
-        enum_value = getattr(geomabs, enum_name, None)
-        if enum_value is not None and value == enum_value:
+        if value == ocp[enum_name]:
             return label
     return "OTHER"
 
 
-def _point_xyz(point):
+def _xyz(point):
     return [float(point.X()), float(point.Y()), float(point.Z())]
 
 
-def load_step(file_path: str | Path, linear_deflection_mm: float = 0.25,
-              angular_deflection_rad: float = 0.15) -> trimesh.Trimesh:
-    """
-    Read STEP B-Rep, calculate exact topology/surface properties, and
-    return a display mesh in millimetres.
-
-    Args:
-        file_path: STEP or STP path.
-        linear_deflection_mm: Tessellation chordal tolerance in mm.
-        angular_deflection_rad: Tessellation angular tolerance in radians.
-
-    Returns:
-        trimesh.Trimesh whose metadata['step_geometry_report'] contains
-        exact B-Rep measurements and whose metadata['triangle_face_ids']
-        maps each display triangle to its original 1-based CAD Face ID.
-    """
-    if linear_deflection_mm <= 0 or angular_deflection_rad <= 0:
-        raise ValueError("Tessellation tolerances must be positive.")
+def load_step(
+    file_path: str | Path,
+    linear_deflection_mm: float = 0.25,
+    angular_deflection_rad: float = 0.15,
+) -> trimesh.Trimesh:
+    """Load STEP, extract exact B-Rep measurements, and create a display mesh."""
+    if not math.isfinite(linear_deflection_mm) or linear_deflection_mm <= 0:
+        raise ValueError("linear_deflection_mm must be a positive finite value.")
+    if not math.isfinite(angular_deflection_rad) or angular_deflection_rad <= 0:
+        raise ValueError("angular_deflection_rad must be a positive finite value.")
 
     path = Path(file_path).expanduser().resolve()
     if not path.is_file():
@@ -109,91 +111,71 @@ def load_step(file_path: str | Path, linear_deflection_mm: float = 0.25,
     if path.suffix.lower() not in (".step", ".stp"):
         raise ValueError("Expected a .step or .stp file.")
 
-    ocp = _require_ocp()
-    BRep_Tool = ocp["BRep_Tool"]
-    BRepAdaptor_Surface = ocp["BRepAdaptor_Surface"]
-    BRepBndLib = ocp["BRepBndLib"]
-    BRepGProp = ocp["BRepGProp"]
-    BRepMesh_IncrementalMesh = ocp["BRepMesh_IncrementalMesh"]
-    GProp_GProps = ocp["GProp_GProps"]
-    IFSelect_RetDone = ocp["IFSelect_RetDone"]
+    ocp = _ocp_imports()
     Interface_Static = ocp["Interface_Static"]
-    Bnd_Box = ocp["Bnd_Box"]
     STEPControl_Reader = ocp["STEPControl_Reader"]
-    TopAbs_EDGE = ocp["TopAbs_EDGE"]
-    TopAbs_FACE = ocp["TopAbs_FACE"]
-    TopAbs_SHELL = ocp["TopAbs_SHELL"]
-    TopAbs_SOLID = ocp["TopAbs_SOLID"]
-    TopAbs_VERTEX = ocp["TopAbs_VERTEX"]
-    TopAbs_REVERSED = ocp["TopAbs_REVERSED"]
-    TopExp_Explorer = ocp["TopExp_Explorer"]
+    IFSelect_RetDone = ocp["IFSelect_RetDone"]
     TopoDS = ocp["TopoDS"]
-    TopLoc_Location = ocp["TopLoc_Location"]
+    TopExp_Explorer = ocp["TopExp_Explorer"]
 
-    # Force a consistent physical output unit. Open CASCADE converts
-    # STEP model units to this target unit during STEP translation.
-    Interface_Static.SetCVal("xstep.cascade.unit", "MM")
+    # Request millimetres as the STEP translation target unit.
+    _static_call(Interface_Static, "SetCVal", "xstep.cascade.unit", "MM")
 
     reader = STEPControl_Reader()
-    status = reader.ReadFile(str(path))
-    if status != IFSelect_RetDone:
+    if reader.ReadFile(str(path)) != IFSelect_RetDone:
         raise ValueError(f"Open CASCADE could not read STEP file: {path}")
-    transferred = reader.TransferRoots()
-    if transferred <= 0:
+    if reader.TransferRoots() <= 0:
         raise ValueError("STEP file contains no transferable geometry.")
 
     shape = reader.OneShape()
     if shape.IsNull():
         raise ValueError("STEP file produced an empty CAD shape.")
 
-    # Exact B-Rep topology.
-    faces = _explore(shape, TopAbs_FACE, TopExp_Explorer)
-    edges = _explore(shape, TopAbs_EDGE, TopExp_Explorer)
-    vertices = _explore(shape, TopAbs_VERTEX, TopExp_Explorer)
-    shells = _explore(shape, TopAbs_SHELL, TopExp_Explorer)
-    solids = _explore(shape, TopAbs_SOLID, TopExp_Explorer)
+    faces = _explore(
+        shape, ocp["TopAbs_FACE"], TopExp_Explorer, TopoDS.Face_s
+    )
+    edges = _explore(shape, ocp["TopAbs_EDGE"], TopExp_Explorer)
+    vertices = _explore(shape, ocp["TopAbs_VERTEX"], TopExp_Explorer)
+    shells = _explore(shape, ocp["TopAbs_SHELL"], TopExp_Explorer)
+    solids = _explore(shape, ocp["TopAbs_SOLID"], TopExp_Explorer)
 
-    # Exact global properties in mm, mm² and mm³.
+    # Exact B-Rep global properties (mm, mm², mm³).
+    GProp_GProps = ocp["GProp_GProps"]
+    BRepGProp = ocp["BRepGProp"]
+
     surface_props = GProp_GProps()
-    BRepGProp.SurfaceProperties(shape, surface_props)
-    total_surface_area = float(surface_props.Mass())
-    surface_centroid = _point_xyz(surface_props.CentreOfMass())
+    _static_call(BRepGProp, "SurfaceProperties", shape, surface_props)
+    total_area = float(surface_props.Mass())
+    surface_centroid = _xyz(surface_props.CentreOfMass())
 
     volume_props = GProp_GProps()
-    BRepGProp.VolumeProperties(shape, volume_props)
+    _static_call(BRepGProp, "VolumeProperties", shape, volume_props)
     signed_volume = float(volume_props.Mass())
     volume = abs(signed_volume)
-    volume_centroid = _point_xyz(volume_props.CentreOfMass()) if volume > 0 else None
+    volume_centroid = (
+        _xyz(volume_props.CentreOfMass()) if volume > 0 else None
+    )
 
     linear_props = GProp_GProps()
-    BRepGProp.LinearProperties(shape, linear_props)
+    _static_call(BRepGProp, "LinearProperties", shape, linear_props)
     total_edge_length = float(linear_props.Mass())
 
-    bbox = Bnd_Box()
-    BRepBndLib.Add(shape, bbox)
+    bbox = ocp["Bnd_Box"]()
+    _static_call(ocp["BRepBndLib"], "Add", shape, bbox)
     xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
     bounds_min = [float(xmin), float(ymin), float(zmin)]
     bounds_max = [float(xmax), float(ymax), float(zmax)]
-    dimensions = [xmax - xmin, ymax - ymin, zmax - zmin]
-    diagonal = float(np.linalg.norm(dimensions))
+    dimensions = [float(xmax - xmin), float(ymax - ymin), float(zmax - zmin)]
 
-    # Exact per-face properties and stable 1-based CAD face identifiers.
     face_records = []
     surface_counts = Counter()
     for face_id, face in enumerate(faces, start=1):
         props = GProp_GProps()
-        BRepGProp.SurfaceProperties(face, props)
-        adaptor = BRepAdaptor_Surface(face, True)
-        surface_type = _surface_name(adaptor, ocp.get("GeomAbs", object()))
-        # Resolve surface enum names without relying on enum string formatting.
-        try:
-            from OCP import GeomAbs
-            surface_type = _surface_name(adaptor, GeomAbs)
-        except ImportError:
-            surface_type = str(adaptor.GetType()).split(".")[-1].upper()
-
+        _static_call(BRepGProp, "SurfaceProperties", face, props)
+        adaptor = ocp["BRepAdaptor_Surface"](face, True)
+        surface_type = _surface_name(adaptor, ocp)
         area = float(props.Mass())
-        center = _point_xyz(props.CentreOfMass())
+        center = _xyz(props.CentreOfMass())
         surface_counts[surface_type] += 1
         face_records.append({
             "face_id": face_id,
@@ -202,58 +184,56 @@ def load_step(file_path: str | Path, linear_deflection_mm: float = 0.25,
             "centroid_mm": center,
         })
 
-    # Tessellate for the current PyVista viewer. Each triangle retains its
-    # source CAD face ID so later painting patches can map back to B-Rep.
-    mesher = BRepMesh_IncrementalMesh(
+    # Tessellate each original CAD face separately and retain Face IDs.
+    mesher = ocp["BRepMesh_IncrementalMesh"](
         shape, float(linear_deflection_mm), False,
-        float(angular_deflection_rad), True
+        float(angular_deflection_rad), True,
     )
     mesher.Perform()
     if hasattr(mesher, "IsDone") and not mesher.IsDone():
-        raise RuntimeError("Open CASCADE tessellation did not complete.")
+        raise RuntimeError("Open CASCADE tessellation failed.")
 
     mesh_vertices = []
     mesh_faces = []
     triangle_face_ids = []
     vertex_lookup = {}
     merge_tolerance = 1e-8
+    BRep_Tool = ocp["BRep_Tool"]
+    TopLoc_Location = ocp["TopLoc_Location"]
 
-    def add_vertex(point):
-        p = point.Transformed(location.Transformation())
-        xyz = (float(p.X()), float(p.Y()), float(p.Z()))
-        key = tuple(int(round(v / merge_tolerance)) for v in xyz)
-        existing = vertex_lookup.get(key)
-        if existing is not None:
-            return existing
-        index = len(mesh_vertices)
-        mesh_vertices.append(xyz)
-        vertex_lookup[key] = index
+    def add_vertex(point, location):
+        transformed = point.Transformed(location.Transformation())
+        xyz = (float(transformed.X()), float(transformed.Y()), float(transformed.Z()))
+        key = tuple(int(round(value / merge_tolerance)) for value in xyz)
+        index = vertex_lookup.get(key)
+        if index is None:
+            index = len(mesh_vertices)
+            vertex_lookup[key] = index
+            mesh_vertices.append(xyz)
         return index
 
     for face_id, face in enumerate(faces, start=1):
         location = TopLoc_Location()
-        triangulation = BRep_Tool.Triangulation(face, location)
+        triangulation = _static_call(BRep_Tool, "Triangulation", face, location)
         if triangulation is None or triangulation.NbTriangles() == 0:
             continue
 
-        reversed_face = face.Orientation() == TopAbs_REVERSED
+        reversed_face = face.Orientation() == ocp["TopAbs_REVERSED"]
         for triangle_index in range(1, triangulation.NbTriangles() + 1):
             n1, n2, n3 = triangulation.Triangle(triangle_index).Get()
-            indices = [
-                add_vertex(triangulation.Node(n1)),
-                add_vertex(triangulation.Node(n2)),
-                add_vertex(triangulation.Node(n3)),
+            tri = [
+                add_vertex(triangulation.Node(n1), location),
+                add_vertex(triangulation.Node(n2), location),
+                add_vertex(triangulation.Node(n3), location),
             ]
             if reversed_face:
-                indices[1], indices[2] = indices[2], indices[1]
-            if len(set(indices)) == 3:
-                mesh_faces.append(indices)
+                tri[1], tri[2] = tri[2], tri[1]
+            if len(set(tri)) == 3:
+                mesh_faces.append(tri)
                 triangle_face_ids.append(face_id)
 
     if not mesh_vertices or not mesh_faces:
-        raise ValueError(
-            "STEP B-Rep was read, but no display triangles were generated."
-        )
+        raise ValueError("STEP B-Rep was read, but no display triangles were generated.")
 
     mesh = trimesh.Trimesh(
         vertices=np.asarray(mesh_vertices, dtype=float),
@@ -268,30 +248,26 @@ def load_step(file_path: str | Path, linear_deflection_mm: float = 0.25,
         "linear_unit": "mm",
         "unit_conversion_target": "mm",
         "unit_note": (
-            "Open CASCADE STEP translation target configured as mm. "
-            "Verify against the originating CAD system for critical metrology."
+            "STEP translation target is millimetres. Confirm the source CAD "
+            "unit when using measurements for manufacturing decisions."
         ),
         "topology": {
-            "faces": len(faces),
-            "edges": len(edges),
-            "vertices": len(vertices),
-            "shells": len(shells),
+            "faces": len(faces), "edges": len(edges),
+            "vertices": len(vertices), "shells": len(shells),
             "solids": len(solids),
         },
         "mesh": {
-            "vertices": len(mesh.vertices),
-            "triangles": len(mesh.faces),
+            "vertices": len(mesh.vertices), "triangles": len(mesh.faces),
             "linear_deflection_mm": float(linear_deflection_mm),
             "angular_deflection_rad": float(angular_deflection_rad),
         },
         "bounding_box": {
-            "minimum_mm": bounds_min,
-            "maximum_mm": bounds_max,
-            "dimensions_mm": [float(v) for v in dimensions],
-            "diagonal_mm": diagonal,
+            "minimum_mm": bounds_min, "maximum_mm": bounds_max,
+            "dimensions_mm": dimensions,
+            "diagonal_mm": float(np.linalg.norm(dimensions)),
         },
         "mass_properties": {
-            "surface_area_mm2": total_surface_area,
+            "surface_area_mm2": total_area,
             "volume_mm3": volume,
             "signed_volume_mm3": signed_volume,
             "surface_centroid_mm": surface_centroid,
@@ -313,23 +289,18 @@ def load_step(file_path: str | Path, linear_deflection_mm: float = 0.25,
         "source_coordinates_modified": False,
     })
 
-    # Basic numerical consistency checks.
     assert len(triangle_face_ids) == len(mesh.faces)
     assert len(face_records) == len(faces)
-    assert np.all(np.isfinite(mesh.vertices))
-    assert np.all(np.isfinite(mesh.faces))
-    assert math.isfinite(total_surface_area) and total_surface_area >= 0
+    assert np.isfinite(mesh.vertices).all()
+    assert math.isfinite(total_area) and total_area >= 0
     assert math.isfinite(volume) and volume >= 0
-
     return mesh
 
 
 def run_step_loader_tests():
-    """Run dependency-independent checks for report/mesh contract."""
+    """Run input-validation tests; full B-Rep tests require a STEP fixture."""
     import tempfile
-    from pathlib import Path
 
-    # Validate extension and missing-file errors without requiring OCP.
     with tempfile.TemporaryDirectory() as folder:
         bad = Path(folder) / "bad.txt"
         bad.write_text("not CAD", encoding="utf-8")
@@ -346,7 +317,7 @@ def run_step_loader_tests():
         except FileNotFoundError:
             pass
         else:
-            raise AssertionError("Missing STEP file was not rejected.")
+            raise AssertionError("Missing-file validation failed.")
 
     print("[PASS] STEP extension validation")
     print("[PASS] Missing-file validation")
