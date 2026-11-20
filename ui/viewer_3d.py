@@ -2496,6 +2496,17 @@ class ProductViewer(QWidget):
             next_index = int(np.clip(next_index, self._playback_index, total - 1))
             if next_index == self._playback_index and next_index < total - 1:
                 return
+
+        # Never skip a spray-OFF boundary, even at high visual playback speed.
+        off_boundaries = np.flatnonzero(~cache["spray_on_mask"])
+        future_boundaries = off_boundaries[
+            off_boundaries > self._playback_index
+        ]
+        if len(future_boundaries):
+            next_off_boundary = int(future_boundaries[0])
+            if next_index >= next_off_boundary:
+                next_index = next_off_boundary
+
         self._update_trajectory_playback_visuals(next_index)
         if next_index >= total - 1:
             self._stop_trajectory_playback()
