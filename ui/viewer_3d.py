@@ -1474,38 +1474,43 @@ class ProductViewer(QWidget):
         axis_length = product_size * 0.22
         axes.SetTotalLength(axis_length, axis_length, axis_length)
 
-        # A restrained, pale technical triad: visible on the product without
-        # competing with its geometry or the fixed World reference.
+        # A subtle, lightweight product-attached triad. The axes should
+        # remain readable on the CAD surface without dominating the model.
         axes.SetShaftTypeToLine()
-        axes.SetConeRadius(0.035)
-        axes.SetSphereRadius(0.025)
+        axes.SetConeRadius(0.022)
+        axes.SetSphereRadius(0.018)
         axes.SetXAxisLabelText("X")
         axes.SetYAxisLabelText("Y")
         axes.SetZAxisLabelText("Z")
         axes.SetAxisLabels(True)
 
         axis_styles = (
-            (axes.GetXAxisShaftProperty(), axes.GetXAxisTipProperty(), (0.88, 0.63, 0.66)),
-            (axes.GetYAxisShaftProperty(), axes.GetYAxisTipProperty(), (0.64, 0.82, 0.70)),
-            (axes.GetZAxisShaftProperty(), axes.GetZAxisTipProperty(), (0.64, 0.76, 0.90)),
+            (axes.GetXAxisShaftProperty(), axes.GetXAxisTipProperty(), (0.91, 0.70, 0.72)),
+            (axes.GetYAxisShaftProperty(), axes.GetYAxisTipProperty(), (0.73, 0.88, 0.78)),
+            (axes.GetZAxisShaftProperty(), axes.GetZAxisTipProperty(), (0.72, 0.82, 0.96)),
         )
         for shaft, tip, color in axis_styles:
             shaft.SetColor(*color)
             tip.SetColor(*color)
-            shaft.SetOpacity(0.62)
-            tip.SetOpacity(0.62)
+            shaft.SetOpacity(0.34)
+            tip.SetOpacity(0.42)
+            shaft.SetLineWidth(1.25)
 
-        # Keep XYZ captions compact and understated.
-        for caption in (
-            axes.GetXAxisCaptionActor2D(),
-            axes.GetYAxisCaptionActor2D(),
-            axes.GetZAxisCaptionActor2D(),
-        ):
+        # Small, crisp XYZ glyphs, color-matched to their respective axes.
+        caption_styles = (
+            (axes.GetXAxisCaptionActor2D(), (0.96, 0.76, 0.78)),
+            (axes.GetYAxisCaptionActor2D(), (0.79, 0.93, 0.83)),
+            (axes.GetZAxisCaptionActor2D(), (0.78, 0.87, 1.00)),
+        )
+        for caption, color in caption_styles:
             text_property = caption.GetCaptionTextProperty()
-            text_property.SetFontSize(13)
+            text_property.SetFontFamilyToArial()
+            text_property.SetFontSize(9)
             text_property.SetBold(True)
+            text_property.SetItalic(True)
             text_property.SetShadow(False)
-            text_property.SetColor(0.82, 0.88, 0.94)
+            text_property.SetColor(*color)
+            text_property.SetOpacity(0.78)
 
         axes.SetUserMatrix(self._vtk_matrix_from_numpy(self._actor_matrix_array()))
         self._cad_axes_actor = axes
