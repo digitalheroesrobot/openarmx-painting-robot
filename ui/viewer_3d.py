@@ -352,123 +352,58 @@ class ProductViewer(QWidget):
     # =========================================================
 
     def _build_pose_controls(self):
+        """Build the only operator-visible controls: Roll, Pitch and Yaw."""
         panel = QFrame()
         panel.setObjectName("PoseReferenceControls")
         panel.setStyleSheet("""
             QFrame#PoseReferenceControls { background-color: #0D1822; border: 1px solid #294858; border-radius: 5px; }
             QLabel { color: #D8E5ED; padding: 2px; }
-            QPushButton { color: #EAF4F8; background-color: #173747; border: 1px solid #3D7185; border-radius: 4px; padding: 5px 8px; font-weight: bold; }
-            QPushButton:disabled { color: #71838D; background-color: #17232B; }
+            QDoubleSpinBox { color: #EAF4F8; background-color: #102431; border: 1px solid #3D7185; border-radius: 4px; padding: 4px 6px; min-height: 24px; }
         """)
         layout = QHBoxLayout(panel)
-        layout.setContentsMargins(8, 5, 8, 5)
-        layout.setSpacing(5)
-
-        layout.addWidget(QLabel("CAD ORIGIN / WORLD XYZ:"))
-        self.world_position_inputs = []
-        for axis in "XYZ":
-            field = QDoubleSpinBox()
-            field.setRange(-10000000.0, 10000000.0)
-            field.setDecimals(3)
-            field.setSingleStep(10.0)
-            field.setSuffix(f" {axis}")
-            field.setFixedWidth(82)
-            field.setToolTip(f"World {axis} coordinate of STEP CAD origin (0,0,0), in source CAD units.")
-            layout.addWidget(field)
-            self.world_position_inputs.append(field)
-
-        self.apply_position_button = QPushButton("SET POSITION")
-        self.apply_position_button.clicked.connect(self._apply_world_position)
-        layout.addWidget(self.apply_position_button)
-
-        layout.addWidget(QLabel("BOX X/Y/Z:"))
-        self.workspace_size_inputs = []
-        for axis in "XYZ":
-            field = QDoubleSpinBox()
-            field.setRange(1.0, 10000000.0)
-            field.setDecimals(1)
-            field.setSingleStep(100.0)
-            field.setValue(1000.0)
-            field.setSuffix(f" {axis}")
-            field.setFixedWidth(72)
-            field.setToolTip("Configurable display-box extent in source CAD units; not a measured work-cell dimension.")
-            layout.addWidget(field)
-            self.workspace_size_inputs.append(field)
-
-        self.apply_workspace_button = QPushButton("APPLY BOX")
-        self.apply_workspace_button.clicked.connect(self._apply_workspace_bounds)
-        layout.addWidget(self.apply_workspace_button)
-
-        layout.addWidget(QLabel("HOOK LENGTH:"))
-        self.hook_length_input = QDoubleSpinBox()
-        self.hook_length_input.setRange(0.0, 10000000.0)
-        self.hook_length_input.setDecimals(2)
-        self.hook_length_input.setSingleStep(10.0)
-        self.hook_length_input.setValue(self.hook_length_source_units)
-        self.hook_length_input.setSuffix(" CAD units")
-        self.hook_length_input.setFixedWidth(130)
-        self.hook_length_input.setToolTip("Vertical distance from the conveyor hook suspension point to the hook engagement point on the product, measured downward along +Z.")
-        self.hook_length_input.valueChanged.connect(self._on_hook_length_changed)
-        layout.addWidget(self.hook_length_input)
-
-        self.pick_hook_point_button = QPushButton("PICK PRODUCT HOOK POINT")
-        self.pick_hook_point_button.clicked.connect(self._start_hook_point_picking)
-        layout.addWidget(self.pick_hook_point_button)
-
-        self.pose_status_label = QLabel("World: +X conveyor travel, -Y viewing direction, +Z downward. Select the product hook point to place it.")
-        self.pose_status_label.setMinimumWidth(230)
-        layout.addWidget(self.pose_status_label, 1)
-
-        self.confirm_pose_button = QPushButton("CONFIRM & SAVE POSE")
-        self.confirm_pose_button.setEnabled(False)
-        self.confirm_pose_button.clicked.connect(self._confirm_reference_pose)
-        layout.addWidget(self.confirm_pose_button)
-
-        self.attitude_label = QLabel("ATTITUDE RPY (°)")
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(8)
+        layout.addStretch(1)
+        self.attitude_label = QLabel("ATTITUDE")
         self.attitude_label.setStyleSheet("color: #00E5FF; font-weight: bold;")
         layout.addWidget(self.attitude_label)
-
         self.rpy_inputs = []
         for label in ("ROLL", "PITCH", "YAW"):
-            field = QDoubleSpinBox()
+            field = QDoubleSpinBox(panel)
             field.setRange(-3600.0, 3600.0)
             field.setDecimals(2)
             field.setSingleStep(1.0)
-            field.setSuffix(f"° {label}")
-            field.setFixedWidth(112)
+            field.setSuffix(f"°  {label}")
+            field.setFixedWidth(132)
             field.setToolTip(f"Absolute {label.lower()} angle in the World XYZ frame.")
             field.valueChanged.connect(self._apply_rpy_inputs)
             field.editingFinished.connect(self._apply_rpy_inputs)
             layout.addWidget(field)
             self.rpy_inputs.append(field)
-
-        self.apply_rpy_button = QPushButton("APPLY RPY")
+        layout.addStretch(1)
+        # Non-visual compatibility controls: not inserted into any visible layout.
+        self.world_position_inputs = [QDoubleSpinBox(panel) for _ in range(3)]
+        self.workspace_size_inputs = [QDoubleSpinBox(panel) for _ in range(3)]
+        self.apply_position_button = QPushButton(panel)
+        self.apply_workspace_button = QPushButton(panel)
+        self.hook_length_input = QDoubleSpinBox(panel)
+        self.pick_hook_point_button = QPushButton(panel)
+        self.pose_status_label = QLabel(panel)
+        self.confirm_pose_button = QPushButton(panel)
+        self.apply_rpy_button = QPushButton(panel)
+        self.reset_pose_button = QPushButton(panel)
+        self.apply_position_button.clicked.connect(self._apply_world_position)
+        self.apply_workspace_button.clicked.connect(self._apply_workspace_bounds)
+        self.hook_length_input.setRange(0.0, 10000000.0)
+        self.hook_length_input.setValue(self.hook_length_source_units)
+        self.hook_length_input.valueChanged.connect(self._on_hook_length_changed)
+        self.pick_hook_point_button.clicked.connect(self._start_hook_point_picking)
+        self.confirm_pose_button.clicked.connect(self._confirm_reference_pose)
         self.apply_rpy_button.clicked.connect(self._apply_rpy_inputs)
-        layout.addWidget(self.apply_rpy_button)
-
-        self.reset_pose_button = QPushButton("RESET")
         self.reset_pose_button.clicked.connect(self._reset_reference_pose)
-        layout.addWidget(self.reset_pose_button)
-
-        # Keep the advanced placement/hook controls available internally,
-        # but do not clutter the product viewer. The operator-facing strip
-        # contains only the live-editable Roll/Pitch/Yaw values.
-        for widget in (
-            *self.world_position_inputs,
-            self.apply_position_button,
-            *self.workspace_size_inputs,
-            self.apply_workspace_button,
-            self.hook_length_input,
-            self.pick_hook_point_button,
-            self.pose_status_label,
-            self.confirm_pose_button,
-            self.apply_rpy_button,
-            self.reset_pose_button,
-        ):
+        for widget in (*self.world_position_inputs, *self.workspace_size_inputs, self.apply_position_button, self.apply_workspace_button, self.hook_length_input, self.pick_hook_point_button, self.pose_status_label, self.confirm_pose_button, self.apply_rpy_button, self.reset_pose_button):
             widget.hide()
-
         return panel
-
     def _apply_rpy_inputs(self):
         """Set absolute World-frame ZYX Roll/Pitch/Yaw orientation."""
         if self._pose_actor is None:
@@ -643,30 +578,28 @@ class ProductViewer(QWidget):
             return
 
         try:
-            from vtkmodules.vtkRenderingCore import vtkCellPicker
+            from vtkmodules.vtkRenderingCore import vtkCellPicker, vtkPropPicker
 
             interactor_widget = self.plotter.interactor
-
-            # Keep the standard VTK trackball camera style. The Qt event filter
-            # consumes only product clicks and rotation-ring drags; all empty
-            # space gestures continue to the camera unchanged.
             self._create_rotation_gizmo()
-
             self._rotation_pick_pickers = []
             for ring_actor in self._rotation_ring_actors:
                 picker = vtkCellPicker()
-                picker.SetTolerance(0.035)
+                picker.SetTolerance(0.025)
                 picker.PickFromListOn()
                 picker.AddPickList(ring_actor)
                 self._rotation_pick_pickers.append(picker)
 
-            self._product_picker = vtkCellPicker()
-            self._product_picker.SetTolerance(0.0005)
+            # PropPicker selects the CAD actor as a whole, including dense STEP meshes.
+            self._product_picker = vtkPropPicker()
             self._product_picker.PickFromListOn()
             self._product_picker.AddPickList(self._pose_actor)
 
             if not self._qt_mouse_filter_installed:
                 interactor_widget.installEventFilter(self)
+                self.plotter.installEventFilter(self)
+                for child in interactor_widget.findChildren(QWidget):
+                    child.installEventFilter(self)
                 self._qt_mouse_filter_installed = True
 
             self._rotation_drag_axis = None
@@ -683,13 +616,17 @@ class ProductViewer(QWidget):
             self.confirm_pose_button.setEnabled(False)
 
     def _qt_event_to_vtk_position(self, watched, event):
-        """Convert Qt logical widget coordinates to VTK display coordinates."""
-        position = event.position()
-        widget_width = max(int(watched.width()), 1)
-        widget_height = max(int(watched.height()), 1)
+        """Convert Qt mouse coordinates to the QVTK render-widget coordinates."""
+        target = self.plotter.interactor
+        try:
+            local = target.mapFromGlobal(event.globalPosition().toPoint())
+        except Exception:
+            local = watched.mapTo(target, event.position().toPoint())
+        widget_width = max(int(target.width()), 1)
+        widget_height = max(int(target.height()), 1)
         render_width, render_height = self.plotter.render_window.GetSize()
-        x = int(round(position.x() * render_width / widget_width))
-        qt_y = int(round(position.y() * render_height / widget_height))
+        x = int(round(local.x() * render_width / widget_width))
+        qt_y = int(round(local.y() * render_height / widget_height))
         x = min(max(x, 0), max(render_width - 1, 0))
         y = min(max(render_height - 1 - qt_y, 0), max(render_height - 1, 0))
         return x, y
@@ -742,11 +679,17 @@ class ProductViewer(QWidget):
 
     def eventFilter(self, watched, event):
         """Handle product selection and gizmo dragging before QVTK camera input."""
-        if (
-            watched is not self.plotter.interactor
-            or self._pose_actor is None
-            or self.display_mode != "product"
-        ):
+        if self._pose_actor is None or self.display_mode != "product":
+            return super().eventFilter(watched, event)
+
+        interactor_widget = self.plotter.interactor
+        is_viewer_widget = (
+            watched is self.plotter
+            or watched is interactor_widget
+            or self.plotter.isAncestorOf(watched)
+            or interactor_widget.isAncestorOf(watched)
+        )
+        if not is_viewer_widget:
             return super().eventFilter(watched, event)
 
         event_type = event.type()
