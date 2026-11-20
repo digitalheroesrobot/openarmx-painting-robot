@@ -104,7 +104,7 @@ class ProductViewer(QWidget):
         self._rotation_drag_axis = None
         self._rotation_pick_pickers = []
         self._product_picker = None
-        self._qt_mouse_filter_installed = False
+        self._qt_mouse_filter_installed = False  # retained for compatibility; VTK observers handle picking
         self._rotation_drag_start_vector = None
         self._rotation_drag_start_matrix = None
         self._camera_style = None
@@ -352,36 +352,66 @@ class ProductViewer(QWidget):
     # =========================================================
 
     def _build_pose_controls(self):
-        """Build the only operator-visible controls: Roll, Pitch and Yaw."""
+        """Satellite-control style attitude HUD; only RPY is operator-visible."""
         panel = QFrame()
-        panel.setObjectName("PoseReferenceControls")
+        panel.setObjectName("AttitudeHUD")
         panel.setStyleSheet("""
-            QFrame#PoseReferenceControls { background-color: #0D1822; border: 1px solid #294858; border-radius: 5px; }
-            QLabel { color: #D8E5ED; padding: 2px; }
-            QDoubleSpinBox { color: #EAF4F8; background-color: #102431; border: 1px solid #3D7185; border-radius: 4px; padding: 4px 6px; min-height: 24px; }
+            QFrame#AttitudeHUD {
+                background-color: #071522;
+                border: 1px solid #1B7184;
+                border-top: 2px solid #27D9E8;
+                border-radius: 4px;
+            }
+            QLabel { color: #75B9C7; background: transparent; border: none; font-family: 'Rajdhani'; font-size: 10px; font-weight: 700; letter-spacing: 2px; }
+            QLabel#HudTitle { color: #35E4F0; font-size: 11px; letter-spacing: 3px; }
+            QLabel#HudUnit { color: #4E8794; font-size: 9px; letter-spacing: 1px; }
+            QDoubleSpinBox {
+                color: #D9FCFF; background-color: #0B2533;
+                border: 1px solid #246477; border-radius: 3px;
+                padding: 4px 7px; min-height: 25px;
+                font-family: 'JetBrains Mono'; font-size: 12px; font-weight: 600;
+                selection-background-color: #126A78;
+            }
+            QDoubleSpinBox:focus { border: 1px solid #45F0F5; background-color: #103444; }
         """)
         layout = QHBoxLayout(panel)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(8)
-        layout.addStretch(1)
-        self.attitude_label = QLabel("ATTITUDE")
-        self.attitude_label.setStyleSheet("color: #00E5FF; font-weight: bold;")
-        layout.addWidget(self.attitude_label)
+        layout.setContentsMargins(14, 5, 14, 5)
+        layout.setSpacing(10)
+        title = QLabel("ATTITUDE  /  ORIENTATION")
+        title.setObjectName("HudTitle")
+        layout.addWidget(title)
+        separator = QFrame(panel)
+        separator.setFixedWidth(1)
+        separator.setFixedHeight(25)
+        separator.setStyleSheet("background-color: #24596A; border: none;")
+        layout.addWidget(separator)
         self.rpy_inputs = []
-        for label in ("ROLL", "PITCH", "YAW"):
+        for axis_name, label in (("ROLL", "X-AXIS"), ("PITCH", "Y-AXIS"), ("YAW", "Z-AXIS")):
+            group = QVBoxLayout()
+            group.setContentsMargins(0, 0, 0, 0)
+            group.setSpacing(1)
+            caption = QLabel(f"{axis_name}  /  {label}")
             field = QDoubleSpinBox(panel)
             field.setRange(-3600.0, 3600.0)
             field.setDecimals(2)
-            field.setSingleStep(1.0)
-            field.setSuffix(f"°  {label}")
-            field.setFixedWidth(132)
-            field.setToolTip(f"Absolute {label.lower()} angle in the World XYZ frame.")
+            field.setSingleStep(0.5)
+            field.setSuffix(" °")
+            field.setFixedWidth(150)
+            field.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            field.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+            field.setToolTip(f"Set {axis_name.lower()} attitude angle.")
             field.valueChanged.connect(self._apply_rpy_inputs)
             field.editingFinished.connect(self._apply_rpy_inputs)
-            layout.addWidget(field)
+            group.addWidget(caption)
+            group.addWidget(field)
+            layout.addLayout(group)
             self.rpy_inputs.append(field)
         layout.addStretch(1)
-        # Non-visual compatibility controls: not inserted into any visible layout.
+        self.hud_status = QLabel("MANUAL ATTITUDE CONTROL  •  CAD ORIGIN PIVOT")
+        self.hud_status.setObjectName("HudUnit")
+        layout.addWidget(self.hud_status)
+        # Keep legacy controls as hidden compatibility objects; they are not
+        # inserted into the visible HUD or any other visible layout.
         self.world_position_inputs = [QDoubleSpinBox(panel) for _ in range(3)]
         self.workspace_size_inputs = [QDoubleSpinBox(panel) for _ in range(3)]
         self.apply_position_button = QPushButton(panel)
@@ -568,19 +598,12 @@ class ProductViewer(QWidget):
             return False
 
     def _install_actor_interaction(self):
-        """Install product picking and CAD-local rotation using Qt mouse events.
-
-        Qt event filtering is used instead of VTK interactor observers because
-        the QVTK camera style can consume button events before Python observers
-        reliably update the product selection state.
-        """
+        """Install high-priority VTK observers for reliable CAD picking."""
         if self._pose_actor is None or self.display_mode != "product":
             return
-
         try:
             from vtkmodules.vtkRenderingCore import vtkCellPicker, vtkPropPicker
-
-            interactor_widget = self.plotter.interactor
+            interactor = self.plotter.iren.interactor
             self._create_rotation_gizmo()
             self._rotation_pick_pickers = []
             for ring_actor in self._rotation_ring_actors:
@@ -589,48 +612,73 @@ class ProductViewer(QWidget):
                 picker.PickFromListOn()
                 picker.AddPickList(ring_actor)
                 self._rotation_pick_pickers.append(picker)
-
-            # PropPicker selects the CAD actor as a whole, including dense STEP meshes.
             self._product_picker = vtkPropPicker()
             self._product_picker.PickFromListOn()
             self._product_picker.AddPickList(self._pose_actor)
-
-            if not self._qt_mouse_filter_installed:
-                interactor_widget.installEventFilter(self)
-                self.plotter.installEventFilter(self)
-                for child in interactor_widget.findChildren(QWidget):
-                    child.installEventFilter(self)
-                self._qt_mouse_filter_installed = True
-
+            # Remove old observers before installing exactly one set.
+            for tag in self._rotation_observer_tags:
+                try:
+                    interactor.RemoveObserver(tag)
+                except Exception:
+                    pass
+            self._rotation_observer_tags = []
             self._rotation_drag_axis = None
             self._rotation_drag_start_vector = None
             self._rotation_drag_start_matrix = None
+            self._rotation_observer_tags.append(interactor.AddObserver(
+                "LeftButtonPressEvent", self._on_vtk_left_press, 1.0
+            ))
+            self._rotation_observer_tags.append(interactor.AddObserver(
+                "MouseMoveEvent", self._on_vtk_mouse_move, 1.0
+            ))
+            self._rotation_observer_tags.append(interactor.AddObserver(
+                "LeftButtonReleaseEvent", self._on_vtk_left_release, 1.0
+            ))
             self._update_rotation_gizmo_transform()
             self._update_pose_readout()
             self.plotter.render()
-
         except Exception as exc:
-            self.pose_status_label.setText(
-                f"Rotation manipulator unavailable: {exc}"
-            )
+            self.pose_status_label.setText(f"Rotation manipulator unavailable: {exc}")
             self.confirm_pose_button.setEnabled(False)
 
-    def _qt_event_to_vtk_position(self, watched, event):
-        """Convert Qt mouse coordinates to the QVTK render-widget coordinates."""
-        target = self.plotter.interactor
-        try:
-            local = target.mapFromGlobal(event.globalPosition().toPoint())
-        except Exception:
-            local = watched.mapTo(target, event.position().toPoint())
-        widget_width = max(int(target.width()), 1)
-        widget_height = max(int(target.height()), 1)
-        render_width, render_height = self.plotter.render_window.GetSize()
-        x = int(round(local.x() * render_width / widget_width))
-        qt_y = int(round(local.y() * render_height / widget_height))
-        x = min(max(x, 0), max(render_width - 1, 0))
-        y = min(max(render_height - 1 - qt_y, 0), max(render_height - 1, 0))
-        return x, y
+    def _on_vtk_left_press(self, caller, event_name):
+        """Pick rings/product before the camera style; return 1 to consume hits."""
+        if self._pose_actor is None or self.display_mode != "product":
+            return 0
+        x, y = self.plotter.iren.interactor.GetEventPosition()
+        for axis_index, picker in enumerate(self._rotation_pick_pickers):
+            if picker.Pick(x, y, 0, self.plotter.renderer) and self._product_selected:
+                start = self._screen_vector_from_cad_origin(x, y, axis_index)
+                if start is not None:
+                    self._rotation_drag_axis = axis_index
+                    self._rotation_drag_start_vector = start
+                    self._rotation_drag_start_matrix = self._actor_matrix_array().copy()
+                    return 1
+        hit_product = bool(
+            self._product_picker is not None
+            and self._product_picker.Pick(x, y, 0, self.plotter.renderer)
+        )
+        self._set_product_selected(hit_product)
+        return 1 if hit_product else 0
 
+    def _on_vtk_mouse_move(self, caller, event_name):
+        if self._rotation_drag_axis is None:
+            return 0
+        x, y = self.plotter.iren.interactor.GetEventPosition()
+        self._apply_rotation_drag(x, y)
+        return 1
+
+    def _on_vtk_left_release(self, caller, event_name):
+        if self._rotation_drag_axis is None:
+            return 0
+        self._rotation_drag_axis = None
+        self._rotation_drag_start_vector = None
+        self._rotation_drag_start_matrix = None
+        self._update_pose_readout()
+        self.pose_status_label.setText(
+            "ROTATION COMPLETE  |  Camera orbit and zoom are available."
+        )
+        return 1
     def _apply_rotation_drag(self, display_x, display_y):
         """Apply one mouse-move sample to the active local-axis rotation."""
         if self._rotation_drag_axis is None:
