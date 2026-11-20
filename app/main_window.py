@@ -280,7 +280,6 @@ class PatchDistributionChart(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
 
         margin = 7
-        diameter = min(self.width(), self.height()) - margin * 2
         rect = self.rect().adjusted(
             margin, margin, -margin, -margin
         )
@@ -3964,6 +3963,12 @@ class MainWindow(QMainWindow):
             "uncertain": 0,
             "invalid": 0,
         }
+        patch_ids = {
+            "planar": [],
+            "curved": [],
+            "uncertain": [],
+            "invalid": [],
+        }
 
         cylinder_counts = {
             "internal": 0,
@@ -3980,6 +3985,12 @@ class MainWindow(QMainWindow):
                 classification = "invalid"
 
             counts[classification] += 1
+            try:
+                patch_ids[classification].append(
+                    int(patch.get("patch_id", -1))
+                )
+            except (TypeError, ValueError):
+                pass
 
             if classification == "curved":
                 cylinder = patch.get("cylindrical_fit", {})
@@ -4004,6 +4015,25 @@ class MainWindow(QMainWindow):
             counts["curved"] - sum(cylinder_counts.values()),
         )
 
+        def compact_patch_ids(category):
+            ids = [
+                value for value in patch_ids[category]
+                if value >= 0
+            ]
+            if not ids:
+                return "—"
+            preview = ", ".join(str(value) for value in ids[:6])
+            if len(ids) > 6:
+                preview += f", … (+{len(ids) - 6})"
+            return preview
+
+        def percentage(value):
+            return (
+                f"{100.0 * value / patch_count:.1f}%"
+                if patch_count > 0
+                else "0.0%"
+            )
+
         mesh_info = report.get("mesh", {})
         valid_triangles = int(mesh_info.get("valid_faces", 0))
         invalid_triangles = int(mesh_info.get("invalid_faces", 0))
@@ -4018,18 +4048,21 @@ class MainWindow(QMainWindow):
         )
         self.analysis_summary.setText(
             f"<b style='color:#00E5FF'>{patch_count:,} TOTAL PATCHES</b><br>"
-            f"<span style='color:#00E676'>● PLANAR: {counts['planar']:,}</span><br>"
-            f"<span style='color:#00B8D9'>● CURVED: {counts['curved']:,}</span><br>"
-            f"<span style='color:#FFD740'>● UNCERTAIN: {counts['uncertain']:,}</span><br>"
-            f"<span style='color:#FF5252'>● INVALID: {counts['invalid']:,}</span>"
-            f"<br><br><b>CLASSIFIED:</b> {classified:,} "
+            f"<span style='color:#00E676'>● PLANAR: {counts['planar']:,} ({percentage(counts['planar'])})</span><br>"
+            f"<span style='color:#00B8D9'>● CURVED: {counts['curved']:,} ({percentage(counts['curved'])})</span><br>"
+            f"<span style='color:#FFD740'>● UNCERTAIN: {counts['uncertain']:,} ({percentage(counts['uncertain'])})</span><br>"
+            f"<span style='color:#FF5252'>● INVALID: {counts['invalid']:,} ({percentage(counts['invalid'])})</span>"
             f"<span style='color:#8195A3'>|</span> "
             f"<b>UNRESOLVED:</b> <span style='color:#FFD740'>{unresolved:,}</span>"
             f"<br><br><b>CURVED SHAPES</b><br>"
             f"Internal cylinders: {cylinder_counts['internal']:,}<br>"
             f"External cylinders: {cylinder_counts['external']:,}<br>"
             f"Cylinder direction unclear: {cylinder_counts['orientation_uncertain']:,}<br>"
-            f"Other / complex curves: {curved_other:,}"
+            f"Other / complex curves: {curved_other:,}<br>"
+            f"<span style='color:#8195A3'>Planar patch IDs: {compact_patch_ids('planar')}<br>"
+            f"Curved patch IDs: {compact_patch_ids('curved')}<br>"
+            f"Uncertain patch IDs: {compact_patch_ids('uncertain')}<br>"
+            f"Invalid patch IDs: {compact_patch_ids('invalid')}</span>"
             f"<br><br><b>MESH TRIANGLES</b><br>"
             f"Valid: {valid_triangles:,} "
             f"<span style='color:#8195A3'>|</span> "
