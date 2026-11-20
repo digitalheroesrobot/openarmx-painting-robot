@@ -81,6 +81,10 @@ class ProductViewer(QWidget):
 
         self.source_origin = np.zeros(3, dtype=float)
         self.rotation_pivot = np.zeros(3, dtype=float)
+        self.hook_length_source_units = 300.0
+        self.selected_hook_point_cad = None
+        self.hook_world_position = None
+        self._hook_pick_active = False
 
         # Default display rotation is 180 degrees about local Z, centered
         # on the product bounding box; source CAD geometry remains unchanged.
@@ -377,7 +381,22 @@ class ProductViewer(QWidget):
         self.apply_workspace_button.clicked.connect(self._apply_workspace_bounds)
         layout.addWidget(self.apply_workspace_button)
 
-        self.pose_status_label = QLabel("World: +X chain/right, +Y inward, +Z down. Default pose: Z +180° about product bounding-box center.")
+        layout.addWidget(QLabel("HOOK LENGTH:"))
+        self.hook_length_input = QDoubleSpinBox()
+        self.hook_length_input.setRange(0.1, 10000000.0)
+        self.hook_length_input.setDecimals(2)
+        self.hook_length_input.setSingleStep(10.0)
+        self.hook_length_input.setValue(self.hook_length_source_units)
+        self.hook_length_input.setSuffix(" source units")
+        self.hook_length_input.setFixedWidth(130)
+        self.hook_length_input.setToolTip("Vertical distance from the conveyor hook suspension point to the hook engagement point on the product, measured downward along +Z.")
+        layout.addWidget(self.hook_length_input)
+
+        self.pick_hook_point_button = QPushButton("PICK PRODUCT HOOK POINT")
+        self.pick_hook_point_button.clicked.connect(self._start_hook_point_picking)
+        layout.addWidget(self.pick_hook_point_button)
+
+        self.pose_status_label = QLabel("World: +X conveyor travel, -Y viewing direction, +Z downward. Select the product hook point to place it.")
         self.pose_status_label.setMinimumWidth(230)
         layout.addWidget(self.pose_status_label, 1)
 
@@ -398,9 +417,87 @@ class ProductViewer(QWidget):
         if not np.all(np.isfinite(position)):
             self.pose_status_label.setText("Invalid World XYZ position.")
             return
-        self._pose_actor.SetPosition(*position.tolist())
+        self._set_cad_origin_world_position(position)
         self.plotter.render()
         self._update_pose_readout()
+
+    def _set_cad_origin_world_position(self, desired_world_position):
+        """Place CAD coordinate origin at a requested World XYZ position."""
+        desired = np.asarray(desired_world_position, dtype=float)
+        if desired.shape != (3,) or not np.all(np.isfinite(desired)):
+            raise ValueError("CAD origin World position must be a finite XYZ vector.")
+        current = self._actor_matrix_array()[:3, 3]
+        delta = desired - current
+        actor_position = np.asarray(self._pose_actor.GetPosition(), dtype=float)
+        self._pose_actor.SetPosition(*(actor_position + delta).tolist())
+
+    def _start_hook_point_picking(self):
+        if self._pose_actor is None:
+            self.pose_status_label.setText("Load a STEP/STL product before selecting its hook point.")
+            return
+        self.hook_length_source_units = float(self.hook_length_input.value())
+        self._hook_pick_active = True
+        self.pose_status_label.setText("Click the product surface at the exact point where the hook will engage.")
+        try:
+            self.plotter.enable_surface_point_picking(
+                callback=self._on_hook_point_picked,
+                show_message=True,
+                left_clicking=True,
+                use_picker=True,
+            )
+        except Exception:
+            try:
+                self.plotter.enable_point_picking(
+                    callback=self._on_hook_point_picked,
+                    show_message=True,
+                    left_clicking=True,
+                    use_picker=True,
+                )
+            except Exception as exc:
+                self._hook_pick_active = False
+                self.pose_status_label.setText(f"Point picking could not be enabled: {exc}")
+
+    def _on_hook_point_picked(self, picked_point, picker=None):
+        if not self._hook_pick_active or self._pose_actor is None:
+            return
+        point = np.asarray(picked_point, dtype=float)
+        if point.shape != (3,) or not np.all(np.isfinite(point)):
+            self.pose_status_label.setText("Invalid picked point. Click directly on the product surface.")
+            return
+        if picker is not None and hasattr(picker, "GetActor"):
+            picked_actor = picker.GetActor()
+            if picked_actor is not None and picked_actor != self._pose_actor:
+                self.pose_status_label.setText("The selected point is not on the product. Please click the product surface.")
+                return
+
+        matrix = self._actor_matrix_array()
+        try:
+            cad_point = np.linalg.inv(matrix) @ np.append(point, 1.0)
+        except np.linalg.LinAlgError:
+            self.pose_status_label.setText("Product transform is singular; hook point cannot be calculated.")
+            return
+        cad_point = cad_point[:3] / cad_point[3]
+
+        # Conveyor start point is World origin. The hook engagement point is
+        # directly below it by the user-entered hook suspension length (+Z).
+        target = np.array([0.0, 0.0, self.hook_length_source_units], dtype=float)
+        delta = target - point
+        actor_position = np.asarray(self._pose_actor.GetPosition(), dtype=float)
+        self._pose_actor.SetPosition(*(actor_position + delta).tolist())
+
+        self.selected_hook_point_cad = cad_point.copy()
+        self.hook_world_position = target.copy()
+        self._hook_pick_active = False
+        try:
+            self.plotter.disable_picking()
+        except Exception:
+            pass
+        self._sync_world_position_inputs()
+        self._render_product(reset_camera=False)
+        self.pose_status_label.setText(
+            f"Hook point aligned at World (0, 0, {target[2]:.2f}) {self._source_unit_label()}. "
+            "Choose product orientation, then confirm."
+        )
 
     def _apply_workspace_bounds(self):
         dimensions = np.asarray([field.value() for field in self.workspace_size_inputs], dtype=float)
@@ -469,11 +566,15 @@ class ProductViewer(QWidget):
         return {
             "world_frame": "WORLD_XYZ",
             "world_axis_definition": {
-                "origin": "CHAIN_ENTRY_POINT",
-                "X": "CHAIN_DIRECTION / SCREEN_RIGHT",
-                "Y": "INWARD / WORKCELL_DEPTH",
+                "origin": "CONVEYOR_PRODUCT_TRAVEL_START_POINT",
+                "X": "CONVEYOR_TRAVEL_DIRECTION / OPERATOR_RIGHT",
+                "Y": "OPERATOR_SIDE / TOWARD_VIEWER",
+                "-Y": "OPERATOR_VIEW_DIRECTION / INTO_WORKCELL",
                 "Z": "VERTICALLY_DOWN",
             },
+            "hook_length_source_units": self.hook_length_source_units,
+            "selected_hook_point_cad": None if self.selected_hook_point_cad is None else self.selected_hook_point_cad.tolist(),
+            "hook_engagement_point_world_xyz": None if self.hook_world_position is None else self.hook_world_position.tolist(),
             "product_frame": "PRODUCT_CAD",
             "rotation_pivot": "PRODUCT_BOUNDING_BOX_CENTER",
             "rotation_pivot_cad": self.rotation_pivot.tolist(),
@@ -522,6 +623,9 @@ class ProductViewer(QWidget):
             self._pose_actor.SetOrientation(0.0, 0.0, 180.0)
             self._pose_actor.SetScale(1.0, 1.0, 1.0)
             self._pose_actor.SetOrigin(*self.rotation_pivot.tolist())
+            self._set_cad_origin_world_position(np.zeros(3, dtype=float))
+            self.selected_hook_point_cad = None
+            self.hook_world_position = None
             self._sync_world_position_inputs()
             self.plotter.render()
         self._update_pose_readout()
@@ -646,12 +750,13 @@ class ProductViewer(QWidget):
         self.workspace_dimensions = np.maximum(np.asarray(self.current_mesh.extents, dtype=float) * 4.0, 100.0)
         for field, value in zip(self.workspace_size_inputs, self.workspace_dimensions):
             field.setValue(float(value))
-        # Place the CAD origin at the inner-left-upper corner of the
-        # World workspace: X=0 (left), Y=max (inward), Z=0 (top).
-        # The operator can subsequently adjust this with SET POSITION.
-        initial_world_position = np.array(
-            [0.0, float(self.workspace_dimensions[1]), 0.0], dtype=float
-        )
+        # World origin is the conveyor travel start point. The CAD origin
+        # initially remains at World origin until the product hook point is
+        # selected and aligned with (0, 0, hook_length) along +Z.
+        self.selected_hook_point_cad = None
+        self.hook_world_position = None
+        self.hook_length_source_units = float(self.hook_length_input.value())
+        initial_world_position = np.zeros(3, dtype=float)
         for field, value in zip(self.world_position_inputs, initial_world_position):
             field.setValue(float(value))
 
@@ -1179,8 +1284,9 @@ class ProductViewer(QWidget):
 
         axis_length = max(min(lx,ly,lz) * 0.18, 20.0)
         for direction, color, label in [
-            ([1,0,0], "#FF5252", "+X CHAIN / RIGHT"),
-            ([0,1,0], "#00E676", "+Y INWARD"),
+            ([1,0,0], "#FF5252", "+X CONVEYOR TRAVEL / RIGHT"),
+            ([0,1,0], "#00E676", "+Y OPERATOR / VIEWER SIDE"),
+            ([0,-1,0], "#00BFA5", "-Y VIEW DIRECTION / INTO WORKCELL"),
             ([0,0,1], "#40C4FF", "+Z DOWN"),
         ]:
             vector = np.asarray(direction, dtype=float)
@@ -1194,7 +1300,7 @@ class ProductViewer(QWidget):
             font_size=10, text_color="#FFFFFF", point_size=0, shape=None, always_visible=True,
         )
         self.plotter.add_text(
-            "WORLD XYZ | ORIGIN: CHAIN ENTRY\n+X: CHAIN RIGHT   +Y: INWARD   +Z: DOWN\nBOX: CONFIGURABLE DISPLAY BOUNDS",
+            "WORLD XYZ | ORIGIN: CONVEYOR TRAVEL START\n+X: TRAVEL / OPERATOR RIGHT   -Y: VIEW INTO CELL   +Z: DOWN\n+Y: OPERATOR SIDE",
             position="upper_left", font_size=9, color="#EAF4F8",
         )
 
@@ -1213,6 +1319,20 @@ class ProductViewer(QWidget):
             return
         self._add_world_workspace()
         self._add_product_coordinate_frame()
+        if self.hook_world_position is not None:
+            marker = pv.Sphere(
+                radius=max(float(np.min(self.workspace_dimensions)) * 0.012, 3.0),
+                center=self.hook_world_position,
+                theta_resolution=20,
+                phi_resolution=20,
+            )
+            self.plotter.add_mesh(marker, color="#FF1744", smooth_shading=True)
+            self.plotter.add_point_labels(
+                np.asarray([self.hook_world_position]),
+                ["HOOK / PRODUCT ENGAGEMENT POINT"],
+                font_size=10, text_color="#FF5252", point_size=0,
+                shape=None, always_visible=True,
+            )
 
     # =========================================================
     # MAIN RENDERING
@@ -1386,6 +1506,11 @@ class ProductViewer(QWidget):
             # and CAD-face/triangle correspondence unchanged.
             self._pose_actor.SetOrigin(*self.rotation_pivot.tolist())
             self._pose_actor.SetOrientation(0.0, 0.0, 180.0)
+            # Restore the requested CAD-origin world position after creating
+            # a fresh actor; VTK's actor position is not the CAD-origin pose
+            # when rotation is performed about a nonzero product pivot.
+            desired_origin = np.asarray([field.value() for field in self.world_position_inputs], dtype=float)
+            self._set_cad_origin_world_position(desired_origin)
             self._sync_world_position_inputs()
             self._update_pose_readout()
 
@@ -1983,11 +2108,10 @@ class ProductViewer(QWidget):
         # Positive World Z points downward, so camera-up is negative Z.
         center = self.workspace_dimensions * 0.5
         distance = max(float(np.linalg.norm(self.workspace_dimensions)), 100.0)
-        # View from the OUTSIDE/front of the cell (negative World Y),
-        # looking inward toward positive World Y. Offset toward negative X
-        # so the inner-left corner and the depth of the workspace are visible.
+        # Operator is on the +Y side and looks toward -Y. Camera is placed
+        # on the operator side, slightly above the work area (+Z is down).
         camera_position = center + np.array(
-            [-1.15 * distance, -2.2 * distance, -1.25 * distance]
+            [-0.35 * distance, 2.2 * distance, -1.25 * distance]
         )
         self.plotter.camera_position = (
             tuple(camera_position.tolist()),
