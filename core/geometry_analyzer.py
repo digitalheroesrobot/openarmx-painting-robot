@@ -2266,7 +2266,101 @@ def analyze_geometry(
         },
     }
 
+
     return report, patch_labels
+
+
+def detect_hole_candidates(
+    mesh: trimesh.Trimesh,
+    coordinate_unit: str | None = None,
+) -> list[dict]:
+    """
+    Detect internal cylindrical surface candidates without running the
+    complete Stage 1 report (notably the more expensive thickness analysis).
+
+    Distances are measured from the original CAD coordinate origin (0,0,0).
+    A candidate is not proof of a through-hole: blind cavities and partial
+    internal cylindrical surfaces may also be reported.
+    """
+    if not isinstance(mesh, trimesh.Trimesh):
+        raise TypeError("mesh must be a trimesh.Trimesh object.")
+    if len(mesh.vertices) == 0 or len(mesh.faces) == 0:
+        return []
+
+    unit = _get_coordinate_unit(mesh, coordinate_unit)
+    topology_mesh, _ = _build_topology_mesh(mesh)
+    thresholds = _build_threshold_configuration(mesh, unit)
+    valid_face_mask = _get_valid_face_mask(
+        topology_mesh,
+        thresholds["degenerate_area_epsilon_coordinate_units_squared"],
+    )
+    patch_labels = _segment_faces(topology_mesh, valid_face_mask)
+    holes = []
+
+    for patch_id in np.unique(patch_labels):
+        face_indices = np.flatnonzero(patch_labels == patch_id)
+        if len(face_indices) < CYLINDER_MIN_FACES:
+            continue
+        fit = _fit_cylinder(
+            topology_mesh,
+            face_indices,
+            valid_face_mask,
+            thresholds["cylinder_min_radius_coordinate_units"],
+        )
+        if (
+            fit.get("status") != "candidate"
+            or fit.get("surface_type") != "internal_cylindrical_surface"
+        ):
+            continue
+
+        axis = np.asarray(fit["axis_direction"], dtype=np.float64)
+        axis_length = float(np.linalg.norm(axis))
+        center = np.asarray(
+            fit["axis_center_coordinate_units"], dtype=np.float64
+        )
+        if (
+            axis.shape != (3,)
+            or center.shape != (3,)
+            or not np.all(np.isfinite(axis))
+            or not np.all(np.isfinite(center))
+            or not np.isfinite(axis_length)
+            or axis_length <= 1e-12
+        ):
+            continue
+        axis /= axis_length
+
+        # Orthogonal projection of CAD origin onto the infinite hole axis.
+        closest_axis_point = center - float(np.dot(center, axis)) * axis
+        axis_distance = float(np.linalg.norm(closest_axis_point))
+        center_distance = float(np.linalg.norm(center))
+        if not np.isfinite(axis_distance + center_distance):
+            continue
+
+        holes.append({
+            "hole_id": len(holes) + 1,
+            "patch_id": int(patch_id),
+            "axis_center_coordinate_units": center.tolist(),
+            "axis_direction": axis.tolist(),
+            "closest_axis_point_to_origin_coordinate_units":
+                closest_axis_point.tolist(),
+            "radius_coordinate_units": float(
+                fit["radius_coordinate_units"]
+            ),
+            "diameter_coordinate_units": float(
+                fit["diameter_coordinate_units"]
+            ),
+            "origin_to_axis_distance_coordinate_units": axis_distance,
+            "origin_to_axis_center_distance_coordinate_units": center_distance,
+            "coordinate_unit": unit,
+            "confidence": float(fit.get("confidence", 0.0)),
+            "fit_relative_error": float(fit.get("relative_error", 0.0)),
+            "classification": "INTERNAL_CYLINDRICAL_SURFACE_CANDIDATE",
+            "note": (
+                "Internal cylindrical surface candidate; confirm whether "
+                "it is a through-hole or blind hole using exact B-Rep topology."
+            ),
+        })
+    return holes
 
 
 # ============================================================
