@@ -683,6 +683,7 @@ class SprayerSettingsDialog(QDialog):
             self._save_current_to_config(self._collect_profile())
             self._populate_profiles()
             self.profile_selector.setCurrentText(profile["name"])
+            self.selected_profile = deepcopy(self.current_profile)
         except Exception as exc:
             QMessageBox.warning(self, "Import Sprayer Profile", str(exc))
 
