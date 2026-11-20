@@ -316,19 +316,23 @@ def _calculate_spray_footprint(
     if not 0.0 <= overlap < 100.0:
         raise ValueError("Track overlap must be in the range [0, 100).")
 
-    reference_distance = _safe_float(
-        profile.get("fan_reference_distance_mm")
-    )
-    if reference_distance is None or reference_distance <= 0.0:
-        raise ValueError(
-            "Fan reference distance must be a positive finite value."
-        )
-
     reference_thickness = _safe_float(
         profile.get("fan_thickness_at_reference_mm")
     )
     if reference_thickness is None or reference_thickness < 0.0:
         raise ValueError("Fan thickness cannot be negative.")
+
+    reference_distance = _safe_float(
+        profile.get("fan_reference_distance_mm")
+    )
+    if reference_distance is None or reference_distance <= 0.0:
+        if reference_thickness > 0.0:
+            raise ValueError(
+                "A positive fan reference distance is required when "
+                "measured fan thickness is supplied."
+            )
+        # Width-only cone geometry does not use a measured thickness.
+        reference_distance = float(standoff_mm)
 
     width = (
         2.0 * float(standoff_mm) * math.tan(math.radians(angle * 0.5))
