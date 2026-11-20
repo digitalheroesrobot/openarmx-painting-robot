@@ -4154,11 +4154,31 @@ class MainWindow(QMainWindow):
             if len(segment_ids)
             else 0
         )
+        parameters = trajectory.get("parameters", {})
+        sprayer = parameters.get("sprayer_profile", {})
+        sprayer_name = sprayer.get("name", "UNSPECIFIED")
+        spray_width = parameters.get("spray_width_at_standoff_mm")
+        nominal_track_spacing = parameters.get(
+            "nominal_track_spacing_from_overlap_mm"
+        )
+
+        spray_width_text = (
+            f"{float(spray_width):.1f} mm"
+            if spray_width is not None else "NOT AVAILABLE"
+        )
+        track_spacing_text = (
+            f"{float(nominal_track_spacing):.1f} mm"
+            if nominal_track_spacing is not None else "NOT AVAILABLE"
+        )
 
         self.analysis_summary.setText(
             f"TRAJECTORY: {self._format_status(overall_status)}\n"
+            f"SPRAYER: {sprayer_name}\n"
             f"SURFACE SAMPLES: {sample_count:,}\n"
-            f"TRAJECTORY SEGMENTS: {segment_count:,}"
+            f"TRAJECTORY SEGMENTS: {segment_count:,}\n"
+            f"SPRAY WIDTH AT STANDOFF: {spray_width_text}\n"
+            f"NOMINAL TRACK SPACING: {track_spacing_text}\n"
+            "NOTE: TRACK SPACING IS CALCULATED, NOT YET USED TO CREATE RASTER PASSES."
         )
 
         self.analysis_summary.setStyleSheet(
