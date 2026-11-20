@@ -2428,7 +2428,7 @@ class MainWindow(QMainWindow):
         return {
             "standoff_mm": float(profile["standoff_mm"]),
             "sampling_spacing_mm": float(profile["sampling_spacing_mm"]),
-            "spray_angle_deg": 0.0,
+            "spray_angle_deg": float(profile.get("spray_cone_angle_deg", 0.0)),
             "sprayer_profile": profile,
             # Capture the operator-confirmed CAD-to-World pose before
             # the background Stage 3 worker starts.
@@ -4208,7 +4208,7 @@ class MainWindow(QMainWindow):
             f"SPRAY WIDTH AT STANDOFF: {spray_width_text}\n"
             f"NOMINAL TRACK SPACING: {track_spacing_text}\n"
             "NOTE: NOZZLE FRAME IS GEOMETRIC / PROVISIONAL, NOT TCP-CALIBRATED.\n"
-            "TRACK SPACING IS CALCULATED, NOT YET USED TO CREATE RASTER PASSES."
+            "TRACK SPACING DRIVES PLANAR RASTER GENERATION; FOOTPRINT IS A NOMINAL MODEL."
         )
 
         self.analysis_summary.setStyleSheet(
