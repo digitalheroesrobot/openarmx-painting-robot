@@ -133,7 +133,9 @@ class ProductViewer(QWidget):
             "arrows": True,
             "paths": True,
             "samples": True,
+            "frames": True,
         }
+        self.trajectory_product_transform = np.eye(4, dtype=float)
 
         self.plotter = QtInteractor(self)
 
@@ -341,6 +343,7 @@ class ProductViewer(QWidget):
             ("arrows", "Direction arrows"),
             ("paths", "Trajectory paths"),
             ("samples", "Surface samples"),
+            ("frames", "Nozzle orientation frames"),
         ]
 
         for key, label_text in checkbox_items:
@@ -669,6 +672,10 @@ class ProductViewer(QWidget):
             return np.eye(4, dtype=float)
         matrix = self._pose_actor.GetMatrix()
         return np.array([[matrix.GetElement(row, col) for col in range(4)] for row in range(4)], dtype=float)
+
+    def get_product_transform(self):
+        """Return the current CAD-to-World actor transform as a detached 4x4 array."""
+        return self._actor_matrix_array().copy()
 
     @staticmethod
     def _rotation_to_rpy(rotation):
@@ -1344,6 +1351,41 @@ class ProductViewer(QWidget):
 
         data["face_indices"] = face_indices
 
+        if "nozzle_frames" in trajectory_data:
+            frames = np.asarray(trajectory_data["nozzle_frames"], dtype=float)
+            if frames.shape != (count, 3, 3) or not np.all(np.isfinite(frames)):
+                raise ValueError("nozzle_frames must have finite shape (N, 3, 3).")
+            frame_gram = np.einsum("nji,njk->nik", frames, frames)
+            if not np.allclose(
+                frame_gram,
+                np.repeat(np.eye(3)[None, :, :], count, axis=0),
+                atol=1e-5,
+            ):
+                raise ValueError("nozzle_frames must contain orthonormal frames.")
+            if not np.allclose(np.linalg.det(frames), 1.0, atol=1e-5):
+                raise ValueError("nozzle_frames must be right-handed.")
+            data["nozzle_frames"] = frames.copy()
+
+        parameters = trajectory_data.get("parameters", {})
+        if not isinstance(parameters, dict):
+            parameters = {}
+        transform = np.asarray(
+            parameters.get("product_transform_4x4", np.eye(4)),
+            dtype=float,
+        )
+        if transform.shape != (4, 4) or not np.all(np.isfinite(transform)):
+            raise ValueError("Trajectory product transform must be finite and 4x4.")
+        if not np.allclose(transform[3], [0.0, 0.0, 0.0, 1.0], atol=1e-8):
+            raise ValueError("Trajectory product transform is not homogeneous.")
+        rotation = transform[:3, :3]
+        if (
+            not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-5)
+            or not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-5)
+        ):
+            raise ValueError("Trajectory product transform must contain a rigid rotation.")
+        data["parameters"] = parameters
+        self.trajectory_product_transform = transform.copy()
+
         if "sample_indices" in trajectory_data:
             sample_indices = np.asarray(
                 trajectory_data["sample_indices"]
@@ -1430,9 +1472,16 @@ class ProductViewer(QWidget):
         if data is None:
             return
 
-        surface_points = data["surface_points"]
-        nozzle_points = data["nozzle_points"]
-        spray_directions = data["spray_directions"]
+        transform = self.trajectory_product_transform
+        rotation = transform[:3, :3]
+        translation = transform[:3, 3]
+        surface_points = data["surface_points"] @ rotation.T + translation
+        nozzle_points = data["nozzle_points"] @ rotation.T + translation
+        spray_directions = data["spray_directions"] @ rotation.T
+        nozzle_frames = (
+            np.einsum("ij,njk->nik", rotation, data["nozzle_frames"])
+            if "nozzle_frames" in data else None
+        )
         segment_ids = data["segment_ids"]
         sample_indices = data["sample_indices"]
 
@@ -1489,6 +1538,44 @@ class ProductViewer(QWidget):
                 color="#FFD740",
                 lighting=False,
             )
+
+        if (
+            self.trajectory_visibility.get("frames", False)
+            and nozzle_frames is not None
+            and count > 0
+        ):
+            frame_stride = max(1, int(np.ceil(count / 40)))
+            frame_indices = np.arange(0, count, frame_stride, dtype=np.int64)
+            frame_length = max(
+                float(np.median(np.linalg.norm(
+                    nozzle_points[frame_indices] - surface_points[frame_indices],
+                    axis=1,
+                ))) * 0.12,
+                1.0,
+            )
+            for axis_index, axis_color in (
+                (0, "#FF6464"),
+                (1, "#55E69A"),
+                (2, "#55A8FF"),
+            ):
+                starts = nozzle_points[frame_indices]
+                ends = starts + nozzle_frames[frame_indices, :, axis_index] * frame_length
+                line_vertices = np.stack((starts, ends), axis=1).reshape(-1, 3)
+                line_cells = np.column_stack((
+                    np.full(len(frame_indices), 2, dtype=np.int64),
+                    np.arange(0, len(frame_indices) * 2, 2, dtype=np.int64),
+                    np.arange(1, len(frame_indices) * 2, 2, dtype=np.int64),
+                )).reshape(-1)
+                frame_polydata = pv.PolyData(line_vertices)
+                frame_polydata.lines = line_cells
+                self.plotter.add_mesh(
+                    frame_polydata,
+                    color=axis_color,
+                    line_width=2.5,
+                    render_lines_as_tubes=True,
+                    lighting=False,
+                    pickable=False,
+                )
 
         if self.trajectory_visibility["paths"]:
             line_points = []
@@ -1548,6 +1635,7 @@ class ProductViewer(QWidget):
             ("arrows", "DIRECTION ARROWS"),
             ("paths", "TRAJECTORY PATHS"),
             ("samples", "SURFACE SAMPLES"),
+            ("frames", "NOZZLE ORIENTATION FRAMES"),
         ]:
             state = "ON" if self.trajectory_visibility[key] else "OFF"
             visible_layers.append(f"{label}: {state}")
@@ -1556,7 +1644,8 @@ class ProductViewer(QWidget):
             "STAGE 3 - SPRAY TRAJECTORY\n"
             "GREEN   - SURFACE SAMPLES / PATH\n"
             "CYAN    - NOZZLE REFERENCE POINT\n"
-            "YELLOW  - SPRAY DIRECTION\n\n"
+            "YELLOW  - SPRAY DIRECTION\n"
+            "RED/GREEN/BLUE - NOZZLE FRAME X/Y/Z\n\n"
             + "\n".join(visible_layers)
             + "\n\n"
             + f"TRAJECTORY SEGMENTS: {len(np.unique(segment_ids))}\n"
@@ -2043,7 +2132,7 @@ class ProductViewer(QWidget):
             )
 
             if polydata.n_cells > 0:
-                self.plotter.add_mesh(
+                self._pose_actor = self.plotter.add_mesh(
                     polydata,
                     color="#4C8DAD",
                     opacity=0.38,
@@ -2051,7 +2140,14 @@ class ProductViewer(QWidget):
                     edge_color="#29404D",
                     line_width=1,
                     smooth_shading=False,
+                    pickable=False,
                 )
+                self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
+                self._pose_actor.SetUserMatrix(
+                    self._vtk_matrix_from_numpy(self.trajectory_product_transform)
+                )
+            else:
+                self._pose_actor = None
 
             self._add_trajectory_visualization()
 
