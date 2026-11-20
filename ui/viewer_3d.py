@@ -1964,34 +1964,16 @@ class ProductViewer(QWidget):
     # =========================================================
 
     def _set_standard_camera(self):
-        bounds = np.asarray(
-            self.current_mesh.bounds,
-            dtype=float,
-        )
-
-        minimum = bounds[0]
-        maximum = bounds[1]
-
-        center = (minimum + maximum) / 2.0
-        dimensions = maximum - minimum
-
-        max_dimension = max(
-            float(np.max(dimensions)),
-            1e-9,
-        )
-
-        direction = np.array([1.0, -1.0, 0.85])
-        direction /= np.linalg.norm(direction)
-
-        distance = max_dimension * 4.0
-        camera_position = center + direction * distance
-
+        # Frame the complete World XYZ box rather than only the CAD mesh.
+        # Positive World Z points downward, so camera-up is negative Z.
+        center = self.workspace_dimensions * 0.5
+        distance = max(float(np.linalg.norm(self.workspace_dimensions)), 100.0)
+        camera_position = center + np.array([0.0, -2.2 * distance, -1.25 * distance])
         self.plotter.camera_position = (
-            tuple(camera_position),
-            tuple(center),
-            (0.0, 0.0, 1.0),
+            tuple(camera_position.tolist()),
+            tuple(center.tolist()),
+            (0.0, 0.0, -1.0),
         )
-
         self.plotter.reset_camera_clipping_range()
 
     def reset_camera(self):
