@@ -2990,7 +2990,73 @@ def run_stage3_numerical_tests() -> dict:
     )
 
     # --------------------------------------------------------
-    # Test 20: Adaptive speed decreases at a sharp path turn.
+    # Test 20: Flat-fan footprint uses reference thickness.
+    # --------------------------------------------------------
+    flat_fan = _calculate_spray_footprint({
+        "pattern_type": "flat_fan",
+        "spray_cone_angle_deg": 60.0,
+        "fan_reference_distance_mm": 200.0,
+        "fan_thickness_at_reference_mm": 30.0,
+        "overlap_percent": 50.0,
+    }, 300.0)
+    assert math.isclose(
+        flat_fan["width_mm"],
+        2.0 * 300.0 * math.tan(math.radians(30.0)),
+        rel_tol=1e-10,
+    )
+    assert math.isclose(flat_fan["thickness_mm"], 45.0, rel_tol=1e-10)
+    assert math.isclose(
+        flat_fan["nominal_track_spacing_mm"],
+        flat_fan["width_mm"] * 0.5,
+        rel_tol=1e-10,
+    )
+    assert flat_fan["thickness_status"] == "scaled_from_measured_reference"
+
+    # --------------------------------------------------------
+    # Test 21: Round-cone footprint is circular.
+    # --------------------------------------------------------
+    round_cone = _calculate_spray_footprint({
+        "pattern_type": "round_cone",
+        "spray_cone_angle_deg": 40.0,
+        "fan_reference_distance_mm": 200.0,
+        "fan_thickness_at_reference_mm": 0.0,
+        "overlap_percent": 25.0,
+    }, 200.0)
+    assert math.isclose(
+        round_cone["width_mm"],
+        round_cone["thickness_mm"],
+        rel_tol=1e-12,
+    )
+
+    # --------------------------------------------------------
+    # Test 22: Larger spray angle reduces planar pass count.
+    # --------------------------------------------------------
+    wide_angle_profile = {
+        "name": "wide angle test",
+        "pattern_type": "flat_fan",
+        "spray_cone_angle_deg": 60.0,
+        "fan_reference_distance_mm": 200.0,
+        "fan_thickness_at_reference_mm": 0.0,
+        "overlap_percent": 50.0,
+    }
+    wide_angle_result = generate_spray_trajectory(
+        mesh=test_mesh,
+        face_status_labels=labels,
+        patch_labels=patches,
+        standoff_mm=200.0,
+        sampling_spacing_mm=20.0,
+        coordinate_unit="mm",
+        sprayer_profile=wide_angle_profile,
+    )
+    narrow_pass_count = len(np.unique(raster_result["segment_ids"]))
+    wide_pass_count = len(np.unique(wide_angle_result["segment_ids"]))
+    assert wide_pass_count < narrow_pass_count, (
+        f"Wider spray angle should reduce planar passes: "
+        f"{wide_pass_count} !< {narrow_pass_count}"
+    )
+
+    # --------------------------------------------------------
+    # Test 23: Adaptive speed decreases at a sharp path turn.
     # --------------------------------------------------------
     speed_test_points = np.asarray([
         [0.0, 0.0, 0.0],
