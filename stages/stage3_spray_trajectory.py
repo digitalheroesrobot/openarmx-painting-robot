@@ -942,6 +942,8 @@ def _generate_planar_raster_for_patch(
         lane_offsets = first_offset + np.arange(lane_count, dtype=np.float64) * lane_spacing
         if len(lane_offsets) == 0:
             lane_offsets = np.array([(min_offset + max_offset) * 0.5])
+        elif last_offset - float(lane_offsets[-1]) > lane_spacing * 0.5:
+            lane_offsets = np.append(lane_offsets, last_offset)
 
     def triangle_interval(triangle_2d: np.ndarray, offset: float):
         intersections = []
@@ -2721,6 +2723,44 @@ def run_stage3_numerical_tests() -> dict:
         invalid_transform_rejected = True
     assert invalid_transform_rejected
 
+    # --------------------------------------------------------
+    # Test 19: Planar raster uses fan width and overlap.
+    # --------------------------------------------------------
+
+    raster_profile = {
+        "name": "raster test sprayer",
+        "spray_cone_angle_deg": 20.0,
+        "overlap_percent": 50.0,
+        "pattern_type": "flat_fan",
+    }
+    raster_result = generate_spray_trajectory(
+        mesh=test_mesh,
+        face_status_labels=labels,
+        patch_labels=patches,
+        standoff_mm=200.0,
+        sampling_spacing_mm=20.0,
+        coordinate_unit="mm",
+        sprayer_profile=raster_profile,
+    )
+    expected_raster_width = 2.0 * 200.0 * math.tan(math.radians(10.0))
+    expected_raster_spacing = expected_raster_width * 0.5
+    raster_info = raster_result["rasterization"]
+    assert raster_info["rasterized_planar_patch_ids"] == [0]
+    assert raster_info["nearest_neighbor_fallback_patch_ids"] == []
+    assert math.isclose(raster_info["lane_spacing_mm"], expected_raster_spacing, rel_tol=1e-10)
+    assert len(np.unique(raster_result["segment_ids"])) >= 2
+    assert np.allclose(
+        np.linalg.norm(raster_result["nozzle_points"] - raster_result["surface_points"], axis=1),
+        200.0, atol=1e-6,
+    )
+    assert np.allclose(raster_result["surface_points"][:, 2], 0.0, atol=1e-7)
+    assert np.all(
+        (raster_result["surface_points"][:, 0] >= -1e-7)
+        & (raster_result["surface_points"][:, 0] <= 100.0 + 1e-7)
+        & (raster_result["surface_points"][:, 1] >= -1e-7)
+        & (raster_result["surface_points"][:, 1] <= 100.0 + 1e-7)
+    )
+
     return {
         "status": "PASS",
         "tests": {
@@ -2744,6 +2784,8 @@ def run_stage3_numerical_tests() -> dict:
             "product_pose_world_transform": "PASS",
             "nozzle_frame_orthonormality": "PASS",
             "invalid_product_transform_rejected": "PASS",
+            "planar_raster_spacing_and_clipping": "PASS",
+            "planar_raster_standoff_preserved": "PASS",
         },
         "sample_count": int(sample_count),
         "unit_standoff_tests": unit_test_results,
