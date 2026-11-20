@@ -2124,6 +2124,14 @@ def _order_trajectory_with_planar_raster(
         raise RuntimeError("No trajectory segments were generated.")
 
     result = {key: np.concatenate(values, axis=0) for key, values in collected.items()}
+    result, segment_metadata, surface_boundary_splits = (
+        _split_strokes_at_surface_discontinuities(
+            mesh=mesh,
+            trajectory=result,
+            segment_metadata=segment_metadata,
+            maximum_normal_change_deg=30.0,
+        )
+    )
     result, segment_metadata, travel_ordering = _optimize_stroke_order_for_travel(
         trajectory=result,
         segment_metadata=segment_metadata,
@@ -2136,6 +2144,7 @@ def _order_trajectory_with_planar_raster(
         result["segment_ids"],
     )
     result["segments"] = segment_metadata
+    result["surface_boundary_splits"] = surface_boundary_splits
     result["travel_ordering"] = travel_ordering
     result["max_normal_smoothing_deviation_deg"] = float(
         curved_normal_smoothing_deviation_max_deg
@@ -2241,6 +2250,15 @@ def _order_trajectory_with_planar_raster(
     print(
         f"Curved recovery | Normal-cone partitioned patches: "
         f"{len(normal_partitioned_patch_ids)}"
+    )
+    print(
+        "SURFACE BOUNDARY SPLITS | "
+        f"{surface_boundary_splits['added_stroke_count']} additional strokes | "
+        f"non-adjacent faces: "
+        f"{surface_boundary_splits['split_transition_counts']['non_adjacent_source_faces']} | "
+        f"sharp creases: "
+        f"{surface_boundary_splits['split_transition_counts']['sharp_source_mesh_crease']} "
+        "(spray OFF at each boundary)"
     )
     print(
         "TRAVEL ORDER OPTIMIZATION | "
@@ -2390,6 +2408,134 @@ def _calculate_path_metrics(
             "Travel between separate patches is excluded."
         ),
     }
+
+
+def _split_strokes_at_surface_discontinuities(
+    mesh: trimesh.Trimesh,
+    trajectory: dict,
+    segment_metadata: list[dict],
+    maximum_normal_change_deg: float = 30.0,
+) -> tuple[dict, list[dict], dict]:
+    """End spray strokes at non-adjacent source faces or sharp mesh creases.
+
+    No samples, positions, or normals are changed. Only segment boundaries are
+    inserted, so the gun is OFF during transitions that should not be painted
+    as one continuous stroke.
+    """
+    face_indices = np.asarray(trajectory["face_indices"], dtype=np.int64)
+    old_segments = np.asarray(trajectory["segment_ids"], dtype=np.int64)
+    if face_indices.shape != old_segments.shape:
+        raise ValueError("Face indices and segment IDs must have matching shapes.")
+    threshold = float(maximum_normal_change_deg)
+    if not math.isfinite(threshold) or not 0.0 < threshold <= 180.0:
+        raise ValueError("Maximum normal change must be in (0, 180] degrees.")
+
+    face_normals = np.asarray(mesh.face_normals, dtype=np.float64)
+    metadata_by_id = {
+        int(item["segment_id"]): dict(item)
+        for item in segment_metadata
+        if "segment_id" in item
+    }
+    starts = np.r_[0, np.flatnonzero(np.diff(old_segments) != 0) + 1]
+    ends = np.r_[starts[1:], len(old_segments)]
+    blocks = []
+    split_reasons = {
+        "non_adjacent_source_faces": 0,
+        "sharp_source_mesh_crease": 0,
+    }
+
+    for start, end in zip(starts, ends):
+        split_after = []
+        for index in range(int(start), int(end) - 1):
+            face_a = int(face_indices[index])
+            face_b = int(face_indices[index + 1])
+            if not (
+                0 <= face_a < len(face_normals)
+                and 0 <= face_b < len(face_normals)
+            ):
+                continue
+            if face_a == face_b:
+                continue
+            shared_vertices = int(
+                len(np.intersect1d(mesh.faces[face_a], mesh.faces[face_b]))
+            )
+            if shared_vertices == 0:
+                split_after.append(index + 1)
+                split_reasons["non_adjacent_source_faces"] += 1
+                continue
+            normal_a = face_normals[face_a]
+            normal_b = face_normals[face_b]
+            length_a = float(np.linalg.norm(normal_a))
+            length_b = float(np.linalg.norm(normal_b))
+            if length_a <= NORMAL_EPSILON or length_b <= NORMAL_EPSILON:
+                continue
+            cosine = float(np.clip(
+                np.dot(normal_a / length_a, normal_b / length_b),
+                -1.0,
+                1.0,
+            ))
+            angle = math.degrees(math.acos(cosine))
+            if angle > threshold:
+                split_after.append(index + 1)
+                split_reasons["sharp_source_mesh_crease"] += 1
+
+        boundaries = [int(start), *split_after, int(end)]
+        old_id = int(old_segments[int(start)])
+        base_metadata = metadata_by_id.get(old_id, {"segment_id": old_id})
+        for chunk_index, (chunk_start, chunk_end) in enumerate(
+            zip(boundaries[:-1], boundaries[1:])
+        ):
+            if chunk_end <= chunk_start:
+                continue
+            blocks.append((
+                int(chunk_start),
+                int(chunk_end),
+                old_id,
+                chunk_index,
+                len(split_after),
+                base_metadata,
+            ))
+
+    sample_keys = (
+        "surface_points", "surface_normals", "nozzle_points",
+        "spray_directions", "nozzle_frames", "face_indices", "patch_ids",
+    )
+    updated = dict(trajectory)
+    new_ids = np.empty(len(old_segments), dtype=np.int64)
+    new_metadata = []
+    for new_id, (start, end, old_id, chunk_index, split_count, base) in enumerate(blocks):
+        new_ids[start:end] = new_id
+        item = dict(base)
+        item.update({
+            "original_segment_id": int(old_id),
+            "segment_id": int(new_id),
+            "surface_discontinuity_split": bool(split_count),
+            "surface_discontinuity_chunk_index": int(chunk_index),
+            "surface_discontinuity_split_count_in_original_stroke": int(split_count),
+            "sample_count": int(end - start),
+        })
+        new_metadata.append(item)
+
+    updated["segment_ids"] = new_ids
+    for key in sample_keys:
+        if key in trajectory and len(trajectory[key]) != len(old_segments):
+            raise ValueError(f"{key} does not match trajectory sample count.")
+
+    stats = {
+        "method": "split_at_non_adjacent_faces_and_sharp_mesh_creases",
+        "maximum_source_face_normal_change_deg": threshold,
+        "original_stroke_count": int(len(starts)),
+        "resulting_stroke_count": int(len(blocks)),
+        "added_stroke_count": int(max(0, len(blocks) - len(starts))),
+        "split_transition_counts": split_reasons,
+        "samples_preserved": True,
+        "surface_points_or_normals_modified": False,
+        "note": (
+            "Spray is OFF at each inserted boundary. Source positions and normals "
+            "are unchanged; travel links remain straight-line estimates only."
+        ),
+    }
+    return updated, new_metadata, stats
 
 
 def _optimize_stroke_order_for_travel(
@@ -5300,6 +5446,70 @@ def run_stage3_numerical_tests() -> dict:
     assert crease_detail["source_face_normal_change_deg"] > 30.0
 
     # --------------------------------------------------------
+    # Test 24F: Surface topology and sharp creases insert spray-OFF boundaries
+    # without modifying or dropping any trajectory samples.
+    # --------------------------------------------------------
+    split_test_mesh = trimesh.Trimesh(
+        vertices=np.asarray([
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [0.0, 10.0, 0.0],
+            [0.0, 0.0, 10.0],
+            [20.0, 0.0, 0.0],
+            [20.0, 10.0, 0.0],
+        ], dtype=np.float64),
+        faces=np.asarray([
+            [0, 1, 2],
+            [1, 0, 3],
+            [3, 4, 5],
+        ], dtype=np.int64),
+        process=False,
+    )
+    split_test_points = np.asarray([
+        [0.0, 0.0, 180.0],
+        [1.0, 0.0, 180.0],
+        [2.0, 0.0, 180.0],
+    ], dtype=np.float64)
+    split_test_normals = np.asarray(split_test_mesh.face_normals, dtype=np.float64)
+    split_test_trajectory = {
+        "surface_points": np.asarray([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+        ], dtype=np.float64),
+        "surface_normals": split_test_normals.copy(),
+        "nozzle_points": split_test_points.copy(),
+        "spray_directions": -split_test_normals.copy(),
+        "nozzle_frames": _build_parallel_transport_nozzle_frames(
+            -split_test_normals,
+            np.asarray([0, 0, 0], dtype=np.int64),
+        ),
+        "face_indices": np.asarray([0, 1, 2], dtype=np.int64),
+        "patch_ids": np.asarray([9, 9, 9], dtype=np.int64),
+        "segment_ids": np.asarray([0, 0, 0], dtype=np.int64),
+    }
+    split_test_result, split_test_metadata, split_test_stats = (
+        _split_strokes_at_surface_discontinuities(
+            split_test_mesh,
+            split_test_trajectory,
+            [{"segment_id": 0, "patch_id": 9, "path_type": "test"}],
+            maximum_normal_change_deg=30.0,
+        )
+    )
+    assert np.array_equal(
+        split_test_result["segment_ids"],
+        np.asarray([0, 1, 2], dtype=np.int64),
+    )
+    assert split_test_stats["split_transition_counts"]["sharp_source_mesh_crease"] == 1
+    assert split_test_stats["split_transition_counts"]["non_adjacent_source_faces"] == 1
+    assert split_test_stats["added_stroke_count"] == 2
+    assert np.array_equal(
+        split_test_result["surface_points"],
+        split_test_trajectory["surface_points"],
+    )
+    assert len(split_test_metadata) == 3
+
+    # --------------------------------------------------------
     # Test 24C: Continuity diagnostics identify exact source samples and faces.
     # --------------------------------------------------------
     continuity_outlier_test = _inspect_generated_trajectory(
@@ -5376,6 +5586,7 @@ def run_stage3_numerical_tests() -> dict:
             "curved_normal_smoothing_with_8deg_deviation_limit": "PASS",
             "parallel_transport_nozzle_frame_continuity": "PASS",
             "full_nozzle_frame_roll_inspection": "PASS",
+            "surface_discontinuity_spray_off_splitting": "PASS",
         },
         "sample_count": int(sample_count),
         "unit_standoff_tests": unit_test_results,
