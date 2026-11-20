@@ -349,7 +349,13 @@ class ProductViewer(QWidget):
         layout = QHBoxLayout(panel)
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setSpacing(8)
-        layout.addWidget(QLabel("ATTITUDE RPY (°):"))
+
+        attitude_label = QLabel("ATTITUDE RPY (°):")
+        attitude_label.setStyleSheet(
+            "QLabel { color: #19DDF2; font-weight: 700; }"
+        )
+        layout.addWidget(attitude_label)
+
         self.rpy_inputs = []
         for label in ("ROLL", "PITCH", "YAW"):
             field = QDoubleSpinBox()
@@ -367,7 +373,12 @@ class ProductViewer(QWidget):
             layout.addWidget(field)
             self.rpy_inputs.append(field)
 
-        layout.addWidget(QLabel("ANGLE STEP (°):"))
+        step_label = QLabel("ANGLE STEP (°):")
+        step_label.setStyleSheet(
+            "QLabel { color: #FFB84D; font-weight: 700; }"
+        )
+        layout.addWidget(step_label)
+
         self.rpy_step_input = QDoubleSpinBox()
         self.rpy_step_input.setRange(0.01, 360.00)
         self.rpy_step_input.setDecimals(2)
@@ -379,6 +390,13 @@ class ProductViewer(QWidget):
         )
         self.rpy_step_input.valueChanged.connect(self._on_rpy_step_changed)
         layout.addWidget(self.rpy_step_input)
+
+        self.reset_rpy_button = QPushButton("RESET RPY")
+        self.reset_rpy_button.setToolTip(
+            "Reset product Roll, Pitch and Yaw to 0.00 degrees."
+        )
+        self.reset_rpy_button.clicked.connect(self._reset_rpy_angles)
+        layout.addWidget(self.reset_rpy_button)
         layout.addStretch(1)
 
         # Hidden compatibility controls used by the existing pose workflow.
@@ -416,6 +434,19 @@ class ProductViewer(QWidget):
         step = max(0.01, float(value))
         for field in self.rpy_inputs:
             field.setSingleStep(step)
+
+    def _reset_rpy_angles(self):
+        """Reset orientation only; preserve product position and scale."""
+        if self._pose_actor is None:
+            return
+        for field in self.rpy_inputs:
+            field.blockSignals(True)
+            field.setValue(0.0)
+            field.blockSignals(False)
+        self._apply_rpy_inputs()
+        self.pose_status_label.setText(
+            "ATTITUDE RESET  |  Roll, Pitch and Yaw set to 0.00°."
+        )
 
     def _apply_rpy_inputs(self):
         """Set absolute World-frame ZYX Roll/Pitch/Yaw orientation."""
