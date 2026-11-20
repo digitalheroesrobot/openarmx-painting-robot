@@ -800,6 +800,36 @@ class ProductViewer(QWidget):
             packed_faces.ravel(),
         )
 
+    def _build_offset_patch_shell(self, mesh, face_mask, offset_distance):
+        """
+        Create a slightly expanded copy of a selected patch.
+
+        Vertex-normal displacement creates a real 3D halo just outside
+        the surface. On a correctly oriented closed mesh, cavity walls
+        expand toward the cavity, making holes and recesses easier to see.
+        """
+        vertices = np.asarray(mesh.vertices, dtype=float)
+        vertex_normals = np.asarray(mesh.vertex_normals, dtype=float)
+
+        if (
+            vertex_normals.shape != vertices.shape
+            or not np.all(np.isfinite(vertex_normals))
+        ):
+            raise ValueError(
+                "Mesh vertex normals are unavailable for patch glow."
+            )
+
+        lengths = np.linalg.norm(vertex_normals, axis=1)
+        valid = lengths > 1e-12
+        normalized = np.zeros_like(vertex_normals)
+        normalized[valid] = (
+            vertex_normals[valid] / lengths[valid, None]
+        )
+
+        shell = self._to_polydata(mesh, face_mask=face_mask)
+        shell.points = vertices + normalized * float(offset_distance)
+        return shell
+
     @staticmethod
     def _build_patch_light_beams(
         mesh, face_mask, max_beams=48, radius_scale=0.105
@@ -1788,106 +1818,99 @@ class ProductViewer(QWidget):
                 )
 
                 if selected_polydata.n_cells > 0:
-                    # Translucent cyan surface wash.
-                    glow_actor = self.plotter.add_mesh(
-                        selected_polydata,
-                        color="#00E5FF",
-                        opacity=0.38,
-                        show_edges=False,
-                        smooth_shading=False,
-                        lighting=False,
-                        ambient=1.0,
-                        diffuse=0.0,
+                    # Read the exact color assigned to this Patch ID by
+                    # the same Turbo lookup table used for the product.
+                    patch_rgb = [0.0, 0.0, 0.0]
+                    lookup_table = (
+                        self._pose_actor.GetMapper().GetLookupTable()
+                    )
+                    lookup_table.GetColor(
+                        float(self.selected_patch_id),
+                        patch_rgb,
+                    )
+                    patch_color = "#{:02X}{:02X}{:02X}".format(
+                        *[
+                            int(round(max(0.0, min(1.0, channel)) * 255))
+                            for channel in patch_rgb
+                        ]
                     )
 
-                    # Broad luminous edge pass.
-                    outer_glow_actor = self.plotter.add_mesh(
-                        selected_polydata,
-                        style="wireframe",
-                        color="#00E5FF",
-                        opacity=0.78,
-                        line_width=7.0,
-                        render_lines_as_tubes=True,
-                        lighting=False,
+                    bounds = np.asarray(
+                        self.current_mesh.bounds, dtype=float
                     )
+                    dimensions = bounds[[1, 3, 5]] - bounds[[0, 2, 4]]
+                    model_diagonal = float(np.linalg.norm(dimensions))
+                    if not np.isfinite(model_diagonal) or model_diagonal <= 0:
+                        model_diagonal = 1.0
 
-                    # Bright inner edge makes the selected region
-                    # unmistakable against adjacent patch colors.
-                    edge_actor = self.plotter.add_mesh(
-                        selected_polydata,
-                        style="wireframe",
-                        color="#E9FFFF",
-                        opacity=1.0,
-                        line_width=2.5,
-                        render_lines_as_tubes=True,
-                        lighting=False,
-                    )
-
-                    # -------------------------------------------------
-                    # PROJECTED LIGHT - HEADLIGHT / SPOTLIGHT EFFECT
-                    # -------------------------------------------------
-                    # Emit a fan of translucent cones from the selected
-                    # patch along its triangle normals. This reveals
-                    # recessed and hole-facing surfaces that a surface
-                    # outline alone cannot make visually obvious.
-                    light_actors = []
-                    try:
-                        light_beams = self._build_patch_light_beams(
-                            self.current_mesh,
-                            selected_mask,
-                        )
-
-                        if light_beams.n_cells > 0:
-                            # Wide, soft cyan beam envelope.
-                            light_actors.append(
-                                self.plotter.add_mesh(
-                                    light_beams,
-                                    color="#00DFFF",
-                                    opacity=0.28,
-                                    show_edges=False,
-                                    lighting=False,
-                                    ambient=1.0,
-                                    diffuse=0.0,
-                                    specular=0.0,
-                                )
-                            )
-
-                            # Narrow bright core gives the projected light
-                            # a visible direction and stronger headlight feel.
-                            core_beams = self._build_patch_light_beams(
+                    # Three same-color shells sit just outside the selected
+                    # surface. Their increasing spread and transparency make
+                    # the patch look luminous without changing its identity.
+                    glow_actors = []
+                    for offset_ratio, opacity in (
+                        (0.012, 0.12),
+                        (0.007, 0.22),
+                        (0.003, 0.38),
+                    ):
+                        try:
+                            halo_polydata = self._build_offset_patch_shell(
                                 self.current_mesh,
                                 selected_mask,
-                                max_beams=48,
-                                radius_scale=0.045,
+                                model_diagonal * offset_ratio,
                             )
-                            if core_beams.n_cells > 0:
-                                light_actors.append(
+                            if halo_polydata.n_cells > 0:
+                                glow_actors.append(
                                     self.plotter.add_mesh(
-                                        core_beams,
-                                        color="#D9FFFF",
-                                        opacity=0.42,
+                                        halo_polydata,
+                                        color=patch_color,
+                                        opacity=opacity,
                                         show_edges=False,
                                         lighting=False,
                                         ambient=1.0,
                                         diffuse=0.0,
                                         specular=0.0,
+                                        pickable=False,
                                     )
                                 )
-                    except Exception as exc:
-                        # The surface highlight must remain usable even
-                        # if a VTK/PyVista build cannot render cone meshes.
-                        print(
-                            "[PATCH LIGHT WARNING] "
-                            "Spotlight geometry was skipped: "
-                            f"{type(exc).__name__}: {exc}"
-                        )
+                        except Exception as exc:
+                            print(
+                                "[PATCH GLOW WARNING] "
+                                "Expanded halo layer skipped: "
+                                f"{type(exc).__name__}: {exc}"
+                            )
+
+                    # A translucent same-color wash reinforces the selected
+                    # area while leaving the original patch color recognizable.
+                    surface_actor = self.plotter.add_mesh(
+                        selected_polydata,
+                        color=patch_color,
+                        opacity=0.30,
+                        show_edges=False,
+                        smooth_shading=False,
+                        lighting=False,
+                        ambient=1.0,
+                        diffuse=0.0,
+                        pickable=False,
+                    )
+
+                    # The outer contour uses the patch's own color, not a
+                    # universal cyan/white highlight.
+                    edge_actor = self.plotter.add_mesh(
+                        selected_polydata,
+                        style="wireframe",
+                        color=patch_color,
+                        opacity=1.0,
+                        line_width=4.5,
+                        render_lines_as_tubes=True,
+                        lighting=False,
+                        pickable=False,
+                    )
 
                     if previous_product_pose is not None:
                         for selected_actor in (
-                            glow_actor,
-                            outer_glow_actor,
+                            *glow_actors,
+                            surface_actor,
                             edge_actor,
-                            *light_actors,
                         ):
                             selected_actor.SetOrigin(0.0, 0.0, 0.0)
                             selected_actor.SetOrientation(
