@@ -1505,7 +1505,15 @@ class ProductViewer(QWidget):
         if self.display_mode != "product":
             return
 
+        # The World frame remains fixed in the work cell.
         self._add_world_workspace()
+
+        # The Product/CAD frame is attached to the product actor and
+        # follows its complete 4x4 pose transform during RPY changes.
+        self._add_product_coordinate_frame()
+
+        # Viewport orientation widget represents the camera-relative
+        # appearance of the fixed World frame, not the product frame.
         self._add_world_orientation_indicator()
 
     # =========================================================
