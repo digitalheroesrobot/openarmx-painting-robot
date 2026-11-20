@@ -42,7 +42,9 @@ DEFAULT_SPRAYER_PROFILE = {
     "fan_thickness_at_reference_mm": 0.0,
     "overlap_percent": 50.0,
     "sampling_spacing_mm": 20.0,
-    "travel_speed_mm_s": 0.0,
+    "travel_speed_mm_s": 150.0,
+    "min_travel_speed_mm_s": 40.0,
+    "max_travel_acceleration_mm_s2": 500.0,
     "fan_air_pressure_bar": 1.7,
     "atomizing_air_pressure_bar": 1.7,
     "fluid_pressure_bar": 0.0,
@@ -383,7 +385,9 @@ class SprayerSettingsDialog(QDialog):
             ("tcp_to_nozzle_tip_mm", "TCP to nozzle tip (mm)", 0.0, 500.0, 1),
             ("fan_reference_distance_mm", "Reference distance (mm)", 10.0, 2000.0, 1),
             ("fan_thickness_at_reference_mm", "Fan thickness at reference distance (mm)", 0.0, 1000.0, 1),
-            ("travel_speed_mm_s", "Gun travel speed (mm/s)", 0.0, 2000.0, 1),
+            ("travel_speed_mm_s", "Base gun travel speed (mm/s)", 1.0, 2000.0, 1),
+            ("min_travel_speed_mm_s", "Minimum curved/corner speed (mm/s)", 1.0, 2000.0, 1),
+            ("max_travel_acceleration_mm_s2", "Maximum travel acceleration (mm/s²)", 1.0, 10000.0, 1),
             ("fan_air_pressure_bar", "Fan air pressure (bar)", 0.0, 10.0, 2),
             ("atomizing_air_pressure_bar", "Atomizing air pressure (bar)", 0.0, 10.0, 2),
             ("fluid_pressure_bar", "Fluid pressure (bar)", 0.0, 500.0, 2),
@@ -397,6 +401,9 @@ class SprayerSettingsDialog(QDialog):
             "sampling_spacing_mm",
             "fan_reference_distance_mm",
             "fan_thickness_at_reference_mm",
+            "travel_speed_mm_s",
+            "min_travel_speed_mm_s",
+            "max_travel_acceleration_mm_s2",
         }
 
         def add_profile_field(key, label, minimum, maximum, decimals):
@@ -414,13 +421,29 @@ class SprayerSettingsDialog(QDialog):
                 "gun_body_length_mm",
                 "gun_body_diameter_mm",
                 "tcp_to_nozzle_tip_mm",
-                "travel_speed_mm_s",
                 "fluid_pressure_bar",
                 "fluid_flow_ml_min",
             ):
                 spin.setToolTip(
                     "A value of 0 means not specified. Enter the value from "
                     "the sprayer data sheet or validated paint process."
+                )
+            elif key == "travel_speed_mm_s":
+                spin.setToolTip(
+                    "Reference speed on flat, straight sections. The trajectory "
+                    "planner automatically reduces speed on curved surfaces and "
+                    "sharp path turns. This is a starting process value, not a "
+                    "robot motion safety limit."
+                )
+            elif key == "min_travel_speed_mm_s":
+                spin.setToolTip(
+                    "Lower speed limit used by the curvature and corner planner. "
+                    "Validate it with the actual coating and sprayer."
+                )
+            elif key == "max_travel_acceleration_mm_s2":
+                spin.setToolTip(
+                    "Acceleration limit used to smooth speed changes along each "
+                    "spray segment; this is not a robot controller limit."
                 )
             elif key == "spray_cone_angle_deg":
                 spin.setToolTip(
