@@ -771,9 +771,9 @@ class ProductViewer(QWidget):
         self.display_mode = "product"
         self._set_trajectory_controls_visible(False)
 
-        # Initial work-cell setup screen: only the World frame and box are
-        # shown. Product placement/orientation will be enabled in the next
-        # implementation step after the coordinate system is verified.
+        # Show the CAD product together with the fixed World frame.
+        # Product pose manipulation is enabled; World reference geometry
+        # remains locked and cannot be selected or dragged.
         self.pose_control_panel.show()
         self.pose_manipulation_enabled = True
         self.confirm_pose_button.setEnabled(True)
@@ -1593,10 +1593,8 @@ class ProductViewer(QWidget):
         # DEFAULT PRODUCT MODE
         # -------------------------------------------------
         else:
-            # STEP 1: do not display the product yet.
-            # The only visible 3D objects are the fixed World frame and
-            # the work-cell box. This lets us verify the coordinate system
-            # independently before introducing CAD/product transforms.
+            # Product mode displays the CAD mesh as the single movable
+            # actor. The World box, axes, and reference grid are static.
             # The product is the only movable 3D actor. World reference
             # geometry is rendered separately and remains fixed.
             self._pose_actor = self.plotter.add_mesh(
