@@ -943,60 +943,9 @@ class ProductViewer(QWidget):
             ]
             return pv.MultiBlock(cylinders).combine()
 
-        # Ordinary planar/curved patches: create a small, constant-distance
-        # white shell around the selected surface instead of a long beam.
-        #
-        # The shell is built from the selected patch triangles themselves,
-        # so its shape follows the actual patch boundary.
-        halo_distance = model_diagonal * 0.012
-        halo_distance = max(halo_distance, 0.35)
-
-        selected_faces = vertices[faces]
-        face_normals = np.asarray(mesh.face_normals, dtype=float)[face_indices]
-        valid = (
-            np.all(np.isfinite(face_normals), axis=1)
-            & (np.linalg.norm(face_normals, axis=1) > 1e-12)
-        )
-        if not np.any(valid):
-            return pv.PolyData()
-
-        selected_faces = selected_faces[valid]
-        face_normals = face_normals[valid]
-        face_normals /= np.linalg.norm(face_normals, axis=1)[:, None]
-
-        offset_triangles = (
-            selected_faces
-            + face_normals[:, None, :] * halo_distance
-        )
-
-        shell_points = offset_triangles.reshape(-1, 3)
-        shell_faces = np.arange(len(shell_points), dtype=np.int64).reshape(-1, 3)
-        shell = pv.PolyData(
-            shell_points,
-            np.hstack([
-                np.full((len(shell_faces), 1), 3, dtype=np.int64),
-                shell_faces,
-            ]).ravel(),
-        )
-
-        # A second, slightly weaker layer softens the edge without creating
-        # a directional beam or visually filling the product interior.
-        inner_offset = halo_distance * 0.55
-        soft_triangles = (
-            selected_faces
-            + face_normals[:, None, :] * inner_offset
-        )
-        soft_points = soft_triangles.reshape(-1, 3)
-        soft_faces = np.arange(len(soft_points), dtype=np.int64).reshape(-1, 3)
-        soft_shell = pv.PolyData(
-            soft_points,
-            np.hstack([
-                np.full((len(soft_faces), 1), 3, dtype=np.int64),
-                soft_faces,
-            ]).ravel(),
-        )
-
-        return pv.MultiBlock([shell, soft_shell]).combine()
+        # Ordinary planar/curved patches use the parallel white membrane
+        # rendered by _build_offset_patch_shell; do not add a beam here.
+        return pv.PolyData()
 
     # =========================================================
     # EMPTY SCENE
@@ -1992,45 +1941,43 @@ class ProductViewer(QWidget):
                     if not np.isfinite(model_diagonal) or model_diagonal <= 0:
                         model_diagonal = 1.0
 
-                    # Soft white halo, kept close to the surface. The
-                    # directional white beams below provide the longer locator
-                    # effect without using the patch's classification color.
+                    # Non-hole patches get one thin white membrane at a
+                    # small, constant offset from the original surface.
+                    # _build_offset_patch_shell displaces shared vertices
+                    # along their averaged vertex normals, keeping the shell
+                    # parallel to the selected patch rather than creating
+                    # separate per-triangle sheets.
                     glow_actors = []
-                    for offset_ratio, opacity in (
-                        (0.030, 0.05),
-                        (0.0175, 0.09),
-                        (0.0075, 0.14),
-                    ):
-                        try:
-                            halo_polydata = self._build_offset_patch_shell(
-                                self.current_mesh,
-                                selected_mask,
-                                model_diagonal * offset_ratio,
-                            )
-                            if halo_polydata.n_cells > 0:
-                                glow_actors.append(
-                                    self.plotter.add_mesh(
-                                        halo_polydata,
-                                        color="#FFFFFF",
-                                        opacity=opacity,
-                                        show_edges=False,
-                                        lighting=False,
-                                        ambient=1.0,
-                                        diffuse=0.0,
-                                        specular=0.0,
-                                        pickable=False,
-                                    )
+                    try:
+                        halo_polydata = self._build_offset_patch_shell(
+                            self.current_mesh,
+                            selected_mask,
+                            model_diagonal * 0.008,
+                        )
+                        if halo_polydata.n_cells > 0:
+                            glow_actors.append(
+                                self.plotter.add_mesh(
+                                    halo_polydata,
+                                    color="#FFFFFF",
+                                    opacity=0.22,
+                                    show_edges=False,
+                                    lighting=False,
+                                    ambient=1.0,
+                                    diffuse=0.0,
+                                    specular=0.0,
+                                    pickable=False,
                                 )
-                        except Exception as exc:
-                            print(
-                                "[PATCH GLOW WARNING] "
-                                "Expanded halo layer skipped: "
-                                f"{type(exc).__name__}: {exc}"
                             )
+                    except Exception as exc:
+                        print(
+                            "[PATCH GLOW WARNING] "
+                            "Parallel white membrane skipped: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
 
-                    # Project soft white light from the selected patch.
-                    # Planar faces project along their normal; cylindrical
-                    # hole walls project along both directions of the axis.
+                    # Cylindrical/hole patches use the separate short,
+                    # one-way axial locator. Ordinary patches do not produce
+                    # an additional beam.
                     try:
                         beam_polydata = self._build_patch_light_beams(
                             self.current_mesh,
