@@ -1623,6 +1623,8 @@ class ProductViewer(QWidget):
             self._set_standard_camera()
 
         self.plotter.render()
+        if self._pose_actor is not None:
+            self._update_pose_readout()
 
     def _add_classification_legend(self):
         legend = (
