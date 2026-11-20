@@ -868,6 +868,299 @@ def _nearest_neighbor_order(points: np.ndarray) -> np.ndarray:
         return order
 
 
+
+def _generate_planar_raster_for_patch(
+    mesh: trimesh.Trimesh,
+    face_indices: np.ndarray,
+    normals: np.ndarray,
+    standoff_coordinate_units: float,
+    sample_spacing_coordinate_units: float,
+    track_spacing_coordinate_units: float,
+    planarity_angle_deg: float = 2.0,
+) -> dict | None:
+    """
+    Generate clipped, serpentine raster lanes for one geometrically planar patch.
+
+    Every lane is clipped against the union of its source triangles. Separate
+    connected intervals remain separate segments; no spray-on connector is made.
+    Returns None when the patch is not sufficiently planar.
+    """
+    face_indices = np.asarray(face_indices, dtype=np.int64)
+    if len(face_indices) == 0 or track_spacing_coordinate_units <= 0.0:
+        return None
+
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    triangles = vertices[faces[face_indices]]
+    patch_normals = np.asarray(normals[face_indices], dtype=np.float64)
+    mean_normal = np.mean(patch_normals, axis=0)
+    normal_length = float(np.linalg.norm(mean_normal))
+    if not math.isfinite(normal_length) or normal_length <= NORMAL_EPSILON:
+        return None
+    plane_normal = mean_normal / normal_length
+    normal_cosine = math.cos(math.radians(planarity_angle_deg))
+    if np.any(patch_normals @ plane_normal < normal_cosine):
+        return None
+
+    patch_vertices = triangles.reshape(-1, 3)
+    origin = np.mean(patch_vertices, axis=0)
+    signed_distances = (patch_vertices - origin) @ plane_normal
+    plane_tolerance = max(sample_spacing_coordinate_units * 0.02, 1e-7)
+    if float(np.max(np.abs(signed_distances))) > plane_tolerance:
+        return None
+
+    centered = patch_vertices - origin
+    covariance = centered.T @ centered
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    lane_axis = eigenvectors[:, int(np.argmax(eigenvalues))]
+    lane_axis -= float(np.dot(lane_axis, plane_normal)) * plane_normal
+    lane_length = float(np.linalg.norm(lane_axis))
+    if lane_length <= NORMAL_EPSILON:
+        return None
+    lane_axis /= lane_length
+    offset_axis = np.cross(plane_normal, lane_axis)
+    offset_axis /= np.linalg.norm(offset_axis)
+
+    projected = np.stack((
+        centered @ lane_axis,
+        centered @ offset_axis,
+    ), axis=1)
+    projected_triangles = projected.reshape(-1, 3, 2)
+    min_offset = float(np.min(projected[:, 1]))
+    max_offset = float(np.max(projected[:, 1]))
+    extent = max_offset - min_offset
+    if extent <= NORMAL_EPSILON:
+        return None
+
+    lane_spacing = float(track_spacing_coordinate_units)
+    first_offset = min_offset + min(lane_spacing * 0.5, extent * 0.5)
+    last_offset = max_offset - min(lane_spacing * 0.5, extent * 0.5)
+    if last_offset < first_offset:
+        lane_offsets = np.array([(min_offset + max_offset) * 0.5])
+    else:
+        lane_count = max(1, int(math.floor((last_offset - first_offset) / lane_spacing)) + 1)
+        lane_offsets = first_offset + np.arange(lane_count, dtype=np.float64) * lane_spacing
+        if len(lane_offsets) == 0:
+            lane_offsets = np.array([(min_offset + max_offset) * 0.5])
+
+    def triangle_interval(triangle_2d: np.ndarray, offset: float):
+        intersections = []
+        tolerance = 1e-9
+        for edge_index in range(3):
+            a = triangle_2d[edge_index]
+            b = triangle_2d[(edge_index + 1) % 3]
+            da = float(a[1] - offset)
+            db = float(b[1] - offset)
+            if abs(da) <= tolerance:
+                intersections.append(float(a[0]))
+            if da * db < -tolerance * tolerance:
+                ratio = (offset - a[1]) / (b[1] - a[1])
+                intersections.append(float(a[0] + ratio * (b[0] - a[0])))
+        if len(intersections) < 2:
+            return None
+        values = np.unique(np.round(np.asarray(intersections), decimals=10))
+        if len(values) < 2 or float(values[-1] - values[0]) <= 1e-9:
+            return None
+        return float(values[0]), float(values[-1])
+
+    def point_in_triangle_2d(point: np.ndarray, triangle: np.ndarray) -> bool:
+        a, b, c = triangle
+        v0 = c - a
+        v1 = b - a
+        v2 = point - a
+        dot00 = float(np.dot(v0, v0))
+        dot01 = float(np.dot(v0, v1))
+        dot02 = float(np.dot(v0, v2))
+        dot11 = float(np.dot(v1, v1))
+        dot12 = float(np.dot(v1, v2))
+        denominator = dot00 * dot11 - dot01 * dot01
+        if abs(denominator) <= 1e-14:
+            return False
+        u = (dot11 * dot02 - dot01 * dot12) / denominator
+        v = (dot00 * dot12 - dot01 * dot02) / denominator
+        return u >= -1e-8 and v >= -1e-8 and u + v <= 1.0 + 1e-8
+
+    out_surface = []
+    out_normals = []
+    out_nozzle = []
+    out_directions = []
+    out_faces = []
+    out_segments = []
+    segment_id = 0
+    lane_records = []
+
+    for lane_index, offset in enumerate(lane_offsets):
+        intervals = []
+        for local_index, triangle_2d in enumerate(projected_triangles):
+            interval = triangle_interval(triangle_2d, float(offset))
+            if interval is not None:
+                intervals.append((interval[0], interval[1], local_index))
+        if not intervals:
+            continue
+        intervals.sort(key=lambda item: (item[0], item[1]))
+        merged = []
+        for start, end, local_index in intervals:
+            if not merged or start > merged[-1][1] + 1e-8:
+                merged.append([start, end, [local_index]])
+            else:
+                merged[-1][1] = max(merged[-1][1], end)
+                merged[-1][2].append(local_index)
+
+        if lane_index % 2:
+            merged = list(reversed(merged))
+
+        for start, end, source_local_indices in merged:
+            distance = max(0.0, end - start)
+            sample_count = max(2, int(math.ceil(distance / sample_spacing_coordinate_units)) + 1)
+            along_values = np.linspace(start, end, sample_count)
+            if lane_index % 2:
+                along_values = along_values[::-1]
+            segment_points = []
+            segment_faces = []
+            for along in along_values:
+                point_2d = np.array([along, float(offset)], dtype=np.float64)
+                source_face = None
+                for local_index in source_local_indices:
+                    if point_in_triangle_2d(point_2d, projected_triangles[local_index]):
+                        source_face = int(face_indices[local_index])
+                        break
+                if source_face is None:
+                    # Boundary tolerance fallback: select the closest triangle in
+                    # this merged interval, while retaining its exact clipped line.
+                    source_face = int(face_indices[source_local_indices[0]])
+                point_3d = origin + lane_axis * along + offset_axis * float(offset)
+                segment_points.append(point_3d)
+                segment_faces.append(source_face)
+
+            segment_points = np.asarray(segment_points, dtype=np.float64)
+            segment_normals = np.repeat(plane_normal[None, :], len(segment_points), axis=0)
+            segment_directions = -segment_normals
+            segment_nozzles = segment_points + standoff_coordinate_units * segment_normals
+            out_surface.extend(segment_points)
+            out_normals.extend(segment_normals)
+            out_directions.extend(segment_directions)
+            out_nozzle.extend(segment_nozzles)
+            out_faces.extend(segment_faces)
+            out_segments.extend([segment_id] * len(segment_points))
+            out_segments[-len(segment_points):] = [segment_id] * len(segment_points)
+            lane_records.append({
+                "segment_id": int(segment_id),
+                "lane_index": int(lane_index),
+                "patch_id": int(np.unique(mesh_face_patch_ids_placeholder)[0]) if False else None,
+                "sample_count": int(len(segment_points)),
+                "length_coordinate_units": float(distance),
+                "spray_enabled_connector": False,
+            })
+            segment_id += 1
+
+    if not out_surface:
+        return None
+    surface_array = np.asarray(out_surface, dtype=np.float64)
+    normal_array = np.asarray(out_normals, dtype=np.float64)
+    direction_array = np.asarray(out_directions, dtype=np.float64)
+    nozzle_array = np.asarray(out_nozzle, dtype=np.float64)
+    face_array = np.asarray(out_faces, dtype=np.int64)
+    segment_array = np.asarray(out_segments, dtype=np.int64)
+    return {
+        "surface_points": surface_array,
+        "surface_normals": normal_array,
+        "nozzle_points": nozzle_array,
+        "spray_directions": direction_array,
+        "nozzle_frames": _build_nozzle_frames(direction_array),
+        "face_indices": face_array,
+        "segment_ids": segment_array,
+        "segments": lane_records,
+        "lane_count": int(len(lane_records)),
+        "lane_spacing_coordinate_units": lane_spacing,
+        "lane_direction": lane_axis.tolist(),
+        "offset_direction": offset_axis.tolist(),
+    }
+
+
+def _order_trajectory_with_planar_raster(
+    mesh: trimesh.Trimesh,
+    surface_points: np.ndarray,
+    surface_normals: np.ndarray,
+    nozzle_points: np.ndarray,
+    spray_directions: np.ndarray,
+    nozzle_frames: np.ndarray,
+    face_indices: np.ndarray,
+    patch_ids: np.ndarray,
+    standoff_coordinate_units: float,
+    sampling_spacing_coordinate_units: float,
+    track_spacing_coordinate_units: float,
+) -> dict:
+    """Rasterize planar patches; retain nearest-neighbor ordering for other patches."""
+    keys = (
+        "surface_points", "surface_normals", "nozzle_points",
+        "spray_directions", "nozzle_frames", "face_indices",
+    )
+    collected = {key: [] for key in keys}
+    collected["patch_ids"] = []
+    collected["segment_ids"] = []
+    segment_metadata = []
+    next_segment_id = 0
+    rasterized_patch_ids = []
+    fallback_patch_ids = []
+
+    for patch_id in np.unique(patch_ids):
+        indices = np.flatnonzero(patch_ids == patch_id)
+        patch_faces = np.unique(face_indices[indices])
+        raster = _generate_planar_raster_for_patch(
+            mesh=mesh,
+            face_indices=patch_faces,
+            normals=np.asarray(mesh.face_normals, dtype=np.float64),
+            standoff_coordinate_units=standoff_coordinate_units,
+            sample_spacing_coordinate_units=sampling_spacing_coordinate_units,
+            track_spacing_coordinate_units=track_spacing_coordinate_units,
+        )
+        if raster is not None:
+            patch_result = raster
+            rasterized_patch_ids.append(int(patch_id))
+            for segment in raster["segments"]:
+                segment_metadata.append({
+                    **segment,
+                    "segment_id": int(segment["segment_id"] + next_segment_id),
+                    "patch_id": int(patch_id),
+                    "path_type": "planar_raster",
+                })
+            local_segments = raster["segment_ids"] + next_segment_id
+        else:
+            fallback_patch_ids.append(int(patch_id))
+            local_order = _nearest_neighbor_order(nozzle_points[indices])
+            ordered_indices = indices[local_order]
+            patch_result = {
+                "surface_points": surface_points[ordered_indices],
+                "surface_normals": surface_normals[ordered_indices],
+                "nozzle_points": nozzle_points[ordered_indices],
+                "spray_directions": spray_directions[ordered_indices],
+                "nozzle_frames": nozzle_frames[ordered_indices],
+                "face_indices": face_indices[ordered_indices],
+            }
+            local_segments = np.full(len(ordered_indices), next_segment_id, dtype=np.int64)
+            segment_metadata.append({
+                "segment_id": int(next_segment_id),
+                "patch_id": int(patch_id),
+                "sample_count": int(len(ordered_indices)),
+                "path_type": "nearest_neighbor_fallback",
+            })
+
+        for key in keys:
+            collected[key].append(patch_result[key])
+        collected["patch_ids"].append(np.full(len(patch_result["surface_points"]), int(patch_id), dtype=np.int64))
+        collected["segment_ids"].append(local_segments)
+        next_segment_id = int(np.max(local_segments)) + 1
+
+    if not collected["surface_points"]:
+        raise RuntimeError("No trajectory segments were generated.")
+
+    result = {key: np.concatenate(values, axis=0) for key, values in collected.items()}
+    result["segments"] = segment_metadata
+    result["rasterized_planar_patch_ids"] = rasterized_patch_ids
+    result["nearest_neighbor_fallback_patch_ids"] = fallback_patch_ids
+    return result
+
+
 def _order_trajectory_by_patch(
     surface_points: np.ndarray,
     surface_normals: np.ndarray,
@@ -1437,16 +1730,49 @@ def generate_spray_trajectory(
     # 6a. Construct a provisional geometric nozzle frame at each sample.
     nozzle_frames = _build_nozzle_frames(spray_directions)
 
-    # 7. Order trajectory points within individual patches.
-    ordered = _order_trajectory_by_patch(
-        surface_points=surface_points,
-        surface_normals=surface_normals,
-        nozzle_points=nozzle_points,
-        spray_directions=spray_directions,
-        nozzle_frames=nozzle_frames,
-        face_indices=face_indices,
-        patch_ids=patch_ids,
+    # 7. Generate planar raster lanes from the configured fan width/overlap.
+    profile_for_path = dict(sprayer_profile) if isinstance(sprayer_profile, dict) else {}
+    path_cone_angle = _safe_float(profile_for_path.get("spray_cone_angle_deg", 0.0)) or 0.0
+    path_cone_angle = max(0.0, min(150.0, path_cone_angle))
+    path_overlap = _safe_float(profile_for_path.get("overlap_percent", 0.0)) or 0.0
+    path_overlap = max(0.0, min(90.0, path_overlap))
+    path_spray_width_mm = (
+        2.0 * standoff_mm * math.tan(math.radians(path_cone_angle * 0.5))
+        if path_cone_angle > 0.0 else 0.0
     )
+    path_track_spacing_mm = path_spray_width_mm * (1.0 - path_overlap / 100.0)
+    path_track_spacing_units = _mm_to_coordinate_units(
+        path_track_spacing_mm, source_unit
+    ) if path_track_spacing_mm > 0.0 else 0.0
+
+    if path_track_spacing_units > 0.0:
+        ordered = _order_trajectory_with_planar_raster(
+            mesh=mesh,
+            surface_points=surface_points,
+            surface_normals=surface_normals,
+            nozzle_points=nozzle_points,
+            spray_directions=spray_directions,
+            nozzle_frames=nozzle_frames,
+            face_indices=face_indices,
+            patch_ids=patch_ids,
+            standoff_coordinate_units=standoff_coordinate_units,
+            sampling_spacing_coordinate_units=spacing_coordinate_units,
+            track_spacing_coordinate_units=path_track_spacing_units,
+        )
+    else:
+        ordered = _order_trajectory_by_patch(
+            surface_points=surface_points,
+            surface_normals=surface_normals,
+            nozzle_points=nozzle_points,
+            spray_directions=spray_directions,
+            nozzle_frames=nozzle_frames,
+            face_indices=face_indices,
+            patch_ids=patch_ids,
+        )
+        ordered["rasterized_planar_patch_ids"] = []
+        ordered["nearest_neighbor_fallback_patch_ids"] = [
+            int(value) for value in np.unique(patch_ids)
+        ]
 
     # 7a. Transform CAD-local samples and nozzle frames into World XYZ.
     # The source mesh and CAD-local arrays remain unchanged.
@@ -1623,6 +1949,17 @@ def generate_spray_trajectory(
         "patch_ids": ordered["patch_ids"],
         "segment_ids": ordered["segment_ids"],
         "segments": ordered["segments"],
+        "rasterization": {
+            "algorithm": "planar_triangle_union_clipped_serpentine",
+            "rasterized_planar_patch_ids": ordered.get("rasterized_planar_patch_ids", []),
+            "nearest_neighbor_fallback_patch_ids": ordered.get("nearest_neighbor_fallback_patch_ids", []),
+            "lane_spacing_mm": path_track_spacing_mm,
+            "lane_spacing_coordinate_units": path_track_spacing_units,
+            "lane_direction_policy": "longest_principal_axis",
+            "curved_patch_policy": "nearest_neighbor_fallback",
+            "travel_moves_between_segments": "NOT_GENERATED",
+            "coverage_verified": False,
+        },
         "sampling": {
             "coordinate_unit": source_unit,
             "sampling_spacing_mm": sampling_spacing_mm,
@@ -1771,7 +2108,9 @@ def _build_saved_report(
             "Surface samples and normals currently come from STL triangles, not exact STEP B-Rep face geometry.",
             "Open or non-watertight mesh normals may have uncertain outward direction and require review.",
             "The product CAD-to-World rigid transform is recorded and world-coordinate arrays are exported.",
-            "Fan width and overlap are recorded as planning inputs; raster spray lanes are not yet generated.",
+            "Planar patches are rasterized using triangle-union-clipped serpentine lanes; curved patches retain nearest-neighbor ordering.",
+            "Raster lane spacing uses the configured equivalent fan-width estimate and overlap; physical coating coverage is not verified.",
+            "Travel movements between separate raster segments are not generated.",
             "Travel movements between separate patches are not generated.",
             "Bend and cylinder estimates do not yet modify nozzle orientation.",
         ],
