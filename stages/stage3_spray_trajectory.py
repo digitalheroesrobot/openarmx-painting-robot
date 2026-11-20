@@ -5097,7 +5097,19 @@ def run_stage3_numerical_tests() -> dict:
     radial_distances = np.linalg.norm(
         curved_raster["surface_points"][:, :2], axis=1
     )
-    assert np.allclose(radial_distances, 40.0, atol=1e-5)
+    # The test cylinder is a 48-sided triangulated approximation. Surface
+    # points reconstructed barycentrically lie on its planar facets (chords),
+    # not on the ideal analytic radius except at polygon vertices.
+    polygon_apothem = 40.0 * math.cos(math.pi / 48.0)
+    assert np.all(radial_distances >= polygon_apothem - 1e-5), (
+        f"Curved raster points fell inside the cylinder mesh: "
+        f"minimum radius {float(np.min(radial_distances)):.6f} mm, "
+        f"mesh apothem {polygon_apothem:.6f} mm"
+    )
+    assert np.all(radial_distances <= 40.0 + 1e-5), (
+        f"Curved raster points exceeded the cylinder mesh radius: "
+        f"maximum radius {float(np.max(radial_distances)):.6f} mm"
+    )
     assert np.allclose(
         np.linalg.norm(
             curved_raster["nozzle_points"] - curved_raster["surface_points"],
