@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QPushButton,
 )
 from pyvistaqt import QtInteractor
+from vtkmodules.vtkRenderingCore import vtkCellPicker
 
 
 # ============================================================
@@ -115,6 +116,24 @@ class ProductViewer(QWidget):
         }
 
         self.plotter = QtInteractor(self)
+
+        # Direct single-click picking of the original mesh triangles.
+        # This avoids PyVista's area-selection interaction, which can
+        # conflict with the viewer's normal camera mouse controls.
+        self._patch_cell_picker = vtkCellPicker()
+        self._patch_cell_picker.SetTolerance(0.0005)
+        self._patch_mouse_press_position = None
+        interactor = self.plotter.iren.interactor
+        self._patch_press_observer_id = interactor.AddObserver(
+            "LeftButtonPressEvent",
+            self._on_patch_mouse_press,
+            1.0,
+        )
+        self._patch_release_observer_id = interactor.AddObserver(
+            "LeftButtonReleaseEvent",
+            self._on_patch_mouse_release,
+            1.0,
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -836,14 +855,14 @@ class ProductViewer(QWidget):
         mesh, face_mask, max_beams=48, radius_scale=0.055
     ):
         """
-        Build soft white locator light for the selected patch.
+        Build broad, soft white light columns instead of pointed cones.
 
-        Planar patches emit perpendicular to the surface. Cylindrical
-        patches emit along both directions of the fitted cylinder axis,
-        so the light travels toward both ends of a hole or tube.
+        Planar patches produce a broad column perpendicular to the face.
+        Cylindrical patches produce a coaxial column extending in both
+        directions along the cylinder axis, making a hole's location and
+        direction easier to read.
         """
         face_mask = np.asarray(face_mask, dtype=bool)
-
         if len(face_mask) != len(mesh.faces):
             raise ValueError(
                 "Selected patch mask does not match mesh triangles."
@@ -853,111 +872,101 @@ class ProductViewer(QWidget):
         if face_indices.size == 0:
             return pv.PolyData()
 
-        centers = np.asarray(mesh.triangles_center, dtype=float)
-        normals = np.asarray(mesh.face_normals, dtype=float)
-        valid = (
-            np.all(np.isfinite(centers), axis=1)
-            & np.all(np.isfinite(normals), axis=1)
-        )
-        face_indices = face_indices[valid[face_indices]]
-        if face_indices.size == 0:
+        faces = np.asarray(mesh.faces, dtype=np.int64)[face_indices]
+        vertex_ids = np.unique(faces)
+        points = np.asarray(mesh.vertices, dtype=float)[vertex_ids]
+        normals = np.asarray(mesh.face_normals, dtype=float)[face_indices]
+        normals = normals[
+            np.all(np.isfinite(normals), axis=1)
+            & (np.linalg.norm(normals, axis=1) > 1e-12)
+        ]
+        if len(points) < 3 or len(normals) == 0:
             return pv.PolyData()
 
-        patch_normals = normals[face_indices]
-        normal_lengths = np.linalg.norm(patch_normals, axis=1)
-        usable = normal_lengths > 1e-12
-        face_indices = face_indices[usable]
-        patch_normals = patch_normals[usable]
-        normal_lengths = normal_lengths[usable]
-        if face_indices.size == 0:
-            return pv.PolyData()
-
-        unit_normals = patch_normals / normal_lengths[:, None]
-        mean_normal = np.mean(unit_normals, axis=0)
-        normal_coherence = float(np.linalg.norm(mean_normal))
-
-        # A cylindrical wall has normals distributed around a circle:
-        # their covariance has two significant eigenvalues and one small
-        # eigenvalue. The eigenvector of the smallest eigenvalue is the
-        # cylinder axis. A planar patch instead has strongly aligned normals.
-        normal_covariance = unit_normals.T @ unit_normals / len(unit_normals)
-        eigenvalues, eigenvectors = np.linalg.eigh(normal_covariance)
-        cylindrical = (
-            float(eigenvalues[1]) > 0.12
-            and float(eigenvalues[0]) < 0.18
-            and normal_coherence < 0.80
-        )
-
-        if cylindrical:
-            cylinder_axis = eigenvectors[:, 0]
-            axis_length = float(np.linalg.norm(cylinder_axis))
-            if axis_length <= 1e-12:
-                cylindrical = False
-            else:
-                cylinder_axis = cylinder_axis / axis_length
-                # Limit the number of source points because each point
-                # creates two axial beams (toward both cylinder ends).
-                sample_limit = max(1, int(max_beams) // 2)
-                if face_indices.size > sample_limit:
-                    positions = np.linspace(
-                        0, face_indices.size - 1,
-                        num=sample_limit, dtype=int
-                    )
-                    face_indices = face_indices[positions]
-                beam_directions = (cylinder_axis, -cylinder_axis)
-        else:
-            # Planar patch: light travels perpendicular to the face.
-            mean_length = float(np.linalg.norm(mean_normal))
-            if mean_length > 1e-12:
-                surface_normal = mean_normal / mean_length
-            else:
-                surface_normal = unit_normals[0]
-            if face_indices.size > max_beams:
-                positions = np.linspace(
-                    0, face_indices.size - 1,
-                    num=max_beams, dtype=int
-                )
-                face_indices = face_indices[positions]
-            beam_directions = (surface_normal,)
-
-        dimensions = np.ptp(
-            np.asarray(mesh.vertices, dtype=float), axis=0
-        )
+        dimensions = np.ptp(np.asarray(mesh.vertices, dtype=float), axis=0)
         model_diagonal = float(np.linalg.norm(dimensions))
         if not np.isfinite(model_diagonal) or model_diagonal <= 0.0:
             return pv.PolyData()
 
-        # Half of the previous 0.72 x model-diagonal projection distance.
+        center = points.mean(axis=0)
+        centered = points - center
+        point_covariance = centered.T @ centered / max(len(centered), 1)
+        point_eigenvalues, point_eigenvectors = np.linalg.eigh(
+            point_covariance
+        )
+
+        unit_normals = normals / np.linalg.norm(
+            normals, axis=1
+        )[:, None]
+        normal_mean = unit_normals.mean(axis=0)
+        normal_coherence = float(np.linalg.norm(normal_mean))
+        normal_covariance = unit_normals.T @ unit_normals / len(unit_normals)
+        normal_eigenvalues, normal_eigenvectors = np.linalg.eigh(
+            normal_covariance
+        )
+
+        cylindrical = (
+            float(normal_eigenvalues[1]) > 0.12
+            and float(normal_eigenvalues[0]) < 0.18
+            and normal_coherence < 0.80
+        )
+
         beam_length = model_diagonal * 0.36
-        beam_radius = beam_length * float(radius_scale)
-        beams = []
+        cylinders = []
 
-        for face_index in face_indices:
-            origin = centers[face_index]
-            for direction in beam_directions:
-                direction = np.asarray(direction, dtype=float)
-                direction_length = float(np.linalg.norm(direction))
-                if not np.isfinite(direction_length) or direction_length <= 1e-12:
-                    continue
-                direction = direction / direction_length
+        if cylindrical:
+            # The smallest-eigenvalue normal direction is the cylinder axis.
+            axis = normal_eigenvectors[:, 0]
+            axis /= max(float(np.linalg.norm(axis)), 1e-12)
 
-                # Cone apex starts at the surface and its soft body expands
-                # along the selected projection direction.
-                cone_center = origin + direction * (beam_length * 0.5)
-                beams.append(
-                    pv.Cone(
-                        center=cone_center,
-                        direction=-direction,
-                        height=beam_length,
-                        radius=beam_radius,
-                        resolution=16,
-                        capping=True,
-                    )
+            axial = centered @ axis
+            radial_vectors = centered - axial[:, None] * axis[None, :]
+            radial_distances = np.linalg.norm(radial_vectors, axis=1)
+            radial_radius = float(np.median(radial_distances))
+
+            # The translucent column sits inside the cylindrical wall and
+            # spans both axial directions from the selected patch center.
+            radius = max(
+                radial_radius * 0.62,
+                model_diagonal * float(radius_scale) * 0.35,
+            )
+            beam_center = center
+            beam_direction = axis
+        else:
+            # A planar patch: project a broad column perpendicular to it.
+            normal = normal_mean
+            normal_length = float(np.linalg.norm(normal))
+            if normal_length <= 1e-12:
+                normal = point_eigenvectors[:, 0]
+            else:
+                normal = normal / normal_length
+
+            tangent_spans = np.sqrt(
+                np.maximum(point_eigenvalues[1:], 0.0)
+            )
+            narrow_span = float(np.min(tangent_spans))
+            radius = max(
+                narrow_span * 0.34,
+                model_diagonal * float(radius_scale),
+            )
+            beam_direction = normal
+            beam_center = center + normal * (beam_length * 0.5)
+
+        # Two translucent concentric cylindrical shells create a soft,
+        # broad-edged white column. No pointed cone is used.
+        for scale in (1.0, 0.78):
+            cylinders.append(
+                pv.Cylinder(
+                    center=beam_center,
+                    direction=beam_direction,
+                    radius=radius * scale,
+                    height=beam_length,
+                    resolution=40,
+                    capping=False,
                 )
+            )
 
-        if not beams:
-            return pv.PolyData()
-        return pv.MultiBlock(beams).combine()
+        return pv.MultiBlock(cylinders).combine()
 
     # =========================================================
     # EMPTY SCENE
@@ -1108,38 +1117,67 @@ class ProductViewer(QWidget):
 
         self._render_product(reset_camera=False)
 
-    def _on_patch_surface_picked(self, selected_mesh):
+    def _on_patch_mouse_press(self, interactor, event):
+        """Remember the mouse-down point; camera drags are not selections."""
+        self._patch_mouse_press_position = tuple(
+            interactor.GetEventPosition()
+        )
+
+    def _on_patch_mouse_release(self, interactor, event):
         """
-        Resolve a 3D cell-pick result to its original Stage 1 Patch ID.
+        Select the exact original triangle under a single left click.
+
+        The picker is restricted to the patch-map actor, and its cell ID
+        maps directly to the Stage 1 patch_labels array.
         """
-        if self.display_mode != "patches" or self.patch_labels is None:
+        if (
+            self.display_mode != "patches"
+            or self.patch_labels is None
+            or self._pose_actor is None
+            or self._patch_mouse_press_position is None
+        ):
+            self._patch_mouse_press_position = None
+            return
+
+        press_x, press_y = self._patch_mouse_press_position
+        self._patch_mouse_press_position = None
+        release_x, release_y = interactor.GetEventPosition()
+
+        # Ignore orbit/pan gestures; only a click (within 5 pixels) selects.
+        if max(abs(release_x - press_x), abs(release_y - press_y)) > 5:
             return
 
         try:
-            patch_values = np.asarray(
-                selected_mesh.cell_data["Surface Patch"]
-            ).reshape(-1)
-            patch_values = patch_values[
-                np.isfinite(patch_values)
-            ]
-            if patch_values.size == 0:
-                return
+            picker = self._patch_cell_picker
+            picker.InitializePickList()
+            picker.AddPickList(self._pose_actor)
+            picker.PickFromListOn()
 
-            patch_ids, counts = np.unique(
-                patch_values.astype(np.int64),
-                return_counts=True,
+            renderer = self.plotter.renderer
+            picked = picker.Pick(
+                release_x,
+                release_y,
+                0,
+                renderer,
             )
-            patch_id = int(patch_ids[int(np.argmax(counts))])
-
-            if not np.any(self.patch_labels == patch_id):
+            if not picked:
                 return
 
+            picked_actor = picker.GetActor()
+            if picked_actor != self._pose_actor:
+                return
+
+            cell_id = int(picker.GetCellId())
+            if cell_id < 0 or cell_id >= len(self.patch_labels):
+                return
+
+            patch_id = int(self.patch_labels[cell_id])
             self.set_selected_patch(patch_id)
             self.patch_selected.emit(patch_id)
 
         except Exception as exc:
             print(
-                "[PATCH PICKING WARNING] Could not resolve picked cell: "
+                "[PATCH PICKING WARNING] Direct cell pick failed: "
                 f"{type(exc).__name__}: {exc}"
             )
 
@@ -1974,7 +2012,7 @@ class ProductViewer(QWidget):
                             beam_actor = self.plotter.add_mesh(
                                 beam_polydata,
                                 color="#FFFFFF",
-                                opacity=0.11,
+                                opacity=0.075,
                                 show_edges=False,
                                 lighting=False,
                                 ambient=1.0,
@@ -1994,7 +2032,7 @@ class ProductViewer(QWidget):
                     surface_actor = self.plotter.add_mesh(
                         selected_polydata,
                         color="#FFFFFF",
-                        opacity=0.18,
+                        opacity=0.14,
                         show_edges=False,
                         smooth_shading=False,
                         lighting=False,
@@ -2112,26 +2150,8 @@ class ProductViewer(QWidget):
 
         self.plotter.render()
 
-        # Let the operator select a surface patch directly in the 3D view.
-        # The rendered cell scalar carries the exact Patch ID.
-        if (
-            self.display_mode == "patches"
-            and self.patch_labels is not None
-            and self._pose_actor is not None
-        ):
-            try:
-                self.plotter.enable_cell_picking(
-                    callback=self._on_patch_surface_picked,
-                    through=False,
-                    show=False,
-                    show_message=False,
-                    style="wireframe",
-                )
-            except Exception as exc:
-                print(
-                    "[PATCH PICKING WARNING] "
-                    f"{type(exc).__name__}: {exc}"
-                )
+        # Direct VTK cell picking is installed once on the interactor.
+        # It is active only while Stage 1 patch mode is displayed.
 
         if self._pose_actor is not None:
             self._update_pose_readout()
