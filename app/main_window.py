@@ -2475,10 +2475,24 @@ class MainWindow(QMainWindow):
         if self.current_stage3_parameters is None:
             return False
 
-        return (
-            self._get_current_spray_parameters()
-            == self.current_stage3_parameters
-        )
+        current = self._get_current_spray_parameters()
+        previous = self.current_stage3_parameters
+        if current.keys() != previous.keys():
+            return False
+
+        for key, value in current.items():
+            if key == "product_transform_4x4":
+                if not np.allclose(
+                    np.asarray(value, dtype=float),
+                    np.asarray(previous[key], dtype=float),
+                    rtol=0.0,
+                    atol=1e-8,
+                ):
+                    return False
+            elif value != previous[key]:
+                return False
+
+        return True
 
     def _on_spray_parameter_changed(self, value=None):
         if self._operation_running:
