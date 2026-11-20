@@ -132,7 +132,7 @@ class SprayPatternPreview(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.profile = deepcopy(DEFAULT_SPRAYER_PROFILE)
-        self.setMinimumSize(350, 420)
+        self.setMinimumSize(350, 460)
 
     def set_profile(self, profile: dict):
         self.profile = deepcopy(profile)
@@ -147,11 +147,12 @@ class SprayPatternPreview(QWidget):
         height = self.height()
         cx = width * 0.50
         tip_y = 118.0
-        bottom_y = height - 105.0
+        bottom_y = height - 130.0
 
         profile = self.profile
         standoff = max(1.0, float(profile.get("standoff_mm", 180.0)))
         nozzle_length = max(0.0, float(profile.get("nozzle_length_mm", 25.0)))
+        nozzle_orifice = max(0.0, float(profile.get("nozzle_orifice_mm", 0.0)))
         angle = max(1.0, min(150.0, float(profile.get("spray_cone_angle_deg", 74.0))))
         reference_distance = max(1.0, float(profile.get("fan_reference_distance_mm", 200.0)))
         pattern_type = str(profile.get("pattern_type", "flat_fan"))
@@ -217,21 +218,25 @@ class SprayPatternPreview(QWidget):
 
         painter.setPen(QColor("#EAF7FC"))
         painter.drawText(
-            14, int(bottom_y + 34),
+            14, int(bottom_y + 24),
             f"SPRAY WIDTH @ {standoff:.0f} mm: {spray_width_mm:.1f} mm"
         )
         painter.drawText(
-            14, int(bottom_y + 54),
+            14, int(bottom_y + 44),
             f"FULL INCLUDED ANGLE: {angle:.1f} deg"
         )
         painter.drawText(
-            14, int(bottom_y + 74),
+            14, int(bottom_y + 64),
             f"NOZZLE LENGTH: {nozzle_length:.1f} mm"
+        )
+        painter.drawText(
+            14, int(bottom_y + 84),
+            f"NOZZLE ORIFICE: {nozzle_orifice:.2f} mm"
         )
         painter.setPen(QColor("#8FA8B7"))
         painter.drawText(
-            14, height - 12,
-            f"Reference fan width at {reference_distance:.0f} mm: "
+            14, height - 14,
+            f"Reference fan width @ {reference_distance:.0f} mm: "
             f"{2.0 * reference_distance * math.tan(math.radians(angle * 0.5)):.1f} mm"
         )
         painter.end()
