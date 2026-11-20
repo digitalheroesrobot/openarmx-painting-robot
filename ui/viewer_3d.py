@@ -56,6 +56,26 @@ CLASSIFICATION_COLORS = [
     "#FF5252",
 ]
 
+# ============================================================
+# BRIGHT PATCH PALETTE
+# ============================================================
+
+# High-luminance colors remain distinguishable against the dark viewport.
+PATCH_COLORS = [
+    "#00E5FF",  # bright cyan
+    "#FF4DFF",  # vivid magenta
+    "#A8FF00",  # electric lime
+    "#FFB000",  # amber
+    "#40A9FF",  # bright blue
+    "#FF5C8A",  # pink
+    "#00F5A0",  # mint green
+    "#B388FF",  # violet
+    "#FFF04A",  # luminous yellow
+    "#FF784F",  # coral
+    "#4DFFE1",  # turquoise
+    "#E6FF4D",  # chartreuse
+]
+
 MAX_DIRECTION_ARROWS = 300
 
 
@@ -1886,10 +1906,14 @@ class ProductViewer(QWidget):
             # still maps its cell ID to the original patch_labels array.
             # The selected patch is made transparent here and drawn once,
             # at its exact original surface location, by the highlight actor.
-            surface_opacity = np.full(
-                len(self.patch_labels), 0.16, dtype=float
+            # Before a Stage 2 patch is selected, keep the complete
+            # product fully opaque. Fade the surrounding surfaces only
+            # while an individual paintable candidate is being inspected.
+            surface_opacity = np.ones(
+                len(self.patch_labels), dtype=float
             )
             if self.selected_patch_id is not None:
+                surface_opacity.fill(0.16)
                 surface_opacity[
                     self.patch_labels == self.selected_patch_id
                 ] = 0.0
@@ -1898,7 +1922,8 @@ class ProductViewer(QWidget):
             self._pose_actor = self.plotter.add_mesh(
                 polydata,
                 scalars="Surface Patch",
-                cmap="turbo",
+                cmap=PATCH_COLORS,
+                categories=True,
                 opacity="Surface Opacity",
                 show_edges=True,
                 edge_color="#182C38",
