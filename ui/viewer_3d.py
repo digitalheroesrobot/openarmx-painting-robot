@@ -93,6 +93,7 @@ class ProductViewer(QWidget):
         self.patch_labels = None
         self.face_status_labels = None
         self.trajectory_data = None
+        self.trajectory_path_statistics = {}
         self.face_surface_types = None
 
         # Currently selected Stage 2 surface patch.
@@ -451,6 +452,16 @@ class ProductViewer(QWidget):
         playback_row.addWidget(self.trajectory_playback_speed)
 
         root.addLayout(playback_row)
+
+        self.trajectory_path_stats_label = QLabel(
+            "PATH SAMPLES | Planar: —  Curved: —  Fallback: —  Total: —"
+        )
+        self.trajectory_path_stats_label.setMinimumHeight(18)
+        self.trajectory_path_stats_label.setToolTip(
+            "Counts are based on the final generated playback samples and "
+            "the path generator assigned to each surface patch."
+        )
+        root.addWidget(self.trajectory_path_stats_label)
         return panel
 
     def _on_trajectory_visibility_changed(self, key, checked):
@@ -464,6 +475,51 @@ class ProductViewer(QWidget):
 
     def _set_trajectory_controls_visible(self, visible):
         self.display_control_panel.setVisible(bool(visible))
+
+    def _update_trajectory_path_statistics_label(self):
+        stats = self.trajectory_path_statistics
+        if not hasattr(self, "trajectory_path_stats_label"):
+            return
+        if not stats:
+            self.trajectory_path_stats_label.setText(
+                "PATH SAMPLES | Breakdown unavailable"
+            )
+            self.trajectory_path_stats_label.setToolTip(
+                "Regenerate Stage 3 with the updated trajectory diagnostics."
+            )
+            return
+
+        planar = int(stats.get("planar_sample_count", 0))
+        curved = int(stats.get("curved_sample_count", 0))
+        fallback = int(stats.get("fallback_sample_count", 0))
+        total = int(stats.get("playback_sample_count", 0))
+        source = int(stats.get("source_candidate_sample_count", 0))
+        planar_segments = int(stats.get("planar_segment_count", 0))
+        curved_segments = int(stats.get("curved_segment_count", 0))
+        fallback_segments = int(stats.get("fallback_segment_count", 0))
+
+        self.trajectory_path_stats_label.setText(
+            f"PATH SAMPLES | Planar: {planar:,}  Curved: {curved:,}  "
+            f"Fallback: {fallback:,}  Total: {total:,}"
+        )
+        per_patch = stats.get("per_patch", [])
+        patch_lines = [
+            f"Patch {int(item.get('patch_id', -1))}: "
+            f"{item.get('path_type', 'unknown')} | "
+            f"{int(item.get('sample_count', 0)):,} samples | "
+            f"{int(item.get('segment_count', 0))} segments"
+            for item in per_patch
+        ]
+        tooltip_lines = [
+            f"Pre-raster candidate samples: {source:,}",
+            f"Final playback samples: {total:,}",
+            f"Segments — planar: {planar_segments}, curved: {curved_segments}, "
+            f"fallback: {fallback_segments}",
+            "Per-patch breakdown:",
+            *patch_lines,
+            str(stats.get("note", "")),
+        ]
+        self.trajectory_path_stats_label.setToolTip("\n".join(tooltip_lines))
 
     # =========================================================
     # MANUAL REFERENCE POSE CONTROLS
@@ -1481,6 +1537,10 @@ class ProductViewer(QWidget):
         ):
             raise ValueError("Trajectory product transform must contain a rigid rotation.")
         data["parameters"] = parameters
+        self.trajectory_path_statistics = trajectory_data.get(
+            "path_statistics", {}
+        )
+        self._update_trajectory_path_statistics_label()
         self.trajectory_product_transform = transform.copy()
         self._last_product_transform = transform.copy()
 
