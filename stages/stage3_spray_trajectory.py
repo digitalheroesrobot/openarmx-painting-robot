@@ -4159,6 +4159,46 @@ def run_stage3_numerical_tests() -> dict:
     assert curve_speeds[2] < 150.0
     assert speed_metadata["method"].startswith("normal_curvature_and_path_turning")
 
+    inspection_test_mesh = trimesh.Trimesh(
+        vertices=np.asarray([
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [10.0, 10.0, 0.0],
+            [0.0, 10.0, 0.0],
+        ], dtype=np.float64),
+        faces=np.asarray([[0, 1, 2], [0, 2, 3]], dtype=np.int64),
+        process=False,
+    )
+    inspection_directions = np.asarray([
+        [0.0, 0.0, -1.0],
+        [0.0, 0.0, -1.0],
+        [0.0, math.sin(math.radians(10.0)), -math.cos(math.radians(10.0))],
+        [0.0, math.sin(math.radians(10.0)), -math.cos(math.radians(10.0))],
+    ], dtype=np.float64)
+    inspection_result = _inspect_generated_trajectory(
+        mesh=inspection_test_mesh,
+        source_face_indices=np.asarray([0, 1], dtype=np.int64),
+        trajectory={
+            "face_indices": np.asarray([0, 0, 1, 1], dtype=np.int64),
+            "nozzle_points": np.asarray([
+                [0.0, 0.0, 180.0],
+                [10.0, 0.0, 180.0],
+                [0.0, 10.0, 180.0],
+                [10.0, 10.0, 180.0],
+            ], dtype=np.float64),
+            "spray_directions": inspection_directions,
+            "segment_ids": np.asarray([0, 0, 1, 1], dtype=np.int64),
+        },
+        coordinate_unit="mm",
+        sample_spacing_mm=10.0,
+        track_spacing_mm=20.0,
+    )
+    assert abs(inspection_result["surface_face_representation_percent"] - 100.0) < 1e-9
+    assert inspection_result["continuity"]["jump_outlier_count"] == 0
+    assert inspection_result["orientation"]["maximum_change_deg"] < 11.0
+    assert inspection_result["spray_control"]["spray_off_transition_count"] == 1
+    assert inspection_result["spray_control"]["spray_on_sample_count"] == 3
+
     return {
         "status": "PASS",
         "tests": {
@@ -4187,6 +4227,7 @@ def run_stage3_numerical_tests() -> dict:
             "adaptive_speed_turn_reduction": "PASS",
             "adaptive_speed_curvature_reduction": "PASS",
             "adaptive_speed_time_monotonicity": "PASS",
+            "trajectory_coverage_continuity_orientation_and_spray_boundaries": "PASS",
         },
         "sample_count": int(sample_count),
         "unit_standoff_tests": unit_test_results,
