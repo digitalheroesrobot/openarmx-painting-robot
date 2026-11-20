@@ -577,6 +577,44 @@ def run_step_loader_tests():
     print("[PASS] STEP extension validation")
     print("[PASS] Missing-file validation")
 
+    # Pure topology test: shared B-Rep edge, open boundary, and seam use.
+    class _FakeEdge:
+        def __init__(self, identity):
+            self.identity = identity
+        def IsSame(self, other):
+            return isinstance(other, _FakeEdge) and self.identity == other.identity
+
+    class _FakeFace:
+        def __init__(self, edges):
+            self.edges = edges
+
+    class _FakeExplorer:
+        def __init__(self, face, _edge_type):
+            self.items = list(face.edges)
+            self.index = 0
+        def More(self):
+            return self.index < len(self.items)
+        def Current(self):
+            return self.items[self.index]
+        def Next(self):
+            self.index += 1
+
+    fake_faces = [
+        _FakeFace([_FakeEdge("shared"), _FakeEdge("boundary-a")]),
+        _FakeFace([_FakeEdge("shared"), _FakeEdge("boundary-b")]),
+        _FakeFace([_FakeEdge("seam"), _FakeEdge("seam")]),
+    ]
+    topology = _build_brep_face_edge_adjacency(
+        fake_faces, _FakeExplorer, object()
+    )
+    assert topology["face_adjacency"]["1"] == [2]
+    assert topology["face_adjacency"]["2"] == [1]
+    assert topology["summary"]["shared_manifold_edges"] == 1
+    assert topology["summary"]["boundary_edges"] == 2
+    assert topology["summary"]["seam_or_repeated_use_edges"] == 1
+    assert topology["summary"]["non_manifold_edges"] == 0
+    print("[PASS] Exact B-Rep shared-edge adjacency and seam classification")
+
     # Display conversion tests: exact source report remains in millimetres.
     sample_report = {
         "bounding_box": {"dimensions_mm": [100.0, 200.0, 300.0]},
