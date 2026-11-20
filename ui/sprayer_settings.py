@@ -284,20 +284,19 @@ class SprayerSettingsDialog(QDialog):
     """Profile editor with immediate spray-envelope preview and JSON import/export."""
 
     def _cancel_dialog(self):
-        self._cancel_requested = True
+        self._close_requested = True
         super().reject()
 
     def reject(self):
-        # Ignore Escape and implicit reject requests; the visible Cancel
-        # button is the only control that is allowed to close this dialog.
-        if self._cancel_requested:
+        # Ignore Escape and implicit reject requests. Closing is allowed
+        # through the window close button, Save Profile, or Cancel.
+        if self._close_requested:
             super().reject()
 
     def closeEvent(self, event):
-        if self._cancel_requested:
-            event.accept()
-        else:
-            event.ignore()
+        # The window's X button is an explicit close action.
+        self._close_requested = True
+        event.accept()
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
@@ -313,7 +312,7 @@ class SprayerSettingsDialog(QDialog):
         parent=None,
     ):
         super().__init__(parent)
-        self._cancel_requested = False
+        self._close_requested = False
         self.config_path = Path(config_path)
         self.profiles = deepcopy(profiles)
         self.current_profile = deepcopy(current_profile)
@@ -631,6 +630,8 @@ class SprayerSettingsDialog(QDialog):
             self._populate_profiles()
             self.profile_selector.setCurrentText(profile["name"])
             self._refresh_preview()
+            self._close_requested = True
+            super().accept()
         except Exception as exc:
             QMessageBox.warning(self, "Sprayer Profile", str(exc))
 
