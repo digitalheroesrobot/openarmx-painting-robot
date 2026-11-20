@@ -2270,21 +2270,143 @@ def analyze_geometry(
     return report, patch_labels
 
 
+def _detect_holes_from_step_brep(mesh: trimesh.Trimesh) -> list[dict]:
+    """
+    Detect cylindrical bore candidates from exact Open CASCADE STEP data.
+
+    The STEP loader stores the analytic cylinder axis/radius per original
+    B-Rep face. Faces on the same cylindrical support are merged by coaxial
+    geometry; no tessellated-mesh cylinder fitting is involved.
+    """
+    report = mesh.metadata.get("step_geometry_report", {})
+    face_records = report.get("faces", [])
+    cylinders = []
+
+    for face in face_records:
+        cylinder = face.get("cylinder_geometry_mm")
+        if face.get("surface_type") != "CYLINDER" or not isinstance(cylinder, dict):
+            continue
+        try:
+            location = np.asarray(cylinder["axis_location_mm"], dtype=np.float64)
+            axis = np.asarray(cylinder["axis_direction"], dtype=np.float64)
+            radius = float(cylinder["radius_mm"])
+            centroid = np.asarray(face["centroid_mm"], dtype=np.float64)
+            if location.shape != (3,) or axis.shape != (3,) or centroid.shape != (3,):
+                continue
+            axis_norm = float(np.linalg.norm(axis))
+            if axis_norm <= 1e-12 or radius <= 0.0:
+                continue
+            axis /= axis_norm
+            if not (np.all(np.isfinite(location)) and np.all(np.isfinite(axis))
+                    and np.all(np.isfinite(centroid)) and np.isfinite(radius)):
+                continue
+            cylinders.append({
+                "face_id": int(face["face_id"]),
+                "location": location,
+                "axis": axis,
+                "radius": radius,
+                "centroid": centroid,
+                "orientation": str(face.get("orientation", "UNKNOWN")),
+                "adjacent_face_ids": [int(v) for v in face.get("adjacent_face_ids", [])],
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    # Group face records sharing the same analytic cylinder. Direction sign
+    # is irrelevant; axis-line distance is measured perpendicular to axis.
+    groups = []
+    for item in cylinders:
+        assigned = False
+        for group in groups:
+            ref = group[0]
+            parallel = abs(float(np.dot(item["axis"], ref["axis"])))
+            delta = item["location"] - ref["location"]
+            line_offset = delta - float(np.dot(delta, ref["axis"])) * ref["axis"]
+            same_radius = abs(item["radius"] - ref["radius"]) <= max(
+                0.02, ref["radius"] * 1e-5
+            )
+            if parallel >= 1.0 - 1e-8 and np.linalg.norm(line_offset) <= 0.05 and same_radius:
+                group.append(item)
+                assigned = True
+                break
+        if not assigned:
+            groups.append([item])
+
+    candidates = []
+    for group in groups:
+        reversed_faces = [v for v in group if v["orientation"] == "REVERSED"]
+        forward_faces = [v for v in group if v["orientation"] != "REVERSED"]
+        # For an outward-oriented solid, the bore wall's material-outward
+        # normal points toward the cavity, opposite the analytic cylinder
+        # normal; Open CASCADE represents this with a reversed face.
+        if not reversed_faces or len(reversed_faces) <= len(forward_faces):
+            continue
+
+        ref = group[0]
+        axis = ref["axis"].copy()
+        location = ref["location"].copy()
+        axial_positions = [
+            float(np.dot(v["centroid"] - location, axis)) for v in group
+        ]
+        axis_center = location + float(np.mean(axial_positions)) * axis
+        closest_axis_point = location - float(np.dot(location, axis)) * axis
+        axis_distance = float(np.linalg.norm(closest_axis_point))
+        center_distance = float(np.linalg.norm(axis_center))
+        if not np.isfinite(axis_distance + center_distance):
+            continue
+
+        face_ids = sorted(v["face_id"] for v in group)
+        adjacent_ids = sorted({
+            neighbor
+            for v in group
+            for neighbor in v["adjacent_face_ids"]
+            if neighbor not in face_ids
+        })
+        radius = float(np.mean([v["radius"] for v in group]))
+        orientation_ratio = len(reversed_faces) / len(group)
+        candidates.append({
+            "hole_id": len(candidates) + 1,
+            "patch_id": None,
+            "brep_face_ids": face_ids,
+            "adjacent_face_ids": adjacent_ids,
+            "cylindrical_face_count": len(group),
+            "axis_center_coordinate_units": axis_center.tolist(),
+            "axis_direction": axis.tolist(),
+            "closest_axis_point_to_origin_coordinate_units": closest_axis_point.tolist(),
+            "radius_coordinate_units": radius,
+            "diameter_coordinate_units": 2.0 * radius,
+            "origin_to_axis_distance_coordinate_units": axis_distance,
+            "origin_to_axis_center_distance_coordinate_units": center_distance,
+            "coordinate_unit": "mm",
+            "confidence": float(orientation_ratio),
+            "fit_relative_error": 0.0,
+            "classification": "STEP_BREP_INTERNAL_CYLINDER_CANDIDATE",
+            "note": "Exact STEP analytic cylinder; through/blind status requires boundary and solid-topology analysis.",
+        })
+    return candidates
+
+
 def detect_hole_candidates(
     mesh: trimesh.Trimesh,
     coordinate_unit: str | None = None,
 ) -> list[dict]:
     """
-    Detect internal cylindrical surface candidates without running the
-    complete Stage 1 report (notably the more expensive thickness analysis).
-
-    Distances are measured from the original CAD coordinate origin (0,0,0).
-    A candidate is not proof of a through-hole: blind cavities and partial
-    internal cylindrical surfaces may also be reported.
+    Detect STEP hole-axis candidates from exact B-Rep cylinders first.
+    The tessellated-mesh fitting path remains as a compatibility fallback
+    for meshes that do not contain exact STEP cylinder metadata.
     """
     if not isinstance(mesh, trimesh.Trimesh):
         raise TypeError("mesh must be a trimesh.Trimesh object.")
     if len(mesh.vertices) == 0 or len(mesh.faces) == 0:
+        return []
+
+    step_report = mesh.metadata.get("step_geometry_report")
+    if isinstance(step_report, dict) and step_report.get("faces"):
+        exact_candidates = _detect_holes_from_step_brep(mesh)
+        if exact_candidates:
+            return exact_candidates
+        # Do not silently fall back to noisy mesh inference for STEP files:
+        # return no exact candidates and let the caller display diagnostics.
         return []
 
     unit = _get_coordinate_unit(mesh, coordinate_unit)
@@ -2302,63 +2424,37 @@ def detect_hole_candidates(
         if len(face_indices) < CYLINDER_MIN_FACES:
             continue
         fit = _fit_cylinder(
-            topology_mesh,
-            face_indices,
-            valid_face_mask,
+            topology_mesh, face_indices, valid_face_mask,
             thresholds["cylinder_min_radius_coordinate_units"],
         )
-        if (
-            fit.get("status") != "candidate"
-            or fit.get("surface_type") != "internal_cylindrical_surface"
-        ):
+        if fit.get("status") != "candidate" or fit.get("surface_type") != "internal_cylindrical_surface":
             continue
-
         axis = np.asarray(fit["axis_direction"], dtype=np.float64)
+        center = np.asarray(fit["axis_center_coordinate_units"], dtype=np.float64)
         axis_length = float(np.linalg.norm(axis))
-        center = np.asarray(
-            fit["axis_center_coordinate_units"], dtype=np.float64
-        )
-        if (
-            axis.shape != (3,)
-            or center.shape != (3,)
-            or not np.all(np.isfinite(axis))
-            or not np.all(np.isfinite(center))
-            or not np.isfinite(axis_length)
-            or axis_length <= 1e-12
-        ):
+        if axis.shape != (3,) or center.shape != (3,) or axis_length <= 1e-12:
             continue
         axis /= axis_length
-
-        # Orthogonal projection of CAD origin onto the infinite hole axis.
         closest_axis_point = center - float(np.dot(center, axis)) * axis
         axis_distance = float(np.linalg.norm(closest_axis_point))
         center_distance = float(np.linalg.norm(center))
         if not np.isfinite(axis_distance + center_distance):
             continue
-
         holes.append({
             "hole_id": len(holes) + 1,
             "patch_id": int(patch_id),
             "axis_center_coordinate_units": center.tolist(),
             "axis_direction": axis.tolist(),
-            "closest_axis_point_to_origin_coordinate_units":
-                closest_axis_point.tolist(),
-            "radius_coordinate_units": float(
-                fit["radius_coordinate_units"]
-            ),
-            "diameter_coordinate_units": float(
-                fit["diameter_coordinate_units"]
-            ),
+            "closest_axis_point_to_origin_coordinate_units": closest_axis_point.tolist(),
+            "radius_coordinate_units": float(fit["radius_coordinate_units"]),
+            "diameter_coordinate_units": float(fit["diameter_coordinate_units"]),
             "origin_to_axis_distance_coordinate_units": axis_distance,
             "origin_to_axis_center_distance_coordinate_units": center_distance,
             "coordinate_unit": unit,
             "confidence": float(fit.get("confidence", 0.0)),
             "fit_relative_error": float(fit.get("relative_error", 0.0)),
-            "classification": "INTERNAL_CYLINDRICAL_SURFACE_CANDIDATE",
-            "note": (
-                "Internal cylindrical surface candidate; confirm whether "
-                "it is a through-hole or blind hole using exact B-Rep topology."
-            ),
+            "classification": "MESH_INTERNAL_CYLINDER_FALLBACK",
+            "note": "Mesh-derived candidate; not exact STEP topology.",
         })
     return holes
 
