@@ -80,8 +80,10 @@ class ProductViewer(QWidget):
         self.display_unit = "mm"
 
         self.source_origin = np.zeros(3, dtype=float)
+        self.rotation_pivot = np.zeros(3, dtype=float)
 
-        # The STEP file's own CAD origin (0, 0, 0) is the rotation pivot.
+        # Default display rotation is 180 degrees about local Z, centered
+        # on the product bounding box; source CAD geometry remains unchanged.
         self.pose_manipulation_enabled = False
         self._pose_actor = None
         self._actor_style = None
@@ -375,7 +377,7 @@ class ProductViewer(QWidget):
         self.apply_workspace_button.clicked.connect(self._apply_workspace_bounds)
         layout.addWidget(self.apply_workspace_button)
 
-        self.pose_status_label = QLabel("World: +X chain/right, +Y inward, +Z down. Rotation pivot: STEP CAD origin.")
+        self.pose_status_label = QLabel("World: +X chain/right, +Y inward, +Z down. Default pose: Z +180° about product bounding-box center.")
         self.pose_status_label.setMinimumWidth(230)
         layout.addWidget(self.pose_status_label, 1)
 
@@ -417,8 +419,8 @@ class ProductViewer(QWidget):
             self._actor_style = vtkInteractorStyleTrackballActor()
             self._actor_style.SetDefaultRenderer(self.plotter.renderer)
             self.plotter.interactor.SetInteractorStyle(self._actor_style)
-            # The STEP CAD origin is the fixed pivot for object rotation.
-            self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
+            # Keep interactive rotation centered on the product bounding box.
+            self._pose_actor.SetOrigin(*self.rotation_pivot.tolist())
             def on_interaction(caller, event):
                 self._sync_world_position_inputs()
                 self._update_pose_readout()
@@ -473,8 +475,8 @@ class ProductViewer(QWidget):
                 "Z": "VERTICALLY_DOWN",
             },
             "product_frame": "PRODUCT_CAD",
-            "rotation_pivot": "STEP_CAD_ORIGIN",
-            "rotation_pivot_cad": [0.0, 0.0, 0.0],
+            "rotation_pivot": "PRODUCT_BOUNDING_BOX_CENTER",
+            "rotation_pivot_cad": self.rotation_pivot.tolist(),
             "position_world_xyz_source_units": matrix[:3, 3].tolist(),
             "roll_pitch_yaw_world_xyz_deg": self._rotation_to_rpy(rotation).tolist(),
             "rotation_matrix_3x3": rotation.tolist(),
@@ -517,11 +519,10 @@ class ProductViewer(QWidget):
     def _reset_reference_pose(self):
         if self._pose_actor is not None:
             self._pose_actor.SetPosition(0.0, 0.0, 0.0)
-            self._pose_actor.SetOrientation(0.0, 0.0, 0.0)
+            self._pose_actor.SetOrientation(0.0, 0.0, 180.0)
             self._pose_actor.SetScale(1.0, 1.0, 1.0)
-            self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
-            for field in self.world_position_inputs:
-                field.setValue(0.0)
+            self._pose_actor.SetOrigin(*self.rotation_pivot.tolist())
+            self._sync_world_position_inputs()
             self.plotter.render()
         self._update_pose_readout()
 
@@ -547,6 +548,8 @@ class ProductViewer(QWidget):
         mesh_copy = mesh.copy()
 
         self.source_origin = self._calculate_cad_origin(mesh_copy)
+        bounds = np.asarray(mesh_copy.bounds, dtype=float)
+        self.rotation_pivot = (bounds[0] + bounds[1]) * 0.5
 
         self.source_to_view_transform = np.eye(4, dtype=float)
         self.view_to_source_transform = np.eye(4, dtype=float)
@@ -1378,7 +1381,13 @@ class ProductViewer(QWidget):
                 specular=0.25,
                 specular_power=20,
             )
-            self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
+            # Default product presentation: rotate 180 degrees about local Z
+            # around the product bounding-box center. Keep source mesh vertices
+            # and CAD-face/triangle correspondence unchanged.
+            self._pose_actor.SetOrigin(*self.rotation_pivot.tolist())
+            self._pose_actor.SetOrientation(0.0, 0.0, 180.0)
+            self._sync_world_position_inputs()
+            self._update_pose_readout()
 
         # -------------------------------------------------
         # COMMON VIEWER ELEMENTS
