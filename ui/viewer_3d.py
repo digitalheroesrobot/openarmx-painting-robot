@@ -94,6 +94,11 @@ class ProductViewer(QWidget):
         self._actor_style = None
         self._pose_interaction_callback = None
         self._cad_axes_actor = None
+        self._rotation_widget = None
+        self._rotation_representation = None
+        self._rotation_last_matrix = None
+        self._selection_observer_tag = None
+        self._product_selected = False
         # Display-only bounds; operator must set actual work-cell extents.
         self.workspace_dimensions = np.array([1000.0, 1000.0, 1000.0], dtype=float)
 
@@ -534,23 +539,110 @@ class ProductViewer(QWidget):
         self.pose_status_label.setText("World display box updated; extents are configurable visualization bounds.")
 
     def _install_actor_interaction(self):
+        """Install camera navigation and a selectable local-axis rotation gizmo."""
         if self._pose_actor is None:
             return
         try:
-            from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballActor
-            self._actor_style = vtkInteractorStyleTrackballActor()
+            from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
+            from vtkmodules.vtkInteractionWidgets import vtkOrientationWidget, vtkOrientationRepresentation
+            from vtkmodules.vtkRenderingCore import vtkPropPicker
+
+            interactor = self.plotter.interactor
+            self._actor_style = vtkInteractorStyleTrackballCamera()
             self._actor_style.SetDefaultRenderer(self.plotter.renderer)
-            self.plotter.interactor.SetInteractorStyle(self._actor_style)
-            # Keep interactive rotation centered on the product bounding box.
-            self._pose_actor.SetOrigin(*self.rotation_pivot.tolist())
-            def on_interaction(caller, event):
+            interactor.SetInteractorStyle(self._actor_style)
+
+            # A CAD-origin-centered, three-ring gizmo is shown only after
+            # the product itself has been selected. It controls rotation only.
+            self._rotation_representation = vtkOrientationRepresentation()
+            self._rotation_representation.SetShowArrows(True)
+            self._rotation_representation.SetArrowLength(0.18)
+            self._rotation_representation.SetArrowTipLength(0.30)
+            self._rotation_representation.SetArrowTipRadius(0.055)
+            self._rotation_representation.SetArrowShaftRadius(0.012)
+            self._rotation_representation.SetOrientation(self._pose_actor.GetOrientation())
+
+            bounds = np.asarray(self.current_mesh.bounds, dtype=float)
+            radius = max(float(np.max(np.abs(bounds))), float(np.max(self.current_mesh.extents)) * 0.35, 1.0)
+            gizmo_bounds = np.array([-radius, radius, -radius, radius, -radius, radius], dtype=float)
+            self._rotation_representation.PlaceWidget(gizmo_bounds)
+
+            self._rotation_widget = vtkOrientationWidget()
+            self._rotation_widget.SetInteractor(interactor)
+            self._rotation_widget.SetDefaultRenderer(self.plotter.renderer)
+            self._rotation_widget.SetRepresentation(self._rotation_representation)
+            self._rotation_widget.SetPriority(0.8)
+            self._rotation_widget.SetEnabled(0)
+
+            def on_rotation_start(caller, event):
+                self._rotation_last_matrix = self._vtk_transform_matrix(
+                    self._rotation_representation.GetTransform()
+                )
+
+            def on_rotation(caller, event):
+                current = self._vtk_transform_matrix(self._rotation_representation.GetTransform())
+                if self._rotation_last_matrix is None:
+                    self._rotation_last_matrix = current
+                    return
+                delta_local = current[:3, :3] @ self._rotation_last_matrix[:3, :3].T
+                actor_matrix = self._actor_matrix_array()
+                updated = actor_matrix[:3, :3] @ delta_local
+                transform = self._vtk_matrix_from_numpy(np.block([
+                    [updated, actor_matrix[:3, 3:4]],
+                    [np.zeros((1, 3)), np.ones((1, 1))],
+                ]))
+                from vtkmodules.vtkCommonTransforms import vtkTransform
+                vtk_transform = vtkTransform()
+                vtk_transform.SetMatrix(transform)
+                self._pose_actor.SetOrientation(*vtk_transform.GetOrientation())
+                self._rotation_last_matrix = current
+                self._rotation_representation.SetOrientation(self._pose_actor.GetOrientation())
                 self._sync_world_position_inputs()
                 self._update_pose_readout()
-            self._pose_interaction_callback = on_interaction
-            self._actor_style.AddObserver("InteractionEvent", self._pose_interaction_callback)
+
+            self._rotation_widget.AddObserver("StartInteractionEvent", on_rotation_start)
+            self._rotation_widget.AddObserver("InteractionEvent", on_rotation)
+
+            picker = vtkPropPicker()
+
+            def select_product(caller, event):
+                if self._pose_actor is None or self._rotation_widget is None:
+                    return
+                x, y = interactor.GetEventPosition()
+                picked = picker.Pick(x, y, 0, self.plotter.renderer)
+                selected_actor = picker.GetActor() if picked else None
+                selected = selected_actor == self._pose_actor
+                self._set_product_selected(selected)
+
+            self._selection_observer_tag = interactor.AddObserver(
+                "LeftButtonPressEvent", select_product, 0.1
+            )
         except Exception as exc:
-            self.pose_status_label.setText(f"3D object manipulation unavailable: {exc}")
+            self.pose_status_label.setText(f"3D product rotation tool unavailable: {exc}")
             self.confirm_pose_button.setEnabled(False)
+
+    @staticmethod
+    def _vtk_transform_matrix(transform):
+        matrix = transform.GetMatrix()
+        return np.array(
+            [[matrix.GetElement(row, col) for col in range(4)] for row in range(4)],
+            dtype=float,
+        )
+
+    def _set_product_selected(self, selected):
+        self._product_selected = bool(selected)
+        if self._rotation_widget is None:
+            return
+        self._rotation_widget.SetEnabled(1 if self._product_selected else 0)
+        if self._product_selected:
+            self._rotation_representation.SetOrientation(self._pose_actor.GetOrientation())
+            self.pose_status_label.setText(
+                "PRODUCT SELECTED  |  Drag the X / Y / Z rotation rings. "
+                "Rotation is about the STEP CAD origin in the product's local frame."
+            )
+        else:
+            self.pose_status_label.setText("PRODUCT DESELECTED  |  World box and coordinate frame remain fixed.")
+        self.plotter.render()
 
     def _sync_world_position_inputs(self):
         if self._pose_actor is None:
@@ -679,7 +771,8 @@ class ProductViewer(QWidget):
         self.source_origin = self._calculate_cad_origin(mesh_copy)
         bounds = np.asarray(mesh_copy.bounds, dtype=float)
         self.product_center_pivot = (bounds[0] + bounds[1]) * 0.5
-        self.rotation_pivot = self.product_center_pivot.copy()
+        # Rotation pivot is the STEP CAD coordinate origin, not the mesh center.
+        self.rotation_pivot = np.zeros(3, dtype=float)
 
         self.source_to_view_transform = np.eye(4, dtype=float)
         self.view_to_source_transform = np.eye(4, dtype=float)
@@ -1459,6 +1552,14 @@ class ProductViewer(QWidget):
             except Exception:
                 previous_camera = None
 
+        if self._rotation_widget is not None:
+            try:
+                self._rotation_widget.SetEnabled(0)
+            except Exception:
+                pass
+        self._rotation_widget = None
+        self._rotation_representation = None
+        self._product_selected = False
         self.plotter.clear()
         self.plotter.set_background("#07111D", top="#142B40")
 
@@ -1608,7 +1709,10 @@ class ProductViewer(QWidget):
                 specular_power=25,
                 pickable=True,
             )
-            self._pose_actor.SetOrigin(*self.product_center_pivot.tolist())
+            # CAD (0,0,0) is the rotation pivot and is aligned exactly
+            # with World (0,0,0) at initial load.
+            self.rotation_pivot = np.zeros(3, dtype=float)
+            self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
             self._pose_actor.SetPosition(0.0, 0.0, 0.0)
             self._pose_actor.SetOrientation(0.0, 0.0, 0.0)
 
@@ -1627,6 +1731,8 @@ class ProductViewer(QWidget):
                 self.plotter.reset_camera_clipping_range()
             except Exception:
                 self._set_standard_camera()
+        elif self.display_mode == "product" and self._pose_actor is not None:
+            self._set_product_camera()
         else:
             self._set_standard_camera()
 
@@ -2201,6 +2307,27 @@ class ProductViewer(QWidget):
     # STANDARD CAMERA
     # =========================================================
 
+    def _set_product_camera(self):
+        """Fit the loaded product tightly while keeping the oblique CAD view."""
+        if self._pose_actor is None:
+            self._set_standard_camera()
+            return
+        bounds = np.asarray(self._pose_actor.GetBounds(), dtype=float).reshape(3, 2)
+        minimum, maximum = bounds[:, 0], bounds[:, 1]
+        center = (minimum + maximum) * 0.5
+        half_diagonal = max(float(np.linalg.norm(maximum - minimum) * 0.5), 1.0)
+        camera = self.plotter.camera
+        view_angle = max(float(camera.GetViewAngle()), 10.0)
+        distance = half_diagonal / max(math.sin(math.radians(view_angle * 0.5)), 0.1) * 1.08
+        direction = np.array([1.25, 2.0, -1.15], dtype=float)
+        direction /= np.linalg.norm(direction)
+        position = center + direction * distance
+        camera.SetPosition(*position.tolist())
+        camera.SetFocalPoint(*center.tolist())
+        camera.SetViewUp(0.0, 0.0, -1.0)
+        camera.OrthogonalizeViewUp()
+        self.plotter.reset_camera_clipping_range()
+
     def _set_standard_camera(self):
         # Operator is in front of the box at +Y and looks toward -Y.
         # Screen-right is +X; the downward World axis is +Z.
@@ -2228,7 +2355,10 @@ class ProductViewer(QWidget):
         if self.current_mesh is None:
             return
 
-        self._set_standard_camera()
+        if self.display_mode == "product" and self._pose_actor is not None:
+            self._set_product_camera()
+        else:
+            self._set_standard_camera()
         self.plotter.render()
 
     # =========================================================
