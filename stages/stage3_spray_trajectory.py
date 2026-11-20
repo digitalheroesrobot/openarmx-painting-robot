@@ -1167,6 +1167,8 @@ def _build_analysis(
         )
 
     warnings.extend([
+        "Surface samples and normals currently come from the STL triangle mesh, not exact STEP B-Rep faces.",
+        "The nozzle roll axis is a provisional geometric convention, not a calibrated sprayer TCP orientation.",
         "Robot reachability has not been checked.",
         "Robot collision and fixture clearance have not been checked.",
         "Spray coverage and coating thickness have not been verified.",
@@ -1269,6 +1271,9 @@ def _build_analysis(
             "all_candidate_normals_valid": skipped_normals == 0,
             "all_candidate_geometry_valid": skipped_geometry == 0,
             "normal_orientation_reliable": orientation_reliable,
+            "product_pose_recorded": True,
+            "nozzle_frame_tcp_calibrated": False,
+            "exact_step_brep_normals_used": False,
             "advanced_geometry_available": advanced_analysis["available"],
             "robot_reachability_checked": False,
             "collision_checked": False,
@@ -1750,6 +1755,7 @@ def _build_saved_report(
             "Coating thickness is not calculated.",
             "No actual spray-gun CAD or calibrated TCP offset is applied.",
             "The nozzle roll axis is a provisional geometric reference, not a manufacturer-defined tool frame.",
+            "Surface samples and normals currently come from STL triangles, not exact STEP B-Rep face geometry.",
             "Open or non-watertight mesh normals may have uncertain outward direction and require review.",
             "The product CAD-to-World rigid transform is recorded and world-coordinate arrays are exported.",
             "Fan width and overlap are recorded as planning inputs; raster spray lanes are not yet generated.",
