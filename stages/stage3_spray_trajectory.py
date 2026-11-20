@@ -2134,6 +2134,44 @@ def run_stage3_numerical_tests() -> dict:
 
     assert trajectory_array.shape == (sample_count, 16)
 
+    # --------------------------------------------------------
+    # Test 17: Sprayer spray-envelope and overlap metadata.
+    # --------------------------------------------------------
+
+    test_sprayer_profile = {
+        "name": "test sprayer",
+        "spray_cone_angle_deg": 60.0,
+        "overlap_percent": 50.0,
+        "pattern_type": "round_cone",
+    }
+    sprayer_result = generate_spray_trajectory(
+        mesh=test_mesh,
+        face_status_labels=labels,
+        patch_labels=patches,
+        standoff_mm=200.0,
+        sampling_spacing_mm=50.0,
+        coordinate_unit="mm",
+        sprayer_profile=test_sprayer_profile,
+    )
+    expected_spray_width = (
+        2.0 * 200.0 * math.tan(math.radians(30.0))
+    )
+    expected_track_spacing = expected_spray_width * 0.5
+    assert math.isclose(
+        sprayer_result["parameters"]["spray_width_at_standoff_mm"],
+        expected_spray_width,
+        rel_tol=1e-10,
+    )
+    assert math.isclose(
+        sprayer_result["parameters"]["nominal_track_spacing_from_overlap_mm"],
+        expected_track_spacing,
+        rel_tol=1e-10,
+    )
+    assert (
+        sprayer_result["parameters"]["sprayer_profile"]["name"]
+        == "test sprayer"
+    )
+
     return {
         "status": "PASS",
         "tests": {
@@ -2153,6 +2191,7 @@ def run_stage3_numerical_tests() -> dict:
             "physical_sampling_spacing_all_units": "PASS",
             "source_mesh_unchanged": "PASS",
             "npy_16_column_compatibility": "PASS",
+            "sprayer_spray_envelope_and_overlap": "PASS",
         },
         "sample_count": int(sample_count),
         "unit_standoff_tests": unit_test_results,
