@@ -432,7 +432,7 @@ class ProductViewer(QWidget):
         playback_row.addWidget(self.trajectory_coverage_bar)
 
         self.trajectory_coverage_label = QLabel("0.0% | 0.000 / 0.000 m²")
-        self.trajectory_coverage_label.setMinimumWidth(190)
+        self.trajectory_coverage_label.setMinimumWidth(250)
         self.trajectory_coverage_label.setToolTip(
             "Estimated geometric area reached by the spray envelope. "
             "This is not a measured coating-thickness or paint-mass result."
@@ -2039,8 +2039,16 @@ class ProductViewer(QWidget):
                 int(round(np.clip(coverage_percent, 0.0, 100.0) * 10.0))
             )
         if hasattr(self, "trajectory_coverage_label"):
+            if cache["pattern_type"] == "flat_fan":
+                model_label = (
+                    "FLAT FAN"
+                    if cache["fan_thickness_units"] > 0.0
+                    else "CONE APPROX."
+                )
+            else:
+                model_label = "ROUND CONE"
             self.trajectory_coverage_label.setText(
-                f"{coverage_percent:.1f}% | "
+                f"{coverage_percent:.1f}% {model_label} | "
                 f"{painted_area * cache['area_display_scale']:.3f} / "
                 f"{cache['target_area'] * cache['area_display_scale']:.3f} "
                 f"{cache['area_display_unit']}"
