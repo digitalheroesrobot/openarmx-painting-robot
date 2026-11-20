@@ -90,6 +90,8 @@ class ProductViewer(QWidget):
         # Default display rotation is 180 degrees about local Z, centered
         # on the product bounding box; source CAD geometry remains unchanged.
         self._pose_actor = None
+        self._world_orientation_widget = None
+        self._world_orientation_axes = None
         self._cad_axes_actor = None
         self._attitude_text_actor = None
         # Display-only bounds; operator must set actual work-cell extents.
@@ -799,6 +801,13 @@ class ProductViewer(QWidget):
     # =========================================================
 
     def _draw_empty_scene(self):
+        if self._world_orientation_widget is not None:
+            try:
+                self._world_orientation_widget.SetEnabled(0)
+            except Exception:
+                pass
+        self._world_orientation_widget = None
+        self._world_orientation_axes = None
         self.plotter.clear()
         self._pose_actor = None
         self._cad_axes_actor = None
@@ -1461,13 +1470,43 @@ class ProductViewer(QWidget):
         self._cad_axes_actor = axes
         self.plotter.add_actor(axes, reset_camera=False)
 
+    def _add_world_orientation_indicator(self):
+        """Show the fixed World XYZ orientation triad in the lower-left viewport."""
+        from vtkmodules.vtkRenderingAnnotation import vtkAxesActor
+        from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
+
+        axes = vtkAxesActor()
+        axes.SetTotalLength(1.0, 1.0, 1.0)
+        axes.SetShaftTypeToCylinder()
+        axes.SetCylinderRadius(0.035)
+        axes.SetConeRadius(0.12)
+        axes.SetSphereRadius(0.08)
+        axes.SetXAxisLabelText("X")
+        axes.SetYAxisLabelText("Y")
+        axes.SetZAxisLabelText("Z")
+        axes.SetAxisLabels(True)
+        axes.GetXAxisShaftProperty().SetColor(1.0, 0.40, 0.48)
+        axes.GetXAxisTipProperty().SetColor(1.0, 0.40, 0.48)
+        axes.GetYAxisShaftProperty().SetColor(0.30, 0.86, 0.65)
+        axes.GetYAxisTipProperty().SetColor(0.30, 0.86, 0.65)
+        axes.GetZAxisShaftProperty().SetColor(0.28, 0.75, 1.0)
+        axes.GetZAxisTipProperty().SetColor(0.28, 0.75, 1.0)
+
+        widget = vtkOrientationMarkerWidget()
+        widget.SetOrientationMarker(axes)
+        widget.SetInteractor(self.plotter.iren.interactor)
+        widget.SetViewport(0.015, 0.015, 0.17, 0.17)
+        widget.SetEnabled(1)
+        widget.InteractiveOff()
+        self._world_orientation_widget = widget
+        self._world_orientation_axes = axes
+
     def _add_pose_coordinate_frames(self):
         if self.display_mode != "product":
             return
 
-        # Initial setup stage: only the fixed World frame and work-cell
-        # box are displayed. Product geometry is added in a later step.
         self._add_world_workspace()
+        self._add_world_orientation_indicator()
 
     # =========================================================
     # MAIN RENDERING
@@ -1490,6 +1529,13 @@ class ProductViewer(QWidget):
             except Exception:
                 previous_camera = None
         self._attitude_text_actor = None
+        if self._world_orientation_widget is not None:
+            try:
+                self._world_orientation_widget.SetEnabled(0)
+            except Exception:
+                pass
+        self._world_orientation_widget = None
+        self._world_orientation_axes = None
         self.plotter.clear()
         self.plotter.set_background("#07111D", top="#142B40")
 
