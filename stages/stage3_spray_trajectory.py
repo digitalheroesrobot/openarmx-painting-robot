@@ -1178,6 +1178,7 @@ def _generate_surface_following_raster_for_patch(
     standoff_coordinate_units: float,
     sample_spacing_coordinate_units: float,
     track_spacing_coordinate_units: float,
+    diagnostics: dict | None = None,
 ) -> dict | None:
     """
     Generate serpentine lanes on a smoothly curved triangulated patch.
@@ -1189,13 +1190,18 @@ def _generate_surface_following_raster_for_patch(
     not a globally valid UV/geodesic parameterization. Patches that fold over
     in the projection are rejected so the caller can use a safe fallback.
     """
+    def reject(reason: str):
+        if diagnostics is not None:
+            diagnostics["reason"] = reason
+        return None
+
     face_indices = np.unique(np.asarray(face_indices, dtype=np.int64))
     if (
         len(face_indices) == 0
         or track_spacing_coordinate_units <= 0.0
         or sample_spacing_coordinate_units <= 0.0
     ):
-        return None
+        return reject("invalid_input_or_spacing")
 
     vertices = np.asarray(mesh.vertices, dtype=np.float64)
     faces = np.asarray(mesh.faces, dtype=np.int64)
@@ -1206,18 +1212,18 @@ def _generate_surface_following_raster_for_patch(
         & (np.linalg.norm(patch_normals, axis=1) > NORMAL_EPSILON)
     )
     if not np.all(valid_normals):
-        return None
+        return reject("invalid_face_normals")
 
     mean_normal = np.mean(patch_normals, axis=0)
     mean_length = float(np.linalg.norm(mean_normal))
     if not math.isfinite(mean_length) or mean_length < 0.15:
-        return None
+        return reject("inconsistent_or_cancelling_normals")
     mean_normal /= mean_length
     normal_alignment = patch_normals @ mean_normal
     # A patch with strongly opposing normals is likely folded or incorrectly
     # segmented; a single 2-D projection would be ambiguous.
     if float(np.min(normal_alignment)) < -0.25:
-        return None
+        return reject("folded_patch_opposing_normals")
 
     patch_vertices = triangles_3d.reshape(-1, 3)
     origin = np.mean(patch_vertices, axis=0)
@@ -1230,7 +1236,7 @@ def _generate_surface_following_raster_for_patch(
     offset_axis -= float(np.dot(offset_axis, lane_axis)) * lane_axis
     offset_length = float(np.linalg.norm(offset_axis))
     if offset_length <= NORMAL_EPSILON:
-        return None
+        return reject("degenerate_pca_axes")
     offset_axis /= offset_length
 
     projected = np.stack((
@@ -1266,7 +1272,7 @@ def _generate_surface_following_raster_for_patch(
         & np.isfinite(projected_areas)
     )
     if np.count_nonzero(usable) < max(2, int(math.ceil(len(face_indices) * 0.5))):
-        return None
+        return reject("too_many_degenerate_projected_triangles")
 
     projected_triangles = projected_triangles[usable]
     triangles_3d = triangles_3d[usable]
@@ -1277,7 +1283,7 @@ def _generate_surface_following_raster_for_patch(
     max_offset = float(np.max(projected_triangles[:, :, 1]))
     extent = max_offset - min_offset
     if not math.isfinite(extent) or extent <= NORMAL_EPSILON:
-        return None
+        return reject("zero_projected_lane_extent")
 
     lane_spacing = float(track_spacing_coordinate_units)
     first_offset = min_offset + min(lane_spacing * 0.5, extent * 0.5)
@@ -1387,13 +1393,13 @@ def _generate_surface_following_raster_for_patch(
                 if best is None:
                     # A tiny numerical gap at a triangle boundary is not
                     # allowed to create an invented point off the mesh.
-                    return None
+                    return reject("barycentric_reconstruction_failed")
                 local_face, weights = best
                 point_3d = weights @ triangles_3d[local_face]
                 normal = source_normals[local_face].copy()
                 normal_length = float(np.linalg.norm(normal))
                 if normal_length <= NORMAL_EPSILON:
-                    return None
+                    return reject("invalid_reconstructed_surface_normal")
                 normal /= normal_length
                 lane_points.append(point_3d)
                 lane_normals.append(normal)
@@ -1435,7 +1441,7 @@ def _generate_surface_following_raster_for_patch(
             segment_id += 1
 
     if not out_surface:
-        return None
+        return reject("no_intersecting_scanlines")
 
     surface_array = np.asarray(out_surface, dtype=np.float64)
     normal_array = np.asarray(out_normals, dtype=np.float64)
@@ -1486,6 +1492,8 @@ def _order_trajectory_with_planar_raster(
     rasterized_patch_ids = []
     curved_rasterized_patch_ids = []
     fallback_patch_ids = []
+    fallback_reason_counts = {}
+    fallback_patch_reasons = []
 
     for patch_id in np.unique(patch_ids):
         indices = np.flatnonzero(patch_ids == patch_id)
@@ -1510,6 +1518,7 @@ def _order_trajectory_with_planar_raster(
                 })
             local_segments = raster["segment_ids"] + next_segment_id
         else:
+            curved_diagnostics = {}
             curved = _generate_surface_following_raster_for_patch(
                 mesh=mesh,
                 face_indices=patch_faces,
@@ -1517,6 +1526,7 @@ def _order_trajectory_with_planar_raster(
                 standoff_coordinate_units=standoff_coordinate_units,
                 sample_spacing_coordinate_units=sampling_spacing_coordinate_units,
                 track_spacing_coordinate_units=track_spacing_coordinate_units,
+                diagnostics=curved_diagnostics,
             )
             if curved is not None:
                 patch_result = curved
@@ -1530,6 +1540,18 @@ def _order_trajectory_with_planar_raster(
                 local_segments = curved["segment_ids"] + next_segment_id
             else:
                 fallback_patch_ids.append(int(patch_id))
+                fallback_reason = curved_diagnostics.get(
+                    "reason", "unspecified_rejection"
+                )
+                fallback_reason_counts[fallback_reason] = (
+                    fallback_reason_counts.get(fallback_reason, 0) + 1
+                )
+                fallback_patch_reasons.append({
+                    "patch_id": int(patch_id),
+                    "reason": fallback_reason,
+                    "source_face_count": int(len(patch_faces)),
+                    "source_sample_count": int(len(indices)),
+                })
                 local_order = _nearest_neighbor_order(nozzle_points[indices])
                 ordered_indices = indices[local_order]
                 patch_result = {
@@ -1623,6 +1645,8 @@ def _order_trajectory_with_planar_raster(
         "planar_patch_ids": [int(value) for value in rasterized_patch_ids],
         "curved_patch_ids": [int(value) for value in curved_rasterized_patch_ids],
         "fallback_patch_ids": [int(value) for value in fallback_patch_ids],
+        "fallback_reason_counts": fallback_reason_counts,
+        "fallback_patch_reasons": fallback_patch_reasons,
         "per_patch": per_patch_statistics,
         "note": (
             "Playback samples are generated path points. Source candidate samples "
@@ -1631,6 +1655,40 @@ def _order_trajectory_with_planar_raster(
         ),
     }
     result["path_statistics"] = path_statistics
+
+    print("\\n" + "=" * 68)
+    print("STAGE 3 PATH GENERATION DIAGNOSTICS")
+    print("=" * 68)
+    print(
+        f"Samples | Planar: {path_statistics['planar_sample_count']:,} | "
+        f"Curved: {path_statistics['curved_sample_count']:,} | "
+        f"Fallback: {path_statistics['fallback_sample_count']:,} | "
+        f"Total: {path_statistics['playback_sample_count']:,}"
+    )
+    print(
+        f"Segments | Planar: {path_statistics['planar_segment_count']} | "
+        f"Curved: {path_statistics['curved_segment_count']} | "
+        f"Fallback: {path_statistics['fallback_segment_count']}"
+    )
+    print(
+        f"Patches  | Planar: {len(rasterized_patch_ids)} | "
+        f"Curved: {len(curved_rasterized_patch_ids)} | "
+        f"Fallback: {len(fallback_patch_ids)}"
+    )
+    if fallback_reason_counts:
+        print("Fallback rejection reasons:")
+        for reason, count in sorted(
+            fallback_reason_counts.items(), key=lambda item: (-item[1], item[0])
+        ):
+            print(f"  - {reason}: {count} patch(es)")
+        print("Fallback patch details:")
+        for item in fallback_patch_reasons:
+            print(
+                f"  - Patch {item['patch_id']}: {item['reason']} | "
+                f"faces={item['source_face_count']} | "
+                f"samples={item['source_sample_count']}"
+            )
+    print("=" * 68 + "\\n")
     return result
 
 
