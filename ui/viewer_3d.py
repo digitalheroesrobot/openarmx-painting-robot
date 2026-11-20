@@ -1830,41 +1830,20 @@ class ProductViewer(QWidget):
                     # patch along its triangle normals. This reveals
                     # recessed and hole-facing surfaces that a surface
                     # outline alone cannot make visually obvious.
-                    light_beams = self._build_patch_light_beams(
-                        self.current_mesh,
-                        selected_mask,
-                    )
-
                     light_actors = []
-                    if light_beams.n_cells > 0:
-                        # Wide, soft cyan beam envelope.
-                        light_actors.append(
-                            self.plotter.add_mesh(
-                                light_beams,
-                                color="#00DFFF",
-                                opacity=0.28,
-                                show_edges=False,
-                                lighting=False,
-                                ambient=1.0,
-                                diffuse=0.0,
-                                specular=0.0,
-                            )
-                        )
-
-                        # Narrow bright core gives the projected light
-                        # a visible direction and stronger headlight feel.
-                        core_beams = self._build_patch_light_beams(
+                    try:
+                        light_beams = self._build_patch_light_beams(
                             self.current_mesh,
                             selected_mask,
-                            max_beams=48,
-                            radius_scale=0.045,
                         )
-                        if core_beams.n_cells > 0:
+
+                        if light_beams.n_cells > 0:
+                            # Wide, soft cyan beam envelope.
                             light_actors.append(
                                 self.plotter.add_mesh(
-                                    core_beams,
-                                    color="#D9FFFF",
-                                    opacity=0.42,
+                                    light_beams,
+                                    color="#00DFFF",
+                                    opacity=0.28,
                                     show_edges=False,
                                     lighting=False,
                                     ambient=1.0,
@@ -1872,6 +1851,36 @@ class ProductViewer(QWidget):
                                     specular=0.0,
                                 )
                             )
+
+                            # Narrow bright core gives the projected light
+                            # a visible direction and stronger headlight feel.
+                            core_beams = self._build_patch_light_beams(
+                                self.current_mesh,
+                                selected_mask,
+                                max_beams=48,
+                                radius_scale=0.045,
+                            )
+                            if core_beams.n_cells > 0:
+                                light_actors.append(
+                                    self.plotter.add_mesh(
+                                        core_beams,
+                                        color="#D9FFFF",
+                                        opacity=0.42,
+                                        show_edges=False,
+                                        lighting=False,
+                                        ambient=1.0,
+                                        diffuse=0.0,
+                                        specular=0.0,
+                                    )
+                                )
+                    except Exception as exc:
+                        # The surface highlight must remain usable even
+                        # if a VTK/PyVista build cannot render cone meshes.
+                        print(
+                            "[PATCH LIGHT WARNING] "
+                            "Spotlight geometry was skipped: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
 
                     if previous_product_pose is not None:
                         for selected_actor in (
