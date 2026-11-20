@@ -385,7 +385,7 @@ class SprayerSettingsDialog(QDialog):
             ("standoff_mm", "Working distance (mm)", 20.0, 1000.0, 1),
             ("spray_cone_angle_deg", "Full spray angle (deg)", 1.0, 150.0, 1),
             ("overlap_percent", "Track overlap (%)", 0.0, 90.0, 1),
-            ("sampling_spacing_mm", "Surface sample spacing (mm)", 1.0, 100.0, 1),
+            ("sampling_spacing_mm", "Path point spacing (mm)", 1.0, 100.0, 1),
             ("nozzle_orifice_mm", "Nozzle orifice (mm)", 0.1, 10.0, 2),
             ("nozzle_length_mm", "Nozzle length (mm)", 0.0, 300.0, 1),
             ("gun_body_length_mm", "Gun body length (mm)", 0.0, 600.0, 1),
@@ -461,7 +461,19 @@ class SprayerSettingsDialog(QDialog):
                 )
             elif key == "overlap_percent":
                 spin.setToolTip(
-                    "Target overlap used to calculate nominal track spacing."
+                    "Target overlap between adjacent spray passes. "
+                    "This controls pass spacing; it is not point spacing "
+                    "along an individual pass."
+                )
+            elif key == "sampling_spacing_mm":
+                spin.setToolTip(
+                    "Distance between calculated nozzle samples along a pass. "
+                    "This does not set the distance between adjacent spray passes."
+                )
+            elif key == "fan_reference_distance_mm":
+                spin.setToolTip(
+                    "Distance at which the measured flat-fan thickness was recorded. "
+                    "Required when a nonzero measured fan thickness is entered."
                 )
             elif key == "fan_thickness_at_reference_mm":
                 spin.setToolTip(
