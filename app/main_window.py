@@ -4052,6 +4052,7 @@ class MainWindow(QMainWindow):
             f"<span style='color:#00B8D9'>● CURVED: {counts['curved']:,} ({percentage(counts['curved'])})</span><br>"
             f"<span style='color:#FFD740'>● UNCERTAIN: {counts['uncertain']:,} ({percentage(counts['uncertain'])})</span><br>"
             f"<span style='color:#FF5252'>● INVALID: {counts['invalid']:,} ({percentage(counts['invalid'])})</span>"
+            f"<br><br><b>CLASSIFIED:</b> <span style='color:#00E676'>{classified:,}</span> "
             f"<span style='color:#8195A3'>|</span> "
             f"<b>UNRESOLVED:</b> <span style='color:#FFD740'>{unresolved:,}</span>"
             f"<br><br><b>CURVED SHAPES</b><br>"
