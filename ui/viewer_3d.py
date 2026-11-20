@@ -97,6 +97,7 @@ class ProductViewer(QWidget):
         self.trajectory_validation = {}
         self._playback_spray_actor = None
         self._playback_spray_polydata = None
+        self._playback_spray_sheet_actor = None
         self.face_surface_types = None
 
         # Currently selected Stage 2 surface patch.
@@ -393,10 +394,10 @@ class ProductViewer(QWidget):
             "color: #8FA3B2; font-weight: 700; padding: 2px 6px;"
         )
         self.trajectory_spray_state_label.setToolTip(
-            "Amber highlights the actual target-mesh triangles inside the configured "
-            "spray footprint for the current playback sample. Flat-fan visualization "
-            "requires measured fan thickness. At segment boundaries spray is OFF; "
-            "a robot travel path is not yet planned."
+            "A translucent fan sheet shows the configured spray angle and standoff "
+            "while spray is ON. It is a directional visual cue, not a calibrated paint "
+            "volume. Surface-area highlighting requires measured flat-fan thickness. "
+            "At segment boundaries spray is OFF; a robot travel path is not yet planned."
         )
         playback_row.addWidget(self.trajectory_spray_state_label)
 
@@ -1866,7 +1867,12 @@ class ProductViewer(QWidget):
             self.trajectory_play_button.setText("Play")
         if reset:
             actors = list(self._playback_gun_actors)
-            actors.extend((self._playback_path_actor, self._playback_nozzle_actor, self._playback_spray_actor))
+            actors.extend((
+                self._playback_path_actor,
+                self._playback_nozzle_actor,
+                self._playback_spray_actor,
+                self._playback_spray_sheet_actor,
+            ))
             seen = set()
             for actor in actors:
                 if actor is None or id(actor) in seen:
@@ -1881,6 +1887,7 @@ class ProductViewer(QWidget):
             self._playback_gun_actors = []
             self._playback_spray_actor = None
             self._playback_spray_polydata = None
+            self._playback_spray_sheet_actor = None
             self._playback_index = 0
             self._playback_elapsed_s = 0.0
             self._playback_last_path_render_index = -1
@@ -2373,6 +2380,40 @@ class ProductViewer(QWidget):
             show_edges=False,
         )
         self._playback_spray_actor.SetVisibility(0)
+
+        # Visible spray-state cue. A flat fan is represented by a thin,
+        # width-calibrated sheet (not an invented 3-D paint volume) when its
+        # measured fan thickness is unavailable.
+        sheet_length = cache["standoff_units"]
+        sheet_half_width = max(cache["footprint_width_units"] * 0.5, 1e-6)
+        if cache["pattern_type"] == "round_cone":
+            sheet_mesh = pv.Cone(
+                center=(0.0, 0.0, sheet_length * 0.5),
+                direction=(0.0, 0.0, 1.0),
+                height=sheet_length,
+                radius=sheet_half_width,
+                resolution=48,
+            )
+        else:
+            sheet_points = np.asarray([
+                [0.0, 0.0, 0.0],
+                [-sheet_half_width, 0.0, sheet_length],
+                [sheet_half_width, 0.0, sheet_length],
+            ], dtype=float)
+            sheet_faces = np.asarray([3, 0, 1, 2], dtype=np.int64)
+            sheet_mesh = pv.PolyData(sheet_points, sheet_faces)
+        self._playback_spray_sheet_actor = self.plotter.add_mesh(
+            sheet_mesh,
+            color="#FF9D32",
+            opacity=0.34,
+            show_edges=(cache["pattern_type"] == "flat_fan"),
+            edge_color="#FFD08A",
+            line_width=2,
+            lighting=False,
+            pickable=False,
+            render=False,
+        )
+        self._playback_spray_sheet_actor.SetVisibility(0)
         self._playback_nozzle_actor = self._playback_gun_actors[0]
         return self._playback_gun_actors
 
@@ -2391,6 +2432,12 @@ class ProductViewer(QWidget):
         for actor in self._playback_gun_actors:
             actor.SetOrigin(0.0, 0.0, 0.0)
             actor.SetUserMatrix(vtk_matrix)
+        if self._playback_spray_sheet_actor is not None:
+            self._playback_spray_sheet_actor.SetOrigin(0.0, 0.0, 0.0)
+            self._playback_spray_sheet_actor.SetUserMatrix(vtk_matrix)
+            self._playback_spray_sheet_actor.SetVisibility(
+                1 if cache["spray_on_mask"][index] else 0
+            )
 
     def _make_playback_path_polydata(self, last_index):
         cache = self._prepare_trajectory_playback_cache()
@@ -2452,13 +2499,15 @@ class ProductViewer(QWidget):
 
         self._position_spray_gun(index)
         spray_on = bool(cache["spray_on_mask"][index])
+        if self._playback_spray_sheet_actor is not None:
+            self._playback_spray_sheet_actor.SetVisibility(1 if spray_on else 0)
         self._update_current_spray_footprint(index)
         if hasattr(self, "trajectory_spray_state_label"):
             if spray_on:
                 if cache["pattern_type"] == "flat_fan" and cache["fan_thickness_units"] <= 0.0:
                     self.trajectory_spray_state_label.setText(
-                        f"SPRAY: ON · FAN THICKNESS REQUIRED "
-                        f"({cache['footprint_width_mm']:.1f} mm width)"
+                        f"SPRAY: ON · FAN SHEET "
+                        f"({cache['footprint_width_mm']:.1f} mm width; thickness unknown)"
                     )
                 else:
                     self.trajectory_spray_state_label.setText(
