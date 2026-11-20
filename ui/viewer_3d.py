@@ -1630,7 +1630,14 @@ class ProductViewer(QWidget):
         self._world_orientation_axes = axes
 
     def _add_pose_coordinate_frames(self):
-        if self.display_mode != "product":
+        # Keep the fixed World reference and CAD-origin Product frame
+        # visible during both the initial product view and Stage 1/2
+        # surface-patch inspection. Patch mode uses the same posed CAD
+        # actor, so these references remain spatially registered.
+        if self.display_mode not in ("product", "patches"):
+            return
+
+        if self._pose_actor is None:
             return
 
         # The World frame remains fixed in the work cell.
