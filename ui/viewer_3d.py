@@ -596,7 +596,6 @@ class ProductViewer(QWidget):
                 vtk_transform.SetMatrix(transform)
                 self._pose_actor.SetOrientation(*vtk_transform.GetOrientation())
                 self._rotation_last_matrix = current
-                self._rotation_representation.SetOrientation(self._pose_actor.GetOrientation())
                 self._sync_world_position_inputs()
                 self._update_pose_readout()
 
@@ -1552,6 +1551,12 @@ class ProductViewer(QWidget):
             except Exception:
                 previous_camera = None
 
+        if self._selection_observer_tag is not None:
+            try:
+                self.plotter.interactor.RemoveObserver(self._selection_observer_tag)
+            except Exception:
+                pass
+            self._selection_observer_tag = None
         if self._rotation_widget is not None:
             try:
                 self._rotation_widget.SetEnabled(0)
