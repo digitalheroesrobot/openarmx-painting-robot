@@ -949,18 +949,15 @@ class ProductViewer(QWidget):
             )
             beam_center = center + axis * (beam_length * 0.5)
 
-            cylinders = [
-                pv.Cylinder(
-                    center=beam_center,
-                    direction=axis,
-                    radius=radius * scale,
-                    height=beam_length,
-                    resolution=40,
-                    capping=False,
-                )
-                for scale in (1.0, 0.78)
-            ]
-            return pv.MultiBlock(cylinders).combine()
+            # Exactly one cylinder: no concentric inner cylinder/ring.
+            return pv.Cylinder(
+                center=beam_center,
+                direction=axis,
+                radius=radius,
+                height=beam_length,
+                resolution=48,
+                capping=False,
+            )
 
         # Ordinary planar/curved patches use the parallel white membrane
         # rendered by _build_offset_patch_shell; do not add a beam here.
@@ -1982,8 +1979,8 @@ class ProductViewer(QWidget):
                     if hole_glow.n_cells > 0:
                         hole_actor = self.plotter.add_mesh(
                             hole_glow,
-                            color="#FFFFFF",
-                            opacity=0.16,
+                            color=patch_color,
+                            opacity=0.28,
                             show_edges=False,
                             lighting=False,
                             ambient=1.0,
@@ -2003,8 +2000,8 @@ class ProductViewer(QWidget):
                                 glow_actors.append(
                                     self.plotter.add_mesh(
                                         halo_polydata,
-                                        color="#FFFFFF",
-                                        opacity=0.38,
+                                        color=patch_color,
+                                        opacity=0.52,
                                         show_edges=False,
                                         lighting=False,
                                         ambient=1.0,
