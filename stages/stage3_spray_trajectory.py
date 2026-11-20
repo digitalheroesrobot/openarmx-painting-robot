@@ -2247,6 +2247,23 @@ def _optimize_stroke_order_for_travel(
         current_endpoint = points[chosen[-1]]
         remaining.remove(best_index)
 
+    candidate_distance = 0.0
+    for left_block, right_block in zip(ordered_blocks[:-1], ordered_blocks[1:]):
+        candidate_distance += float(np.linalg.norm(
+            points[right_block[0]] - points[left_block[-1]]
+        ))
+    if candidate_distance > old_distance + 1e-9:
+        return trajectory, segment_metadata, {
+            "method": "greedy_nearest_endpoint_with_original_order_guard",
+            "stroke_count": int(len(blocks)),
+            "original_travel_distance_coordinate_units": float(old_distance),
+            "optimized_travel_distance_coordinate_units": float(old_distance),
+            "reduction_percent": 0.0,
+            "used_original_order": True,
+            "collision_check": "NOT_PERFORMED",
+            "note": "Greedy candidate was longer, so the original order was retained.",
+        }
+
     ordered_sample_indices = np.concatenate(ordered_blocks)
     optimized = dict(trajectory)
     for key in sample_keys:
