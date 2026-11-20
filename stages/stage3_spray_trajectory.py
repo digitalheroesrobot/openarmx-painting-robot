@@ -2134,6 +2134,83 @@ def _calculate_path_metrics(
     }
 
 
+def _build_inter_segment_travel_plan(
+    nozzle_points: np.ndarray,
+    segment_ids: np.ndarray,
+    coordinate_unit: str,
+    travel_speed_mm_s: float,
+) -> dict:
+    """Describe direct, spray-OFF links between consecutive raster strokes.
+
+    These are visualization and time-estimate links only. They are not
+    collision-checked robot paths and must not be sent to a robot controller.
+    """
+    points = np.asarray(nozzle_points, dtype=np.float64)
+    segments = np.asarray(segment_ids, dtype=np.int64)
+    if points.ndim != 2 or points.shape[1] != 3 or len(points) != len(segments):
+        raise ValueError("Travel planning requires matching (N, 3) points and segment IDs.")
+    if not np.all(np.isfinite(points)):
+        raise ValueError("Travel planning points must be finite.")
+    if len(points) == 0:
+        return {
+            "method": "direct_straight_line_estimate_only",
+            "travel_speed_mm_s": float(travel_speed_mm_s),
+            "transition_count": 0,
+            "total_distance_mm": 0.0,
+            "estimated_time_s": 0.0,
+            "transitions": [],
+            "safety_status": "NOT_COLLISION_CHECKED",
+        }
+
+    mm_per_unit = MM_PER_UNIT.get(_normalize_unit(coordinate_unit))
+    if mm_per_unit is None:
+        raise ValueError(f"Unsupported travel-plan coordinate unit: {coordinate_unit}")
+    speed = float(travel_speed_mm_s)
+    if not math.isfinite(speed) or speed <= 0.0:
+        raise ValueError("Travel speed must be a positive finite value.")
+
+    starts = np.r_[0, np.flatnonzero(np.diff(segments) != 0) + 1]
+    ends = np.r_[starts[1:], len(segments)]
+    transitions = []
+    total_distance_mm = 0.0
+    for block_index in range(len(starts) - 1):
+        end_index = int(ends[block_index] - 1)
+        start_index = int(starts[block_index + 1])
+        distance_mm = float(
+            np.linalg.norm(points[start_index] - points[end_index]) * mm_per_unit
+        )
+        duration_s = distance_mm / speed
+        transitions.append({
+            "from_segment_id": int(segments[end_index]),
+            "to_segment_id": int(segments[start_index]),
+            "from_sample_index": end_index,
+            "to_sample_index": start_index,
+            "start_point_coordinate_units": points[end_index].tolist(),
+            "end_point_coordinate_units": points[start_index].tolist(),
+            "distance_mm": distance_mm,
+            "estimated_time_s": duration_s,
+            "spray_state": "OFF",
+            "path_type": "direct_straight_line_visualization_only",
+        })
+        total_distance_mm += distance_mm
+
+    return {
+        "method": "direct_straight_line_estimate_only",
+        "travel_speed_mm_s": speed,
+        "transition_count": len(transitions),
+        "total_distance_mm": float(total_distance_mm),
+        "estimated_time_s": float(total_distance_mm / speed),
+        "transitions": transitions,
+        "safety_status": "NOT_COLLISION_CHECKED",
+        "note": (
+            "Direct links connect the nozzle endpoint of one stroke to the "
+            "startpoint of the next with spray OFF. They are visualization and "
+            "time estimates only; obstacle avoidance, robot reachability, "
+            "acceleration limits and joint-space motion are not checked."
+        ),
+    }
+
+
 # ------------------------------------------------------------
 # Advanced geometry assessment
 # ------------------------------------------------------------
@@ -2910,6 +2987,12 @@ def generate_spray_trajectory(
             maximum_acceleration_mm_s2=maximum_acceleration,
         )
     )
+    inter_segment_travel_plan = _build_inter_segment_travel_plan(
+        nozzle_points=ordered["nozzle_points"],
+        segment_ids=ordered["segment_ids"],
+        coordinate_unit=source_unit,
+        travel_speed_mm_s=base_travel_speed,
+    )
 
     # 9. Calculate path metrics in both coordinate units and mm.
     path_metrics = _calculate_path_metrics(
@@ -3080,6 +3163,7 @@ def generate_spray_trajectory(
         "segments": ordered["segments"],
         "path_statistics": ordered.get("path_statistics", {}),
         "trajectory_validation": trajectory_validation,
+        "inter_segment_travel_plan": inter_segment_travel_plan,
         "rasterization": {
             "algorithm": "planar_and_pca_surface_following_triangle_raster",
             "rasterized_planar_patch_ids": ordered.get("rasterized_planar_patch_ids", []),
@@ -3090,7 +3174,7 @@ def generate_spray_trajectory(
             "lane_direction_policy": "principal_axis_projection",
             "curved_patch_policy": "barycentric_surface_reconstruction_with_local_normals",
             "curved_projection_limitations": "PCA projection is approximate; folded or ambiguous patches are rejected to fallback.",
-            "travel_moves_between_segments": "NOT_GENERATED",
+            "travel_moves_between_segments": "DIRECT_STRAIGHT_LINE_VISUALIZATION_ONLY",
             "coverage_verified": False,
         },
         "sampling": {
@@ -3109,6 +3193,7 @@ def generate_spray_trajectory(
         "normal_analysis": normal_info,
         "orientation_analysis": orientation_info,
         "path_metrics": path_metrics,
+        "inter_segment_travel_plan": inter_segment_travel_plan,
         "advanced_geometry_analysis": advanced_analysis,
         "analysis": analysis,
     }
@@ -3246,8 +3331,8 @@ def _build_saved_report(
             "The product CAD-to-World rigid transform is recorded and world-coordinate arrays are exported.",
             "Planar patches use clipped serpentine raster lanes; smooth curved patches use PCA-projected lanes reconstructed on source triangles with local normals. Ambiguous folded projections retain an explicitly reported fallback.",
             "Raster lane spacing uses the configured equivalent fan-width estimate and overlap; physical coating coverage is not verified.",
-            "Travel movements between separate raster segments are not generated.",
-            "Travel movements between separate patches are not generated.",
+            "Inter-segment travel is represented as direct straight-line, spray-OFF visualization estimates only; collision and reachability are not checked.",
+            "Travel movements between separate patches are also represented by the same unvalidated straight-line estimates.",
             "Bend and cylinder estimates do not yet modify nozzle orientation.",
         ],
     }
@@ -4160,6 +4245,28 @@ def run_stage3_numerical_tests() -> dict:
     assert curve_speeds[2] < 150.0
     assert speed_metadata["method"].startswith("normal_curvature_and_path_turning")
 
+    # --------------------------------------------------------
+    # Test 24: Inter-segment travel links are spray-OFF and measured.
+    # --------------------------------------------------------
+    travel_test = _build_inter_segment_travel_plan(
+        nozzle_points=np.asarray([
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [10.0, 5.0, 0.0],
+            [13.0, 9.0, 0.0],
+        ], dtype=np.float64),
+        segment_ids=np.asarray([0, 0, 1, 1, 2], dtype=np.int64),
+        coordinate_unit="mm",
+        travel_speed_mm_s=100.0,
+    )
+    assert travel_test["transition_count"] == 2
+    assert travel_test["transitions"][0]["distance_mm"] == 0.0
+    assert abs(travel_test["transitions"][1]["distance_mm"] - 5.0) < 1e-9
+    assert travel_test["transitions"][0]["spray_state"] == "OFF"
+    assert abs(travel_test["estimated_time_s"] - 0.05) < 1e-9
+    assert travel_test["safety_status"] == "NOT_COLLISION_CHECKED"
+
     inspection_test_mesh = trimesh.Trimesh(
         vertices=np.asarray([
             [0.0, 0.0, 0.0],
@@ -4229,6 +4336,7 @@ def run_stage3_numerical_tests() -> dict:
             "adaptive_speed_curvature_reduction": "PASS",
             "adaptive_speed_time_monotonicity": "PASS",
             "trajectory_coverage_continuity_orientation_and_spray_boundaries": "PASS",
+            "inter_segment_spray_off_travel_estimates": "PASS",
         },
         "sample_count": int(sample_count),
         "unit_standoff_tests": unit_test_results,
