@@ -2430,6 +2430,9 @@ class MainWindow(QMainWindow):
             "sampling_spacing_mm": float(profile["sampling_spacing_mm"]),
             "spray_angle_deg": 0.0,
             "sprayer_profile": profile,
+            # Capture the operator-confirmed CAD-to-World pose before
+            # the background Stage 3 worker starts.
+            "product_transform_4x4": self.viewer.get_product_transform().tolist(),
         }
 
     def _open_sprayer_settings(self):
@@ -3997,6 +4000,7 @@ class MainWindow(QMainWindow):
             sampling_spacing_mm=parameters["sampling_spacing_mm"],
             spray_angle_deg=parameters["spray_angle_deg"],
             sprayer_profile=parameters["sprayer_profile"],
+            product_transform=parameters["product_transform_4x4"],
         )
 
         self._worker.succeeded.connect(
