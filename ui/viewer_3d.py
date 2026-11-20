@@ -151,6 +151,7 @@ class ProductViewer(QWidget):
         # Stage 3 sequential trajectory playback state.
         self._playback_index = 0
         self._playback_elapsed_s = 0.0
+        self._playback_finished = False
         self._playback_last_path_render_index = -1
         self._playback_path_actor = None
         self._playback_nozzle_actor = None
@@ -1951,6 +1952,7 @@ class ProductViewer(QWidget):
             self._playback_spray_sheet_actor = None
             self._playback_index = 0
             self._playback_elapsed_s = 0.0
+            self._playback_finished = False
             self._playback_last_path_render_index = -1
             self._playback_cache = None
             if hasattr(self, "trajectory_coverage_bar"):
@@ -2620,6 +2622,7 @@ class ProductViewer(QWidget):
         if self.display_mode != "trajectory" or self.trajectory_data is None:
             return
         self._playback_timer.stop()
+        self._playback_finished = False
         self.trajectory_play_button.setText("Play")
         self._update_trajectory_playback_visuals(value)
 
@@ -2633,7 +2636,8 @@ class ProductViewer(QWidget):
             self._playback_timer.stop()
             self.trajectory_play_button.setText("Play")
             return
-        if self._playback_index >= total - 1:
+        if self._playback_finished or self._playback_index >= total - 1:
+            self._playback_finished = False
             self._playback_elapsed_s = 0.0
             self._update_trajectory_playback_visuals(0)
         else:
@@ -2646,13 +2650,55 @@ class ProductViewer(QWidget):
         self.trajectory_play_button.setText("Pause")
         self._playback_timer.start()
 
+    def _complete_trajectory_playback(self):
+        """Freeze the gun at the final pose and force all spray visuals OFF."""
+        self._playback_timer.stop()
+        self._playback_finished = True
+        self.trajectory_play_button.setText("Play")
+
+        cache = self._prepare_trajectory_playback_cache()
+        if cache is not None and len(cache["nozzle_points"]):
+            final_index = len(cache["nozzle_points"]) - 1
+            self._playback_index = final_index
+            if self._playback_spray_sheet_actor is not None:
+                self._playback_spray_sheet_actor.SetVisibility(0)
+            if self._playback_spray_actor is not None:
+                self._playback_spray_actor.SetVisibility(0)
+            if self._playback_spray_polydata is not None:
+                rgba = np.zeros(
+                    (len(cache["target_face_ids"]), 4), dtype=np.uint8
+                )
+                self._playback_spray_polydata.cell_data[
+                    "Spray Footprint RGBA"
+                ] = rgba
+                vtk_array = self._playback_spray_polydata.GetCellData().GetArray(
+                    "Spray Footprint RGBA"
+                )
+                if vtk_array is not None:
+                    vtk_array.Modified()
+                self._playback_spray_polydata.Modified()
+            self.trajectory_spray_state_label.setText(
+                "SPRAY: OFF · PLAYBACK COMPLETE"
+            )
+            self.trajectory_spray_state_label.setStyleSheet(
+                "color: #8FA3B2; font-weight: 700; padding: 2px 6px;"
+            )
+            self.trajectory_playback_label.setText(
+                f"{final_index + 1} / {len(cache['nozzle_points'])} "
+                "| COMPLETE · SPRAY OFF"
+            )
+        self.plotter.render()
+
     def _advance_trajectory_playback(self):
+        if self._playback_finished:
+            self._playback_timer.stop()
+            return
         if self.trajectory_data is None:
             self._stop_trajectory_playback()
             return
         total = len(self.trajectory_data["nozzle_points"])
         if self._playback_index >= total - 1:
-            self._stop_trajectory_playback()
+            self._complete_trajectory_playback()
             return
         cache = self._prepare_trajectory_playback_cache()
         sample_times = cache["trajectory_time_s"]
@@ -2686,20 +2732,25 @@ class ProductViewer(QWidget):
 
         self._update_trajectory_playback_visuals(next_index)
         if next_index >= total - 1:
-            self._stop_trajectory_playback()
+            self._complete_trajectory_playback()
 
     def _step_trajectory_playback(self):
         if self.trajectory_data is None or self.display_mode != "trajectory":
             return
         self._playback_timer.stop()
+        self._playback_finished = False
         self.trajectory_play_button.setText("Play")
         total = len(self.trajectory_data["nozzle_points"])
-        self._update_trajectory_playback_visuals(min(self._playback_index + 1, total - 1))
+        next_index = min(self._playback_index + 1, total - 1)
+        self._update_trajectory_playback_visuals(next_index)
+        if next_index >= total - 1:
+            self._complete_trajectory_playback()
 
     def _reset_trajectory_playback(self):
         if self.trajectory_data is None or self.display_mode != "trajectory":
             return
         self._stop_trajectory_playback(reset=True)
+        self._playback_finished = False
         self._update_trajectory_playback_visuals(0)
 
     def _trajectory_arrow_length(self):
