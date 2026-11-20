@@ -426,6 +426,12 @@ class ProductViewer(QWidget):
             field.setSuffix("°")
             field.setMinimumWidth(170)
             field.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            # Explicitly style the embedded editor: some Qt platform themes
+            # otherwise render the numeric text with a dark system color.
+            field.lineEdit().setStyleSheet(
+                "QLineEdit { color: #E4FCFF; background: transparent; "
+                "border: none; padding: 0px 2px; selection-background-color: #126A78; }"
+            )
             field.setKeyboardTracking(False)
             field.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.UpDownArrows)
             field.setToolTip(f"Set {axis_name.lower()} angle in degrees.")
