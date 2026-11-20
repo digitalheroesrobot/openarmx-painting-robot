@@ -1653,6 +1653,7 @@ class ProductViewer(QWidget):
         self.face_status_labels = None
         self.selected_patch_id = None
         self.trajectory_data = data
+        self._update_trajectory_path_statistics_label()
         self._stop_trajectory_playback(reset=True)
         self.trajectory_playback_slider.blockSignals(True)
         self.trajectory_playback_slider.setRange(0, max(0, count - 1))
