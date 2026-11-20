@@ -1870,7 +1870,13 @@ class ProductViewer(QWidget):
             "face_areas": face_areas,
             "target_face_ids": target_face_ids,
             "target_area": target_area,
-            "target_area_m2": target_area * (mm_per_unit ** 2) / 1_000_000.0,
+            "area_display_scale": (
+                mm_per_unit ** 2 / 1_000_000.0
+                if source_unit in MM_PER_UNIT else 1.0
+            ),
+            "area_display_unit": (
+                "m²" if source_unit in MM_PER_UNIT else "coordinate units²"
+            ),
             "surface_tree": surface_tree,
             "coverage_sample_hits": np.zeros(len(face_samples), dtype=bool),
             "coverage_processed_index": -1,
@@ -2035,8 +2041,9 @@ class ProductViewer(QWidget):
         if hasattr(self, "trajectory_coverage_label"):
             self.trajectory_coverage_label.setText(
                 f"{coverage_percent:.1f}% | "
-                f"{painted_area * cache['mm_per_unit'] ** 2 / 1_000_000.0:.3f} / "
-                f"{cache['target_area_m2']:.3f} m²"
+                f"{painted_area * cache['area_display_scale']:.3f} / "
+                f"{cache['target_area'] * cache['area_display_scale']:.3f} "
+                f"{cache['area_display_unit']}"
             )
             if (
                 cache["pattern_type"] == "flat_fan"
@@ -2189,7 +2196,9 @@ class ProductViewer(QWidget):
                     lighting=False,
                     pickable=False,
                 )
-        elif path.n_lines > 0:
+        elif self._playback_path_actor is not None:
+            # Also replace the mapper with an empty path when the operator
+            # scrubs back to sample 0 or to the first point of a new segment.
             mapper = self._playback_path_actor.GetMapper()
             mapper.SetInputData(path)
             mapper.Update()
