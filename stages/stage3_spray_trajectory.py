@@ -342,7 +342,7 @@ def _calculate_spray_footprint(
     if pattern == "round_cone":
         thickness = width
         thickness_status = "circular_cone_geometry"
-    elif reference_thickness > 0.0:
+    elif reference_thickness is not None and reference_thickness > 0.0:
         thickness = (
             reference_thickness * float(standoff_mm) / reference_distance
         )
@@ -4479,6 +4479,38 @@ def _make_test_mesh(
 
 
 def run_stage3_numerical_tests() -> dict:
+
+    # Unknown flat-fan thickness must remain unknown, not raise or be fabricated.
+    unknown_footprint = _calculate_spray_footprint(
+        {
+            "pattern_type": "flat_fan",
+            "spray_cone_angle_deg": 74.0,
+            "fan_thickness_at_reference_mm": None,
+        },
+        200.0,
+    )
+    assert unknown_footprint["thickness_mm"] is None
+    assert unknown_footprint["thickness_status"] == "unknown_conical_approximation_only"
+
+    missing_thickness_footprint = _calculate_spray_footprint(
+        {"pattern_type": "flat_fan", "spray_cone_angle_deg": 74.0},
+        200.0,
+    )
+    assert missing_thickness_footprint["thickness_mm"] is None
+
+    negative_thickness_rejected = False
+    try:
+        _calculate_spray_footprint(
+            {
+                "pattern_type": "flat_fan",
+                "spray_cone_angle_deg": 74.0,
+                "fan_thickness_at_reference_mm": -1.0,
+            },
+            200.0,
+        )
+    except ValueError:
+        negative_thickness_rejected = True
+    assert negative_thickness_rejected, "Negative fan thickness must be rejected."
 
     test_mesh = _make_test_mesh(1.0)
 
