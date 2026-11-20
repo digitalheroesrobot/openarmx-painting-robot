@@ -1406,7 +1406,9 @@ class ProductViewer(QWidget):
 
         # World XYZ axes are deliberately dashed and short so the brighter,
         # larger Product frame remains visually dominant at coincident origins.
-        world_axis_length = max(min(lx, ly, lz) * 0.14, 20.0)
+        product_bounds = np.asarray(self._pose_actor.GetBounds(), dtype=float).reshape(3, 2)
+        product_size = max(float(np.max(product_bounds[:, 1] - product_bounds[:, 0])), 1.0)
+        world_axis_length = max(product_size * 0.16, 10.0)
         world_axes = [
             (np.array([1.0, 0.0, 0.0]), "#A56B76", "X"),
             (np.array([0.0, 1.0, 0.0]), "#679D87", "Y"),
