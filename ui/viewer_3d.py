@@ -644,7 +644,6 @@ class ProductViewer(QWidget):
 
         try:
             from vtkmodules.vtkRenderingCore import vtkCellPicker
-            from vtkmodules.vtkCommonTransforms import vtkTransform
 
             interactor_widget = self.plotter.interactor
 
