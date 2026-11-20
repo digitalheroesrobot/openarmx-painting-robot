@@ -81,12 +81,14 @@ class ProductViewer(QWidget):
 
         self.source_origin = np.zeros(3, dtype=float)
 
-        # Hook pivot is entered in source CAD coordinates by the operator.
-        self.hook_pivot_source = np.zeros(3, dtype=float)
-        self.hook_pivot_configured = False
+        # The STEP file's own CAD origin (0, 0, 0) is the rotation pivot.
+        self.pose_manipulation_enabled = False
         self._pose_actor = None
         self._actor_style = None
         self._pose_interaction_callback = None
+        self._cad_axes_actor = None
+        # Display-only bounds; operator must set actual work-cell extents.
+        self.workspace_dimensions = np.array([1000.0, 1000.0, 1000.0], dtype=float)
 
         self.source_to_view_transform = np.eye(4, dtype=float)
         self.view_to_source_transform = np.eye(4, dtype=float)
@@ -329,46 +331,52 @@ class ProductViewer(QWidget):
         panel = QFrame()
         panel.setObjectName("PoseReferenceControls")
         panel.setStyleSheet("""
-            QFrame#PoseReferenceControls {
-                background-color: #0D1822;
-                border: 1px solid #294858;
-                border-radius: 5px;
-            }
+            QFrame#PoseReferenceControls { background-color: #0D1822; border: 1px solid #294858; border-radius: 5px; }
             QLabel { color: #D8E5ED; padding: 2px; }
-            QPushButton {
-                color: #EAF4F8;
-                background-color: #173747;
-                border: 1px solid #3D7185;
-                border-radius: 4px;
-                padding: 5px 10px;
-                font-weight: bold;
-            }
+            QPushButton { color: #EAF4F8; background-color: #173747; border: 1px solid #3D7185; border-radius: 4px; padding: 5px 8px; font-weight: bold; }
             QPushButton:disabled { color: #71838D; background-color: #17232B; }
         """)
         layout = QHBoxLayout(panel)
         layout.setContentsMargins(8, 5, 8, 5)
-        layout.setSpacing(6)
-        layout.addWidget(QLabel("HOOK PIVOT CAD (X / Y / Z):"))
-        self.hook_pivot_inputs = []
+        layout.setSpacing(5)
+
+        layout.addWidget(QLabel("CAD ORIGIN / WORLD XYZ:"))
+        self.world_position_inputs = []
         for axis in "XYZ":
             field = QDoubleSpinBox()
-            field.setRange(-1000000.0, 1000000.0)
+            field.setRange(-10000000.0, 10000000.0)
             field.setDecimals(3)
-            field.setSingleStep(1.0)
+            field.setSingleStep(10.0)
             field.setSuffix(f" {axis}")
-            field.setFixedWidth(105)
-            field.setToolTip(f"Hook pivot {axis} coordinate in source CAD units")
+            field.setFixedWidth(82)
+            field.setToolTip(f"World {axis} coordinate of STEP CAD origin (0,0,0), in source CAD units.")
             layout.addWidget(field)
-            self.hook_pivot_inputs.append(field)
+            self.world_position_inputs.append(field)
 
-        self.apply_pivot_button = QPushButton("APPLY PIVOT")
-        self.apply_pivot_button.clicked.connect(self._apply_hook_pivot)
-        layout.addWidget(self.apply_pivot_button)
+        self.apply_position_button = QPushButton("SET POSITION")
+        self.apply_position_button.clicked.connect(self._apply_world_position)
+        layout.addWidget(self.apply_position_button)
 
-        self.pose_status_label = QLabel(
-            "Enter the hook pivot, then drag the product with the left mouse button."
-        )
-        self.pose_status_label.setMinimumWidth(220)
+        layout.addWidget(QLabel("BOX X/Y/Z:"))
+        self.workspace_size_inputs = []
+        for axis in "XYZ":
+            field = QDoubleSpinBox()
+            field.setRange(1.0, 10000000.0)
+            field.setDecimals(1)
+            field.setSingleStep(100.0)
+            field.setValue(1000.0)
+            field.setSuffix(f" {axis}")
+            field.setFixedWidth(72)
+            field.setToolTip("Configurable display-box extent in source CAD units; not a measured work-cell dimension.")
+            layout.addWidget(field)
+            self.workspace_size_inputs.append(field)
+
+        self.apply_workspace_button = QPushButton("APPLY BOX")
+        self.apply_workspace_button.clicked.connect(self._apply_workspace_bounds)
+        layout.addWidget(self.apply_workspace_button)
+
+        self.pose_status_label = QLabel("World: +X chain/right, +Y inward, +Z down. Rotation pivot: STEP CAD origin.")
+        self.pose_status_label.setMinimumWidth(230)
         layout.addWidget(self.pose_status_label, 1)
 
         self.confirm_pose_button = QPushButton("CONFIRM & SAVE POSE")
@@ -381,19 +389,25 @@ class ProductViewer(QWidget):
         layout.addWidget(self.reset_pose_button)
         return panel
 
-    def _apply_hook_pivot(self):
-        pivot = np.asarray([field.value() for field in self.hook_pivot_inputs], dtype=float)
-        if not np.all(np.isfinite(pivot)):
-            self.pose_status_label.setText("Invalid hook pivot coordinates.")
+    def _apply_world_position(self):
+        if self._pose_actor is None:
             return
-        self.hook_pivot_source = pivot
-        self.hook_pivot_configured = True
-        self._reset_reference_pose()
-        self._install_actor_interaction()
-        self.pose_status_label.setText(
-            "Hook pivot applied. Drag the product and confirm to save the reference pose."
-        )
-        self.confirm_pose_button.setEnabled(True)
+        position = np.asarray([field.value() for field in self.world_position_inputs], dtype=float)
+        if not np.all(np.isfinite(position)):
+            self.pose_status_label.setText("Invalid World XYZ position.")
+            return
+        self._pose_actor.SetPosition(*position.tolist())
+        self.plotter.render()
+        self._update_pose_readout()
+
+    def _apply_workspace_bounds(self):
+        dimensions = np.asarray([field.value() for field in self.workspace_size_inputs], dtype=float)
+        if not np.all(np.isfinite(dimensions)) or np.any(dimensions <= 0.0):
+            self.pose_status_label.setText("Box dimensions must be positive.")
+            return
+        self.workspace_dimensions = dimensions
+        self._render_product(reset_camera=False)
+        self.pose_status_label.setText("World display box updated; extents are configurable visualization bounds.")
 
     def _install_actor_interaction(self):
         if self._pose_actor is None:
@@ -403,29 +417,35 @@ class ProductViewer(QWidget):
             self._actor_style = vtkInteractorStyleTrackballActor()
             self._actor_style.SetDefaultRenderer(self.plotter.renderer)
             self.plotter.interactor.SetInteractorStyle(self._actor_style)
-            self._pose_actor.SetOrigin(*self.hook_pivot_source.tolist())
-
+            # The STEP CAD origin is the fixed pivot for object rotation.
+            self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
             def on_interaction(caller, event):
+                self._sync_world_position_inputs()
                 self._update_pose_readout()
-
             self._pose_interaction_callback = on_interaction
             self._actor_style.AddObserver("InteractionEvent", self._pose_interaction_callback)
         except Exception as exc:
-            self.pose_status_label.setText(f"Actor rotation unavailable: {exc}")
+            self.pose_status_label.setText(f"3D object manipulation unavailable: {exc}")
             self.confirm_pose_button.setEnabled(False)
+
+    def _sync_world_position_inputs(self):
+        if self._pose_actor is None:
+            return
+        position = self._actor_matrix_array()[:3, 3]
+        for field, value in zip(self.world_position_inputs, position):
+            field.blockSignals(True)
+            field.setValue(float(value))
+            field.blockSignals(False)
 
     def _actor_matrix_array(self):
         if self._pose_actor is None:
             return np.eye(4, dtype=float)
         matrix = self._pose_actor.GetMatrix()
-        return np.array(
-            [[matrix.GetElement(row, col) for col in range(4)] for row in range(4)],
-            dtype=float,
-        )
+        return np.array([[matrix.GetElement(row, col) for col in range(4)] for row in range(4)], dtype=float)
 
     @staticmethod
     def _rotation_to_rpy(rotation):
-        # R = Rz(yaw) * Ry(pitch) * Rx(roll).
+        # World-axis ZYX convention: R = Rz(yaw) * Ry(pitch) * Rx(roll).
         sy = math.sqrt(rotation[0, 0] ** 2 + rotation[1, 0] ** 2)
         if sy >= 1e-8:
             roll = math.atan2(rotation[2, 1], rotation[2, 2])
@@ -445,35 +465,48 @@ class ProductViewer(QWidget):
             u[:, -1] *= -1
             rotation = u @ vt
         return {
-            "world_frame": "WORLD_NED",
+            "world_frame": "WORLD_XYZ",
             "world_axis_definition": {
-                "X": "NORTH / CHAIN_DIRECTION",
-                "Y": "EAST / LATERAL",
-                "Z": "DOWN",
+                "origin": "CHAIN_ENTRY_POINT",
+                "X": "CHAIN_DIRECTION / SCREEN_RIGHT",
+                "Y": "INWARD / WORKCELL_DEPTH",
+                "Z": "VERTICALLY_DOWN",
             },
             "product_frame": "PRODUCT_CAD",
-            "pivot_type": "HOOK_ROTATION_AXIS_POINT",
-            "hook_pivot_cad": self.hook_pivot_source.tolist(),
-            "position_world_ned_source_units": matrix[:3, 3].tolist(),
-            "roll_pitch_yaw_deg": self._rotation_to_rpy(rotation).tolist(),
+            "rotation_pivot": "STEP_CAD_ORIGIN",
+            "rotation_pivot_cad": [0.0, 0.0, 0.0],
+            "position_world_xyz_source_units": matrix[:3, 3].tolist(),
+            "roll_pitch_yaw_world_xyz_deg": self._rotation_to_rpy(rotation).tolist(),
             "rotation_matrix_3x3": rotation.tolist(),
             "transform_matrix_4x4": matrix.tolist(),
+            "workspace_display_dimensions_source_units": self.workspace_dimensions.tolist(),
+            "workspace_dimensions_are_measured": False,
         }
 
     def _update_pose_readout(self):
-        if self._pose_actor is None or not self.hook_pivot_configured:
+        if self._pose_actor is None:
             return
         pose = self._current_pose_record()
-        p = pose["position_world_ned_source_units"]
-        rpy = pose["roll_pitch_yaw_deg"]
+        p, rpy = pose["position_world_xyz_source_units"], pose["roll_pitch_yaw_world_xyz_deg"]
         self.pose_status_label.setText(
-            f"CAD origin in WORLD NED: X {p[0]:.2f}, Y {p[1]:.2f}, "
-            f"Z {p[2]:.2f} {self._source_unit_label()} | "
-            f"RPY: {rpy[0]:.2f}°, {rpy[1]:.2f}°, {rpy[2]:.2f}°"
+            f"CAD ORIGIN / WORLD XYZ: ({p[0]:.2f}, {p[1]:.2f}, {p[2]:.2f}) {self._source_unit_label()} | "
+            f"RPY ({rpy[0]:.2f}, {rpy[1]:.2f}, {rpy[2]:.2f})°"
         )
+        if self._cad_axes_actor is not None:
+            self._cad_axes_actor.SetUserMatrix(self._vtk_matrix_from_numpy(self._actor_matrix_array()))
+            self.plotter.render()
+
+    @staticmethod
+    def _vtk_matrix_from_numpy(values):
+        from vtkmodules.vtkCommonMath import vtkMatrix4x4
+        matrix = vtkMatrix4x4()
+        for row in range(4):
+            for col in range(4):
+                matrix.SetElement(row, col, float(values[row, col]))
+        return matrix
 
     def _confirm_reference_pose(self):
-        if self._pose_actor is None or not self.hook_pivot_configured:
+        if self._pose_actor is None:
             return
         record = self._current_pose_record()
         record["coordinate_unit"] = self.source_unit
@@ -486,7 +519,9 @@ class ProductViewer(QWidget):
             self._pose_actor.SetPosition(0.0, 0.0, 0.0)
             self._pose_actor.SetOrientation(0.0, 0.0, 0.0)
             self._pose_actor.SetScale(1.0, 1.0, 1.0)
-            self._pose_actor.SetOrigin(*self.hook_pivot_source.tolist())
+            self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
+            for field in self.world_position_inputs:
+                field.setValue(0.0)
             self.plotter.render()
         self._update_pose_readout()
 
@@ -575,6 +610,7 @@ class ProductViewer(QWidget):
         self.plotter.clear()
         self._pose_actor = None
         self._actor_style = None
+        self._cad_axes_actor = None
         self.plotter.set_background("#101820")
 
         self.plotter.add_text(
@@ -602,10 +638,12 @@ class ProductViewer(QWidget):
         self.display_mode = "product"
         self._set_trajectory_controls_visible(False)
         self.pose_control_panel.setVisible(True)
-        self.hook_pivot_configured = False
-        self.confirm_pose_button.setEnabled(False)
-        self.hook_pivot_source = np.zeros(3, dtype=float)
-        for field in self.hook_pivot_inputs:
+        self.pose_manipulation_enabled = True
+        self.confirm_pose_button.setEnabled(True)
+        self.workspace_dimensions = np.maximum(np.asarray(self.current_mesh.extents, dtype=float) * 4.0, 100.0)
+        for field, value in zip(self.workspace_size_inputs, self.workspace_dimensions):
+            field.setValue(float(value))
+        for field in self.world_position_inputs:
             field.setValue(0.0)
 
         self._render_product(reset_camera=True)
@@ -1101,99 +1139,71 @@ class ProductViewer(QWidget):
         return float(np.median(valid) * 0.25)
 
     # =========================================================
-    # WORLD NED AND PRODUCT CAD COORDINATE FRAMES
+    # FIXED WORLD XYZ WORKSPACE AND MOVING PRODUCT CAD FRAME
     # =========================================================
 
-    def _add_coordinate_frame(self, origin, basis, labels, colors, length):
-        """Draw a labelled right-handed coordinate triad."""
-        origin = np.asarray(origin, dtype=float)
-        basis = np.asarray(basis, dtype=float)
+    def _add_world_workspace(self):
+        lx, ly, lz = self.workspace_dimensions
+        corners = np.array([
+            [0,0,0], [lx,0,0], [lx,ly,0], [0,ly,0],
+            [0,0,lz], [lx,0,lz], [lx,ly,lz], [0,ly,lz],
+        ], dtype=float)
+        pairs = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+        cells = []
+        for i, j in pairs:
+            cells.extend([2, i, j])
+        outline = pv.PolyData(corners)
+        outline.lines = np.asarray(cells, dtype=np.int64)
+        self.plotter.add_mesh(outline, color="#78909C", line_width=2, lighting=False)
 
-        for axis_index in range(3):
-            direction = basis[:, axis_index]
-            norm = float(np.linalg.norm(direction))
-            if norm < 1e-10:
-                continue
-            direction = direction / norm
-            arrow = pv.Arrow(
-                start=origin,
-                direction=direction,
-                scale=length,
-                tip_length=0.22,
-                tip_radius=0.07,
-                shaft_radius=0.018,
-            )
-            self.plotter.add_mesh(arrow, color=colors[axis_index], lighting=False)
-            label_position = origin + direction * (length * 1.12)
+        # Grid on the bottom plane (positive Z), consistent with Z-down.
+        spacing = max(min(lx, ly) / 10.0, 1.0)
+        points, lines = [], []
+        for x in np.arange(0.0, lx + spacing * 0.5, spacing):
+            i = len(points); points.extend([[x,0.0,lz],[x,ly,lz]]); lines.extend([2,i,i+1])
+        for y in np.arange(0.0, ly + spacing * 0.5, spacing):
+            i = len(points); points.extend([[0.0,y,lz],[lx,y,lz]]); lines.extend([2,i,i+1])
+        if points:
+            grid = pv.PolyData(np.asarray(points, dtype=float))
+            grid.lines = np.asarray(lines, dtype=np.int64)
+            self.plotter.add_mesh(grid, color="#263B49", line_width=1, lighting=False)
+
+        axis_length = max(min(lx,ly,lz) * 0.18, 20.0)
+        for direction, color, label in [
+            ([1,0,0], "#FF5252", "+X CHAIN / RIGHT"),
+            ([0,1,0], "#00E676", "+Y INWARD"),
+            ([0,0,1], "#40C4FF", "+Z DOWN"),
+        ]:
+            vector = np.asarray(direction, dtype=float)
+            self.plotter.add_mesh(pv.Arrow(start=(0,0,0), direction=vector, scale=axis_length), color=color, lighting=False)
             self.plotter.add_point_labels(
-                np.asarray([label_position]),
-                [labels[axis_index]],
-                font_size=10,
-                text_color=colors[axis_index],
-                point_size=0,
-                shape=None,
-                always_visible=True,
+                np.asarray([vector * axis_length * 1.15]), [label],
+                font_size=10, text_color=color, point_size=0, shape=None, always_visible=True,
             )
+        self.plotter.add_point_labels(
+            np.asarray([[0.0,0.0,0.0]]), ["WORLD ORIGIN / CHAIN ENTRY"],
+            font_size=10, text_color="#FFFFFF", point_size=0, shape=None, always_visible=True,
+        )
+        self.plotter.add_text(
+            "WORLD XYZ | ORIGIN: CHAIN ENTRY\n+X: CHAIN RIGHT   +Y: INWARD   +Z: DOWN\nBOX: CONFIGURABLE DISPLAY BOUNDS",
+            position="upper_left", font_size=9, color="#EAF4F8",
+        )
+
+    def _add_product_coordinate_frame(self):
+        if self._pose_actor is None:
+            return
+        from vtkmodules.vtkRenderingAnnotation import vtkAxesActor
+        axes = vtkAxesActor()
+        axes.SetTotalLength(*[max(float(value) * 0.12, 10.0) for value in self.workspace_dimensions])
+        axes.SetUserMatrix(self._vtk_matrix_from_numpy(self._actor_matrix_array()))
+        self._cad_axes_actor = axes
+        self.plotter.add_actor(axes, reset_camera=False)
 
     def _add_pose_coordinate_frames(self):
-        """
-        World NED is fixed at the chain-entry origin.
-        Product CAD is attached to the CAD origin and follows the actor.
-        +X follows the chain, +Y is lateral, and +Z points down.
-        """
-        if self.display_mode != "product" or self._pose_actor is None:
+        if self.display_mode != "product":
             return
-
-        bounds = np.asarray(self.current_mesh.bounds, dtype=float)
-        diagonal = float(np.linalg.norm(bounds[1] - bounds[0]))
-        axis_length = max(diagonal * 0.20, 10.0)
-
-        self._add_coordinate_frame(
-            origin=np.zeros(3, dtype=float),
-            basis=np.eye(3, dtype=float),
-            labels=("WORLD +X / CHAIN", "WORLD +Y", "WORLD +Z / DOWN"),
-            colors=("#FF5252", "#00E676", "#40C4FF"),
-            length=axis_length,
-        )
-
-        transform = self._actor_matrix_array()
-        cad_origin_world = transform[:3, 3]
-        self._add_coordinate_frame(
-            origin=cad_origin_world,
-            basis=transform[:3, :3],
-            labels=("CAD +X", "CAD +Y", "CAD +Z"),
-            colors=("#FFB74D", "#CE93D8", "#FFFFFF"),
-            length=axis_length * 0.72,
-        )
-
-        if self.hook_pivot_configured:
-            pivot_h = np.append(self.hook_pivot_source, 1.0)
-            pivot_world = (transform @ pivot_h)[:3]
-            marker = pv.Sphere(
-                radius=max(axis_length * 0.035, 1.0),
-                center=pivot_world,
-                theta_resolution=16,
-                phi_resolution=16,
-            )
-            self.plotter.add_mesh(marker, color="#FF00FF", lighting=False)
-            self.plotter.add_point_labels(
-                np.asarray([pivot_world + np.array([axis_length * 0.05] * 3)]),
-                ["HOOK PIVOT"],
-                font_size=10,
-                text_color="#FF00FF",
-                point_size=0,
-                shape=None,
-                always_visible=True,
-            )
-
-        self.plotter.add_text(
-            "WORLD NED  |  X: CHAIN  Y: LATERAL  Z: DOWN\n"
-            "PRODUCT CAD FRAME  |  follows the product\n"
-            "MAGENTA POINT  |  hook rotation pivot",
-            position="upper_left",
-            font_size=9,
-            color="#EAF4F8",
-        )
+        self._add_world_workspace()
+        self._add_product_coordinate_frame()
 
     # =========================================================
     # MAIN RENDERING
@@ -1362,13 +1372,12 @@ class ProductViewer(QWidget):
                 specular=0.25,
                 specular_power=20,
             )
-            self._pose_actor.SetOrigin(*self.hook_pivot_source.tolist())
+            self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
 
         # -------------------------------------------------
         # COMMON VIEWER ELEMENTS
         # -------------------------------------------------
-        # Fixed World NED and moving Product CAD frames are both visible
-        # in the manual reference-pose viewer.
+        # Fixed World XYZ box and moving Product CAD frame.
         self._add_pose_coordinate_frames()
 
         # -------------------------------------------------
@@ -1387,7 +1396,7 @@ class ProductViewer(QWidget):
 
         # Reinstall actor manipulation after a redraw (for example, a
         # display-unit change) without enabling it in analysis stages.
-        if self.display_mode == "product" and self.hook_pivot_configured:
+        if self.display_mode == "product" and self.pose_manipulation_enabled:
             self._install_actor_interaction()
 
     def _add_classification_legend(self):
