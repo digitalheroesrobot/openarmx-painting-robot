@@ -172,10 +172,18 @@ class SprayPatternPreview(QWidget):
         )
         track_pitch_mm = spray_width_mm * (1.0 - overlap / 100.0)
 
-        # Schematic scale: retain enough room to show the center pass and
-        # its two neighboring passes without clipping the spray envelopes.
-        max_half_width_px = max(20.0, min(width * 0.18, 78.0))
-        visual_half_width = max_half_width_px
+        # Map the calculated physical spray width to screen pixels.
+        # A fixed pixel width here would make the preview ignore angle changes.
+        # Keep one consistent scale while allowing very wide patterns to fit.
+        preview_pixels_per_mm = 0.32
+        max_half_width_px = max(12.0, width * 0.32)
+        visual_half_width = max(
+            6.0,
+            min(
+                0.5 * spray_width_mm * preview_pixels_per_mm,
+                max_half_width_px,
+            ),
+        )
         pitch_px = visual_half_width * 2.0 * (1.0 - overlap / 100.0)
         visual_depth = surface_y - tip_y
 
