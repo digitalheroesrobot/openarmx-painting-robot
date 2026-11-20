@@ -382,16 +382,20 @@ class ProductViewer(QWidget):
         layout.addWidget(step_label)
 
         self.rpy_step_input = QDoubleSpinBox()
-        self.rpy_step_input.setRange(0.01, 360.00)
-        self.rpy_step_input.setDecimals(2)
-        self.rpy_step_input.setSingleStep(0.01)
-        self.rpy_step_input.setValue(0.01)
-        self.rpy_step_input.setFixedWidth(100)
+        # Fixed angular increment: every RPY arrow click changes exactly 1 degree.
+        self.rpy_step_input.setRange(1.0, 1.0)
+        self.rpy_step_input.setDecimals(0)
+        self.rpy_step_input.setSingleStep(1.0)
+        self.rpy_step_input.setValue(1.0)
+        self.rpy_step_input.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+        self.rpy_step_input.setReadOnly(True)
+        self.rpy_step_input.setFixedWidth(76)
         self.rpy_step_input.setToolTip(
-            "Sets the change applied by each Roll, Pitch and Yaw arrow click."
+            "Fixed angular increment: each Roll, Pitch and Yaw arrow click changes 1 degree."
         )
-        self.rpy_step_input.valueChanged.connect(self._on_rpy_step_changed)
         layout.addWidget(self.rpy_step_input)
+        for field in self.rpy_inputs:
+            field.setSingleStep(1.0)
 
         self.reset_rpy_button = QPushButton("RESET RPY")
         self.reset_rpy_button.setToolTip(
@@ -432,10 +436,9 @@ class ProductViewer(QWidget):
         return panel
 
     def _on_rpy_step_changed(self, value):
-        """Apply the selected angular increment to all three RPY selectors."""
-        step = max(0.01, float(value))
+        """Compatibility handler; the angular increment is fixed at one degree."""
         for field in self.rpy_inputs:
-            field.setSingleStep(step)
+            field.setSingleStep(1.0)
 
     def _reset_rpy_angles(self):
         """Reset orientation only; preserve product position and scale."""
@@ -1464,8 +1467,46 @@ class ProductViewer(QWidget):
         if self._pose_actor is None:
             return
         from vtkmodules.vtkRenderingAnnotation import vtkAxesActor
+
         axes = vtkAxesActor()
-        axes.SetTotalLength(*[max(float(value) * 0.12, 10.0) for value in self.workspace_dimensions])
+        product_bounds = np.asarray(self._pose_actor.GetBounds(), dtype=float).reshape(3, 2)
+        product_size = max(float(np.max(product_bounds[:, 1] - product_bounds[:, 0])), 1.0)
+        axis_length = product_size * 0.22
+        axes.SetTotalLength(axis_length, axis_length, axis_length)
+
+        # A restrained, pale technical triad: visible on the product without
+        # competing with its geometry or the fixed World reference.
+        axes.SetShaftTypeToLine()
+        axes.SetConeRadius(0.035)
+        axes.SetSphereRadius(0.025)
+        axes.SetXAxisLabelText("X")
+        axes.SetYAxisLabelText("Y")
+        axes.SetZAxisLabelText("Z")
+        axes.SetAxisLabels(True)
+
+        axis_styles = (
+            (axes.GetXAxisShaftProperty(), axes.GetXAxisTipProperty(), (0.88, 0.63, 0.66)),
+            (axes.GetYAxisShaftProperty(), axes.GetYAxisTipProperty(), (0.64, 0.82, 0.70)),
+            (axes.GetZAxisShaftProperty(), axes.GetZAxisTipProperty(), (0.64, 0.76, 0.90)),
+        )
+        for shaft, tip, color in axis_styles:
+            shaft.SetColor(*color)
+            tip.SetColor(*color)
+            shaft.SetOpacity(0.62)
+            tip.SetOpacity(0.62)
+
+        # Keep XYZ captions compact and understated.
+        for caption in (
+            axes.GetXAxisCaptionActor2D(),
+            axes.GetYAxisCaptionActor2D(),
+            axes.GetZAxisCaptionActor2D(),
+        ):
+            text_property = caption.GetCaptionTextProperty()
+            text_property.SetFontSize(13)
+            text_property.SetBold(True)
+            text_property.SetShadow(False)
+            text_property.SetColor(0.82, 0.88, 0.94)
+
         axes.SetUserMatrix(self._vtk_matrix_from_numpy(self._actor_matrix_array()))
         self._cad_axes_actor = axes
         self.plotter.add_actor(axes, reset_camera=False)
