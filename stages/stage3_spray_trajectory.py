@@ -1562,6 +1562,75 @@ def _order_trajectory_with_planar_raster(
     result["rasterized_planar_patch_ids"] = rasterized_patch_ids
     result["rasterized_curved_patch_ids"] = curved_rasterized_patch_ids
     result["nearest_neighbor_fallback_patch_ids"] = fallback_patch_ids
+
+    # Keep sample and segment counts by the actual generator used for each
+    # patch. Playback's total is the final output sample count, not lane count.
+    segment_types_by_patch = {}
+    for segment in segment_metadata:
+        patch_id = int(segment.get("patch_id", -1))
+        path_type = str(segment.get("path_type", "unknown"))
+        segment_types_by_patch.setdefault(patch_id, path_type)
+
+    output_patch_ids = result["patch_ids"]
+    per_patch_statistics = []
+    for patch_id in np.unique(output_patch_ids):
+        patch_id = int(patch_id)
+        patch_mask = output_patch_ids == patch_id
+        patch_segments = [
+            segment for segment in segment_metadata
+            if int(segment.get("patch_id", -1)) == patch_id
+        ]
+        path_type = segment_types_by_patch.get(patch_id, "unknown")
+        per_patch_statistics.append({
+            "patch_id": patch_id,
+            "path_type": path_type,
+            "sample_count": int(np.count_nonzero(patch_mask)),
+            "segment_count": int(len(patch_segments)),
+        })
+
+    def _count_path_type_samples(path_type):
+        patch_id_set = {
+            item["patch_id"] for item in per_patch_statistics
+            if item["path_type"] == path_type
+        }
+        return int(np.count_nonzero(np.isin(output_patch_ids, list(patch_id_set))))
+
+    path_type_names = {
+        "planar_raster": "planar",
+        "curved_surface_raster": "curved",
+        "nearest_neighbor_fallback_projection_rejected": "fallback",
+    }
+    path_statistics = {
+        "source_candidate_sample_count": int(len(surface_points)),
+        "playback_sample_count": int(len(result["surface_points"])),
+        "planar_sample_count": _count_path_type_samples("planar_raster"),
+        "curved_sample_count": _count_path_type_samples("curved_surface_raster"),
+        "fallback_sample_count": _count_path_type_samples(
+            "nearest_neighbor_fallback_projection_rejected"
+        ),
+        "planar_segment_count": int(sum(
+            1 for item in segment_metadata
+            if item.get("path_type") == "planar_raster"
+        )),
+        "curved_segment_count": int(sum(
+            1 for item in segment_metadata
+            if item.get("path_type") == "curved_surface_raster"
+        )),
+        "fallback_segment_count": int(sum(
+            1 for item in segment_metadata
+            if item.get("path_type") == "nearest_neighbor_fallback_projection_rejected"
+        )),
+        "planar_patch_ids": [int(value) for value in rasterized_patch_ids],
+        "curved_patch_ids": [int(value) for value in curved_rasterized_patch_ids],
+        "fallback_patch_ids": [int(value) for value in fallback_patch_ids],
+        "per_patch": per_patch_statistics,
+        "note": (
+            "Playback samples are generated path points. Source candidate samples "
+            "are pre-rasterization samples; their counts are diagnostic and are "
+            "not expected to match one-to-one."
+        ),
+    }
+    result["path_statistics"] = path_statistics
     return result
 
 
