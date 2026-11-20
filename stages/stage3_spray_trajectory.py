@@ -1507,6 +1507,89 @@ def _generate_surface_following_raster_for_patch(
 
 
 
+def _merge_single_face_normal_groups(
+    groups: list[np.ndarray],
+    face_indices: np.ndarray,
+    unit_normals: np.ndarray,
+    max_merge_angle_deg: float = 70.0,
+) -> tuple[list[np.ndarray], int]:
+    """
+    Merge singleton normal-cone groups into the closest compatible larger
+    group. A merge is accepted only when every resulting normal remains within
+    max_merge_angle_deg of the merged group's mean direction.
+    """
+    if not groups:
+        return groups, 0
+
+    face_to_local = {
+        int(face_id): int(local_index)
+        for local_index, face_id in enumerate(face_indices)
+    }
+    merged_groups = [np.asarray(group, dtype=np.int64).copy() for group in groups]
+    singleton_groups = [
+        group for group in merged_groups if len(group) == 1
+    ]
+    merged_groups = [
+        group for group in merged_groups if len(group) >= 2
+    ]
+    if not singleton_groups:
+        return merged_groups, 0
+
+    cosine_limit = math.cos(math.radians(float(max_merge_angle_deg)))
+    merged_count = 0
+    unresolved = []
+
+    for singleton in singleton_groups:
+        face_id = int(singleton[0])
+        local_index = face_to_local[face_id]
+        normal = unit_normals[local_index]
+        best_index = None
+        best_alignment = -float("inf")
+
+        for group_index, group in enumerate(merged_groups):
+            member_indices = np.asarray(
+                [face_to_local[int(member)] for member in group],
+                dtype=np.int64,
+            )
+            group_mean = np.mean(unit_normals[member_indices], axis=0)
+            mean_length = float(np.linalg.norm(group_mean))
+            if mean_length <= NORMAL_EPSILON:
+                continue
+            group_mean /= mean_length
+            alignment = float(np.dot(normal, group_mean))
+            if alignment > best_alignment:
+                best_alignment = alignment
+                best_index = group_index
+
+        if best_index is None or best_alignment < cosine_limit:
+            unresolved.append(singleton)
+            continue
+
+        candidate = np.concatenate(
+            [merged_groups[best_index], singleton]
+        ).astype(np.int64)
+        candidate_indices = np.asarray(
+            [face_to_local[int(member)] for member in candidate],
+            dtype=np.int64,
+        )
+        candidate_mean = np.mean(unit_normals[candidate_indices], axis=0)
+        candidate_mean_length = float(np.linalg.norm(candidate_mean))
+        if candidate_mean_length <= NORMAL_EPSILON:
+            unresolved.append(singleton)
+            continue
+        candidate_mean /= candidate_mean_length
+        candidate_alignment = unit_normals[candidate_indices] @ candidate_mean
+        if float(np.min(candidate_alignment)) < cosine_limit:
+            unresolved.append(singleton)
+            continue
+
+        merged_groups[best_index] = candidate
+        merged_count += 1
+
+    merged_groups.extend(unresolved)
+    return merged_groups, merged_count
+
+
 def _generate_partitioned_surface_raster_for_patch(
     mesh: trimesh.Trimesh,
     face_indices: np.ndarray,
@@ -1566,19 +1649,38 @@ def _generate_partitioned_surface_raster_for_patch(
         groups.append(face_indices[members])
         unassigned[members] = False
 
+    groups, merged_singleton_count = _merge_single_face_normal_groups(
+        groups=groups,
+        face_indices=face_indices,
+        unit_normals=unit_normals,
+        max_merge_angle_deg=70.0,
+    )
+
     if len(groups) <= 1:
         if diagnostics is not None:
             diagnostics["reason"] = "normal_partition_did_not_split_patch"
         return None
 
+    remaining_small_group = next(
+        (
+            group_index
+            for group_index, group_faces in enumerate(groups)
+            if len(group_faces) < 2
+        ),
+        None,
+    )
+    if remaining_small_group is not None:
+        if diagnostics is not None:
+            diagnostics["reason"] = (
+                f"normal_partition_subpatch_too_small:{remaining_small_group}"
+            )
+            diagnostics["merged_singleton_group_count"] = int(
+                merged_singleton_count
+            )
+        return None
+
     parts = []
     for group_index, group_faces in enumerate(groups):
-        if len(group_faces) < 2:
-            if diagnostics is not None:
-                diagnostics["reason"] = (
-                    f"normal_partition_subpatch_too_small:{group_index}"
-                )
-            return None
         part_diagnostics = {}
         part = _generate_surface_following_raster_for_patch(
             mesh=mesh,
@@ -1631,6 +1733,9 @@ def _generate_partitioned_surface_raster_for_patch(
     combined["lane_count"] = int(len(segment_records))
     combined["normal_cluster_count"] = int(len(parts))
     combined["normal_cluster_max_angle_deg"] = angle
+    combined["normal_cluster_merged_singleton_count"] = int(
+        merged_singleton_count
+    )
     combined["projection_method"] = "normal_cone_partitioned_pca_triangle_barycentric"
     combined["projection_is_approximate"] = True
     if diagnostics is not None:
@@ -3790,6 +3895,27 @@ def run_stage3_numerical_tests() -> dict:
         25.0,
         atol=1e-6,
     )
+
+    # --------------------------------------------------------
+    # Test 22D: A small normal group is merged only when directionally safe.
+    # --------------------------------------------------------
+    merge_test_normals = np.asarray([
+        [1.0, 0.0, 0.0],
+        [math.cos(math.radians(40.0)), math.sin(math.radians(40.0)), 0.0],
+        [math.cos(math.radians(80.0)), math.sin(math.radians(80.0)), 0.0],
+    ], dtype=np.float64)
+    merge_test_groups, merge_test_count = _merge_single_face_normal_groups(
+        groups=[
+            np.asarray([0, 1], dtype=np.int64),
+            np.asarray([2], dtype=np.int64),
+        ],
+        face_indices=np.asarray([0, 1, 2], dtype=np.int64),
+        unit_normals=merge_test_normals,
+        max_merge_angle_deg=70.0,
+    )
+    assert merge_test_count == 1
+    assert len(merge_test_groups) == 1
+    assert set(merge_test_groups[0].tolist()) == {0, 1, 2}
 
     # --------------------------------------------------------
     # Test 22C: Adaptive scanlines recover separated projected bands.
