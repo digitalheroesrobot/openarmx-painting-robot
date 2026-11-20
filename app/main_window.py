@@ -2442,9 +2442,10 @@ class MainWindow(QMainWindow):
             current_profile=self.sprayer_profile,
             parent=self,
         )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-
+        # The dialog stays open after Save/Save As. A saved profile is
+        # applied to the main application when the user finally presses
+        # the dialog's Cancel button to close it.
+        dialog.exec()
         if dialog.selected_profile is None:
             return
 
