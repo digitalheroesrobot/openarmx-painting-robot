@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QStatusBar,
     QProgressBar,
-    QDoubleSpinBox,
     QCheckBox,
     QScrollArea,
     QTableWidget,
@@ -38,12 +37,7 @@ from core.result_manager import ResultManager
 from stages.stage1_geometry import execute_stage1
 from stages.stage2_surface_identification import execute_stage2
 from stages.cad_surface_analysis import analyze_step_faces
-from stages.stage3_spray_trajectory import (
-    execute_stage3,
-    DEFAULT_STANDOFF_MM,
-    DEFAULT_SAMPLING_SPACING_MM,
-    DEFAULT_SPRAY_ANGLE_DEG,
-)
+from stages.stage3_spray_trajectory import execute_stage3
 
 from ui.viewer_3d import ProductViewer
 from ui.sprayer_settings import (
