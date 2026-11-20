@@ -2212,7 +2212,10 @@ class ProductViewer(QWidget):
                 self.plotter.reset_camera_clipping_range()
             except Exception:
                 self._set_standard_camera()
-        elif self.display_mode == "product" and self._pose_actor is not None:
+        elif (
+            self.display_mode in ("product", "classification", "trajectory")
+            and self._pose_actor is not None
+        ):
             self._set_product_camera()
         else:
             self._set_standard_camera()
