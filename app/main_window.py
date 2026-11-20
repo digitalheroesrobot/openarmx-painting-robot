@@ -4170,14 +4170,10 @@ class MainWindow(QMainWindow):
             if item["decision"] == DECISION_NO_PAINT
         )
 
-        # Review-required patches remain visible in their own
-        # category even though they are intentionally not marked
-        # as inspected / approved yet.
-        requires_count = sum(
-            1
-            for item in self.patch_inspection.values()
-            if item["decision"] == DECISION_REQUIRES_INSPECTION
-        )
+        # Every patch belongs to exactly one visible bucket.
+        # Any patch without a completed Paint / No Paint decision
+        # remains in REVIEW REQUIRED, including unchecked rows.
+        requires_count = total - paint_count - no_paint_count
 
         self.analysis_summary.setStyleSheet(
             "color: #00E676;"
