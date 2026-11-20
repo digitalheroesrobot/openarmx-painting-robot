@@ -145,6 +145,7 @@ class ProductViewer(QWidget):
 
         # Stage 3 sequential trajectory playback state.
         self._playback_index = 0
+        self._playback_elapsed_s = 0.0
         self._playback_path_actor = None
         self._playback_nozzle_actor = None
         self._playback_gun_actors = []
@@ -405,7 +406,7 @@ class ProductViewer(QWidget):
         playback_row.addWidget(self.trajectory_playback_slider, 1)
 
         self.trajectory_playback_label = QLabel("0 / 0")
-        self.trajectory_playback_label.setMinimumWidth(76)
+        self.trajectory_playback_label.setMinimumWidth(150)
         self.trajectory_playback_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         playback_row.addWidget(self.trajectory_playback_label)
 
@@ -1752,6 +1753,7 @@ class ProductViewer(QWidget):
             self._playback_nozzle_actor = None
             self._playback_gun_actors = []
             self._playback_index = 0
+            self._playback_elapsed_s = 0.0
             self._playback_cache = None
             if hasattr(self, "trajectory_coverage_bar"):
                 self.trajectory_coverage_bar.setValue(0)
@@ -1809,10 +1811,9 @@ class ProductViewer(QWidget):
         faces = np.asarray(self.current_mesh.faces, dtype=np.int64)
         vertices = np.asarray(self.current_mesh.vertices, dtype=float)
         triangles = vertices[faces[target_face_ids]]
+        # Four deterministic samples per triangle (three edge midpoints
+        # and centroid) replace the former seven-point sampling grid.
         barycentric = np.asarray([
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
             [0.5, 0.5, 0.0],
             [0.5, 0.0, 0.5],
             [0.0, 0.5, 0.5],
@@ -1859,16 +1860,34 @@ class ProductViewer(QWidget):
         except (ValueError, IndexError):
             paint_rgb = np.asarray([217.0, 91.0, 67.0], dtype=float)
 
+        display_face_ids = (
+            np.flatnonzero(self._trajectory_surface_face_mask)
+            if self._trajectory_surface_face_mask is not None
+            else np.empty(0, dtype=np.int64)
+        )
+        face_to_display_index = np.full(len(self.current_mesh.faces), -1, dtype=np.int64)
+        face_to_display_index[display_face_ids] = np.arange(len(display_face_ids), dtype=np.int64)
+        target_display_indices = face_to_display_index[target_face_ids]
+
         self._playback_cache = {
             "nozzle_points": nozzle_points,
             "spray_directions": spray_directions,
             "nozzle_frames": nozzle_frames,
             "segment_ids": np.asarray(data["segment_ids"], dtype=np.int64),
+            "travel_speeds_mm_s": np.asarray(
+                data.get("travel_speeds_mm_s", np.full(len(nozzle_points), 150.0)),
+                dtype=float,
+            ),
+            "trajectory_time_s": np.asarray(
+                data.get("trajectory_time_s", np.arange(len(nozzle_points), dtype=float) * 0.1),
+                dtype=float,
+            ),
             "face_samples": face_samples,
             "sample_normals": sample_normals,
             "sample_face_ids": sample_face_ids,
             "face_areas": face_areas,
             "target_face_ids": target_face_ids,
+            "target_display_indices": target_display_indices,
             "target_area": target_area,
             "area_display_scale": (
                 mm_per_unit ** 2 / 1_000_000.0
@@ -1880,6 +1899,8 @@ class ProductViewer(QWidget):
             "surface_tree": surface_tree,
             "coverage_sample_hits": np.zeros(len(face_samples), dtype=bool),
             "coverage_processed_index": -1,
+            "coverage_render_stride": 4,
+            "coverage_last_render_index": -1,
             "sample_count_per_face": sample_count_per_face,
             "cone_tangent": cone_tangent,
             "cone_cosine": cone_cosine,
@@ -1985,9 +2006,21 @@ class ProductViewer(QWidget):
         if cache is None:
             return
 
-        if index < cache["coverage_processed_index"]:
+        rewound = index < cache["coverage_processed_index"]
+        if rewound:
             cache["coverage_sample_hits"].fill(False)
             cache["coverage_processed_index"] = -1
+            cache["coverage_last_render_index"] = -1
+
+        final_index = len(cache["nozzle_points"]) - 1
+        stride = cache["coverage_render_stride"]
+        if (
+            not rewound
+            and index > 0
+            and index < final_index
+            and index % stride != 0
+        ):
+            return
 
         for path_index in range(
             cache["coverage_processed_index"] + 1, index + 1
@@ -1997,16 +2030,12 @@ class ProductViewer(QWidget):
             cache["coverage_processed_index"], index
         )
 
-        face_hit_counts = np.bincount(
-            cache["sample_face_ids"],
-            weights=cache["coverage_sample_hits"].astype(float),
-            minlength=len(self.current_mesh.faces),
-        )
-        face_coverage = face_hit_counts / float(cache["sample_count_per_face"])
-        face_coverage = np.clip(face_coverage, 0.0, 1.0)
-        painted_area = float(np.sum(
-            cache["face_areas"] * face_coverage[cache["target_face_ids"]]
-        ))
+        # Samples are stored face-contiguously; reshape avoids a full-mesh
+        # bincount allocation on every coverage refresh.
+        face_coverage = cache["coverage_sample_hits"].reshape(
+            -1, cache["sample_count_per_face"]
+        ).mean(axis=1)
+        painted_area = float(np.sum(cache["face_areas"] * face_coverage))
         coverage_percent = (
             100.0 * painted_area / cache["target_area"]
             if cache["target_area"] > 1e-12 else 0.0
@@ -2018,7 +2047,11 @@ class ProductViewer(QWidget):
             and self._trajectory_surface_base_rgb is not None
         ):
             base = self._trajectory_surface_base_rgb.astype(float)
-            face_fraction = face_coverage[self._trajectory_surface_face_mask]
+            face_fraction = np.zeros(len(base), dtype=float)
+            valid_display = cache["target_display_indices"] >= 0
+            face_fraction[cache["target_display_indices"][valid_display]] = (
+                face_coverage[valid_display]
+            )
             painted = (
                 base * (1.0 - face_fraction[:, None])
                 + cache["paint_rgb"][None, :] * face_fraction[:, None]
@@ -2030,9 +2063,9 @@ class ProductViewer(QWidget):
             if array is not None:
                 array.Modified()
             polydata.Modified()
-            if self._pose_actor is not None:
-                self._pose_actor.GetMapper().SetInputData(polydata)
-                self._pose_actor.GetMapper().Update()
+            # The mapper already references this polydata. Marking the changed
+            # VTK array is sufficient; avoid rebuilding/updating the mapper.
+            cache["coverage_last_render_index"] = index
 
         if hasattr(self, "trajectory_coverage_bar"):
             self.trajectory_coverage_bar.setValue(
@@ -2215,7 +2248,10 @@ class ProductViewer(QWidget):
         self._update_paint_coverage_visualization(index)
 
         total = len(nozzle_points)
-        self.trajectory_playback_label.setText(f"{index + 1} / {total}")
+        current_speed = float(cache["travel_speeds_mm_s"][index])
+        self.trajectory_playback_label.setText(
+            f"{index + 1} / {total} | {current_speed:.0f} mm/s"
+        )
         self.trajectory_playback_slider.blockSignals(True)
         self.trajectory_playback_slider.setValue(index)
         self.trajectory_playback_slider.blockSignals(False)
@@ -2239,9 +2275,15 @@ class ProductViewer(QWidget):
             self.trajectory_play_button.setText("Play")
             return
         if self._playback_index >= total - 1:
+            self._playback_elapsed_s = 0.0
             self._update_trajectory_playback_visuals(0)
-        elif self._playback_path_actor is None and self._playback_nozzle_actor is None:
-            self._update_trajectory_playback_visuals(self._playback_index)
+        else:
+            cache = self._prepare_trajectory_playback_cache()
+            times = cache["trajectory_time_s"]
+            if len(times) == total and np.all(np.isfinite(times)):
+                self._playback_elapsed_s = float(times[self._playback_index])
+            if self._playback_path_actor is None and self._playback_nozzle_actor is None:
+                self._update_trajectory_playback_visuals(self._playback_index)
         self.trajectory_play_button.setText("Pause")
         self._playback_timer.start()
 
@@ -2253,11 +2295,25 @@ class ProductViewer(QWidget):
         if self._playback_index >= total - 1:
             self._stop_trajectory_playback()
             return
-        # Keep playback duration manageable for dense trajectories while
-        # preserving a visible, monotonically advancing nozzle sequence.
-        base_step = max(1, int(np.ceil(total / 600.0)))
-        step = max(1, int(round(base_step * self.trajectory_playback_speed.value())))
-        next_index = min(total - 1, self._playback_index + step)
+        cache = self._prepare_trajectory_playback_cache()
+        sample_times = cache["trajectory_time_s"]
+        if len(sample_times) != total or not np.all(np.isfinite(sample_times)):
+            base_step = max(1, int(np.ceil(total / 600.0)))
+            step = max(1, int(round(base_step * self.trajectory_playback_speed.value())))
+            next_index = min(total - 1, self._playback_index + step)
+        else:
+            # The visual playback follows the calculated mm/s speed profile.
+            # The UI multiplier changes playback time only, not robot speed.
+            self._playback_elapsed_s += (
+                self._playback_timer.interval() / 1000.0
+                * self.trajectory_playback_speed.value()
+            )
+            next_index = int(np.searchsorted(
+                sample_times, self._playback_elapsed_s, side="right"
+            ) - 1)
+            next_index = int(np.clip(next_index, self._playback_index, total - 1))
+            if next_index == self._playback_index and next_index < total - 1:
+                return
         self._update_trajectory_playback_visuals(next_index)
         if next_index >= total - 1:
             self._stop_trajectory_playback()
