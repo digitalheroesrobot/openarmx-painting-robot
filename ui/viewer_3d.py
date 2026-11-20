@@ -125,7 +125,7 @@ class ProductViewer(QWidget):
         layout.addWidget(self.pose_control_panel)
         layout.addWidget(self.plotter.interactor, 1)
 
-        self.plotter.set_background("#101820")
+        self.plotter.set_background("#07111D", top="#142B40")
 
         self.display_control_panel.hide()
         self.pose_control_panel.hide()
@@ -744,7 +744,7 @@ class ProductViewer(QWidget):
         self._pose_actor = None
         self._actor_style = None
         self._cad_axes_actor = None
-        self.plotter.set_background("#101820")
+        self.plotter.set_background("#07111D", top="#142B40")
 
         self.plotter.add_text(
             "PRODUCT VIEWER",
@@ -1290,104 +1290,131 @@ class ProductViewer(QWidget):
     # =========================================================
 
     def _add_world_workspace(self):
-        """Display only the fixed World frame and work-cell box."""
+        """Render a polished control-room style World frame and work-cell volume."""
         lx, ly, lz = np.asarray(self.workspace_dimensions, dtype=float)
+        hx, hy, hz = lx * 0.5, ly * 0.5, lz * 0.5
 
-        # World origin is at the geometric center of the work-cell box.
-        # +X = right, +Y = into the work cell, +Z = down.
-        half_ly = ly * 0.5
-        half_lz = lz * 0.5
+        # Box corners: World origin is the geometric center.
+        # +X = right, +Y = into the work cell, +Z = downward.
         corners = np.array([
-            [-lx * 0.5, -half_ly, -half_lz],
-            [ lx * 0.5, -half_ly, -half_lz],
-            [ lx * 0.5,  half_ly, -half_lz],
-            [-lx * 0.5,  half_ly, -half_lz],
-            [-lx * 0.5, -half_ly,  half_lz],
-            [ lx * 0.5, -half_ly,  half_lz],
-            [ lx * 0.5,  half_ly,  half_lz],
-            [-lx * 0.5,  half_ly,  half_lz],
+            [-hx, -hy, -hz], [hx, -hy, -hz],
+            [hx, hy, -hz], [-hx, hy, -hz],
+            [-hx, -hy, hz], [hx, -hy, hz],
+            [hx, hy, hz], [-hx, hy, hz],
         ], dtype=float)
 
-        pairs = [
-            (0, 1), (1, 2), (2, 3), (3, 0),
-            (4, 5), (5, 6), (6, 7), (7, 4),
-            (0, 4), (1, 5), (2, 6), (3, 7),
-        ]
-        cells = []
-        for i, j in pairs:
-            cells.extend([2, i, j])
+        def add_segments(segments, color, width, opacity=1.0):
+            if not segments:
+                return
+            points = []
+            cells = []
+            for p1, p2 in segments:
+                index = len(points)
+                points.extend([p1, p2])
+                cells.extend([2, index, index + 1])
+            lines = pv.PolyData(np.asarray(points, dtype=float))
+            lines.lines = np.asarray(cells, dtype=np.int64)
+            self.plotter.add_mesh(
+                lines, color=color, line_width=width,
+                opacity=opacity, lighting=False, render_lines_as_tubes=True,
+            )
 
-        outline = pv.PolyData(corners)
-        outline.lines = np.asarray(cells, dtype=np.int64)
-        self.plotter.add_mesh(
-            outline, color="#78909C", line_width=2, lighting=False
-        )
+        # Three differently tinted edge families give the volume depth cues.
+        x_edges = [(corners[a], corners[b]) for a, b in
+                   [(0, 1), (3, 2), (4, 5), (7, 6)]]
+        y_edges = [(corners[a], corners[b]) for a, b in
+                   [(0, 3), (1, 2), (4, 7), (5, 6)]]
+        z_edges = [(corners[a], corners[b]) for a, b in
+                   [(0, 4), (1, 5), (2, 6), (3, 7)]]
+        add_segments(x_edges, "#27C7F7", 2.5, 0.95)
+        add_segments(y_edges, "#168F9F", 2.0, 0.9)
+        add_segments(z_edges, "#426B91", 1.8, 0.85)
 
-        axis_length = max(min(lx, ly, lz) * 0.22, 30.0)
+        # Fine reference grid on the central XY plane, passing through origin.
+        grid_segments = []
+        grid_count = 10
+        for i in range(-grid_count, grid_count + 1):
+            x = hx * i / grid_count
+            y = hy * i / grid_count
+            grid_segments.append((np.array([x, -hy, 0.0]), np.array([x, hy, 0.0])))
+            grid_segments.append((np.array([-hx, y, 0.0]), np.array([hx, y, 0.0])))
+        add_segments(grid_segments, "#24465B", 1.0, 0.42)
+
+        # Center crosshair: a subtle reference marker around World (0,0,0).
+        cross = min(lx, ly, lz) * 0.035
+        add_segments([
+            (np.array([-cross, 0.0, 0.0]), np.array([cross, 0.0, 0.0])),
+            (np.array([0.0, -cross, 0.0]), np.array([0.0, cross, 0.0])),
+            (np.array([0.0, 0.0, -cross]), np.array([0.0, 0.0, cross])),
+        ], "#D7F6FF", 2.0, 0.9)
+
+        # Positive coordinate arrows; keep their labels deliberately simple.
+        axis_length = max(min(lx, ly, lz) * 0.24, 30.0)
         axes = [
-            (np.array([1.0, 0.0, 0.0]), "#FF5252", "X", "RIGHT / CONVEYOR TRAVEL"),
-            (np.array([0.0, 1.0, 0.0]), "#00E676", "Y", "INTO WORK CELL"),
-            (np.array([0.0, 0.0, 1.0]), "#40C4FF", "Z", "DOWN"),
+            (np.array([1.0, 0.0, 0.0]), "#FF657A", "X"),
+            (np.array([0.0, 1.0, 0.0]), "#4DDBA5", "Y"),
+            (np.array([0.0, 0.0, 1.0]), "#48BFFF", "Z"),
         ]
-
-        for direction, color, axis_label, description in axes:
+        for direction, color, label in axes:
             self.plotter.add_mesh(
                 pv.Arrow(
                     start=(0.0, 0.0, 0.0),
                     direction=direction,
                     scale=axis_length,
+                    tip_length=0.22,
+                    tip_radius=0.075,
+                    shaft_radius=0.018,
                 ),
                 color=color,
                 lighting=False,
             )
             self.plotter.add_point_labels(
-                np.asarray([direction * axis_length * 1.12]),
-                [f"{axis_label}  {description}"],
-                font_size=11,
+                np.asarray([direction * axis_length * 1.16]),
+                [label],
+                font_size=18,
                 text_color=color,
                 point_size=0,
                 shape=None,
                 always_visible=True,
+                bold=True,
             )
 
+        # Bright origin marker, centered exactly at the box midpoint.
         self.plotter.add_mesh(
             pv.Sphere(
-                radius=max(axis_length * 0.045, 3.0),
+                radius=max(min(lx, ly, lz) * 0.012, 3.0),
                 center=(0.0, 0.0, 0.0),
-                theta_resolution=16,
-                phi_resolution=16,
+                theta_resolution=24,
+                phi_resolution=24,
             ),
-            color="#FFFFFF",
+            color="#F4FBFF",
             smooth_shading=True,
+            specular=0.8,
+            specular_power=35,
         )
 
-        self.plotter.add_point_labels(
-            np.asarray([[0.0, 0.0, 0.0]]),
-            ["WORLD ORIGIN / BOX CENTER (0, 0, 0)"],
-            font_size=11,
-            text_color="#FFFFFF",
-            point_size=0,
-            shape=None,
-            always_visible=True,
-        )
-
+        # Compact telemetry-style overlays; avoid long labels around the axes.
         self.plotter.add_text(
-            "WORLD FRAME\n"
-            "Origin: geometric center of work-cell box\n"
-            "X: right\n"
-            "Y: into work cell (+Y)\n"
-            "Z: down",
+            "OPENARMX  /  WORLD COORDINATE SYSTEM",
             position="upper_left",
-            font_size=11,
-            color="#EAF4F8",
+            font_size=12,
+            color="#BFEFFF",
+            shadow=True,
         )
-
         self.plotter.add_text(
-            f"WORK CELL BOX  |  X {lx:.0f}  x  Y {ly:.0f}  x  Z {lz:.0f} "
-            f"{self._source_unit_label()}",
+            "FRAME  LOCKED     ORIGIN  0, 0, 0\n"
+            "X  RIGHT       Y  INWARD       Z  DOWN",
             position="lower_left",
             font_size=10,
-            color="#A7BAC5",
+            color="#7FD5E8",
+            shadow=True,
+        )
+        self.plotter.add_text(
+            f"WORK CELL  |  {lx:.0f} × {ly:.0f} × {lz:.0f} {self._source_unit_label()}",
+            position="lower_right",
+            font_size=10,
+            color="#A9C5D5",
+            shadow=True,
         )
 
     def _add_product_coordinate_frame(self):
@@ -2157,7 +2184,7 @@ class ProductViewer(QWidget):
 
     def _set_standard_camera(self):
         # Operator is in front of the box at +Y and looks toward -Y.
-        # Thus screen-right is +X and screen-down is +Z.
+        # Screen-right is +X; the downward World axis is +Z.
         lx, ly, lz = np.asarray(self.workspace_dimensions, dtype=float)
         # The box and World origin are centered in X, Y, and Z.
         center = np.zeros(3, dtype=float)
