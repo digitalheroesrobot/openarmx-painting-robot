@@ -2046,6 +2046,7 @@ def _build_saved_report(
         "orientation_analysis": trajectory["orientation_analysis"],
         "path_metrics": trajectory["path_metrics"],
         "segments": trajectory["segments"],
+        "rasterization": trajectory.get("rasterization", {}),
         "advanced_geometry_analysis": trajectory[
             "advanced_geometry_analysis"
         ],
