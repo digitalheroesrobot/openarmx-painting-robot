@@ -3009,6 +3009,12 @@ def _inspect_generated_trajectory(
         if isinstance(item, dict)
     }
     continuity_outliers = []
+    orientation_outlier_details = []
+    surface_normals_for_inspection = np.asarray(
+        trajectory.get("surface_normals", np.full((len(points), 3), np.nan)),
+        dtype=np.float64,
+    )
+    source_face_normals = np.asarray(mesh.face_normals, dtype=np.float64)
     if len(segments):
         starts = np.r_[0, np.flatnonzero(np.diff(segments) != 0) + 1]
         ends = np.r_[starts[1:], len(segments)]
@@ -3021,9 +3027,113 @@ def _inspect_generated_trajectory(
                 local_dots = np.einsum(
                     "ij,ij->i", directions[start:end - 1], directions[start + 1:end]
                 )
-                orientation_changes_deg.extend(
-                    np.degrees(np.arccos(np.clip(local_dots, -1.0, 1.0))).tolist()
+                local_orientation_angles = np.degrees(
+                    np.arccos(np.clip(local_dots, -1.0, 1.0))
                 )
+                orientation_changes_deg.extend(local_orientation_angles.tolist())
+                for local_offset, angle_deg in enumerate(local_orientation_angles):
+                    if float(angle_deg) <= 30.0:
+                        continue
+                    sample_index = int(start + local_offset)
+                    next_index = sample_index + 1
+                    face_a = int(face_indices[sample_index]) if len(face_indices) == len(points) else -1
+                    face_b = int(face_indices[next_index]) if len(face_indices) == len(points) else -1
+                    patch_a = int(patch_ids[sample_index]) if len(patch_ids) == len(points) else -1
+                    patch_b = int(patch_ids[next_index]) if len(patch_ids) == len(points) else -1
+                    shared_vertices = None
+                    source_face_angle = None
+                    sample_normal_angle = None
+                    deviation_a = None
+                    deviation_b = None
+                    if 0 <= face_a < face_count and 0 <= face_b < face_count:
+                        shared_vertices = int(
+                            len(np.intersect1d(mesh.faces[face_a], mesh.faces[face_b]))
+                        )
+                        normal_a = source_face_normals[face_a]
+                        normal_b = source_face_normals[face_b]
+                        if (
+                            np.all(np.isfinite(normal_a))
+                            and np.all(np.isfinite(normal_b))
+                            and np.linalg.norm(normal_a) > NORMAL_EPSILON
+                            and np.linalg.norm(normal_b) > NORMAL_EPSILON
+                        ):
+                            normal_a = normal_a / np.linalg.norm(normal_a)
+                            normal_b = normal_b / np.linalg.norm(normal_b)
+                            source_face_angle = math.degrees(math.acos(float(np.clip(
+                                np.dot(normal_a, normal_b), -1.0, 1.0
+                            ))))
+                    if surface_normals_for_inspection.shape == (len(points), 3):
+                        normal_a = surface_normals_for_inspection[sample_index]
+                        normal_b = surface_normals_for_inspection[next_index]
+                        if (
+                            np.all(np.isfinite(normal_a))
+                            and np.all(np.isfinite(normal_b))
+                            and np.linalg.norm(normal_a) > NORMAL_EPSILON
+                            and np.linalg.norm(normal_b) > NORMAL_EPSILON
+                        ):
+                            normal_a = normal_a / np.linalg.norm(normal_a)
+                            normal_b = normal_b / np.linalg.norm(normal_b)
+                            sample_normal_angle = math.degrees(math.acos(float(np.clip(
+                                np.dot(normal_a, normal_b), -1.0, 1.0
+                            ))))
+                        for sample_i, face_i, key in (
+                            (sample_index, face_a, "a"),
+                            (next_index, face_b, "b"),
+                        ):
+                            if 0 <= face_i < face_count:
+                                sample_normal = surface_normals_for_inspection[sample_i]
+                                face_normal = source_face_normals[face_i]
+                                if (
+                                    np.all(np.isfinite(sample_normal))
+                                    and np.all(np.isfinite(face_normal))
+                                    and np.linalg.norm(sample_normal) > NORMAL_EPSILON
+                                    and np.linalg.norm(face_normal) > NORMAL_EPSILON
+                                ):
+                                    value = math.degrees(math.acos(float(np.clip(
+                                        np.dot(
+                                            sample_normal / np.linalg.norm(sample_normal),
+                                            face_normal / np.linalg.norm(face_normal),
+                                        ),
+                                        -1.0,
+                                        1.0,
+                                    ))))
+                                    if key == "a":
+                                        deviation_a = value
+                                    else:
+                                        deviation_b = value
+                    if patch_a != patch_b:
+                        cause = "patch_boundary_inside_stroke"
+                    elif face_a == face_b and face_a >= 0:
+                        cause = "same_source_face_sample_normal_change"
+                    elif shared_vertices == 0:
+                        cause = "non_adjacent_source_faces"
+                    elif source_face_angle is not None and source_face_angle > 30.0:
+                        cause = "sharp_source_mesh_crease"
+                    elif source_face_angle is not None:
+                        cause = "large_axis_change_without_sharp_face_crease"
+                    else:
+                        cause = "source_face_normal_unavailable"
+                    segment_meta = segment_metadata_by_id.get(int(segments[sample_index]), {})
+                    orientation_outlier_details.append({
+                        "sample_index_from": sample_index,
+                        "sample_index_to": next_index,
+                        "segment_id": int(segments[sample_index]),
+                        "patch_id_from": patch_a,
+                        "patch_id_to": patch_b,
+                        "face_index_from": face_a,
+                        "face_index_to": face_b,
+                        "shared_source_face_vertices": shared_vertices,
+                        "spray_axis_change_deg": float(angle_deg),
+                        "source_face_normal_change_deg": source_face_angle,
+                        "sample_surface_normal_change_deg": sample_normal_angle,
+                        "sample_a_deviation_from_source_face_deg": deviation_a,
+                        "sample_b_deviation_from_source_face_deg": deviation_b,
+                        "point_step_mm": float(
+                            np.linalg.norm(points[next_index] - points[sample_index]) * mm_per_unit
+                        ),
+                        "cause_classification": cause,
+                        "path_type": str(segment_meta.get("path_type", "unknown")),
+                    })
                 if nozzle_frames.shape == (len(points), 3, 3):
                     for frame_index in range(start, end - 1):
                         relative_rotation = (
@@ -3089,6 +3199,9 @@ def _inspect_generated_trajectory(
 
     continuity_outliers.sort(
         key=lambda item: item["step_distance_mm"], reverse=True
+    )
+    orientation_outlier_details.sort(
+        key=lambda item: item["spray_axis_change_deg"], reverse=True
     )
     jumps = np.asarray(jumps_mm, dtype=np.float64)
     angles = np.asarray(orientation_changes_deg, dtype=np.float64)
@@ -3161,6 +3274,18 @@ def _inspect_generated_trajectory(
                 trajectory.get("max_normal_smoothing_deviation_deg", 0.0)
             ),
             "surface_normal_deviation_limit_deg": 8.0,
+            "over_30_degree_change_details": orientation_outlier_details,
+            "over_30_degree_change_detail_count": int(len(orientation_outlier_details)),
+            "over_30_degree_change_classifications": {
+                cause: sum(
+                    1 for item in orientation_outlier_details
+                    if item["cause_classification"] == cause
+                )
+                for cause in sorted({
+                    item["cause_classification"]
+                    for item in orientation_outlier_details
+                })
+            },
         },
         "spray_control": {
             "status": spray_status,
@@ -3218,6 +3343,32 @@ def _inspect_generated_trajectory(
         f"{report['orientation']['max_normal_smoothing_deviation_deg']:.2f} deg "
         f"(limit 8.00 deg)"
     )
+    if orientation_outlier_details:
+        print("ORIENTATION CHANGE DETAILS (>30 deg, largest first; first 20)")
+        for item in orientation_outlier_details[:20]:
+            source_angle = (
+                f"{item['source_face_normal_change_deg']:.2f} deg"
+                if item["source_face_normal_change_deg"] is not None else "n/a"
+            )
+            print(
+                f"  samples {item['sample_index_from']}->{item['sample_index_to']} | "
+                f"segment {item['segment_id']} | "
+                f"patch {item['patch_id_from']}->{item['patch_id_to']} | "
+                f"faces {item['face_index_from']}->{item['face_index_to']} | "
+                f"axis {item['spray_axis_change_deg']:.2f} deg | "
+                f"source-face normals {source_angle} | "
+                f"step {item['point_step_mm']:.2f} mm | "
+                f"{item['cause_classification']} | path={item['path_type']}"
+            )
+        print(
+            "  Classification counts: "
+            + ", ".join(
+                f"{key}={value}"
+                for key, value in report["orientation"][
+                    "over_30_degree_change_classifications"
+                ].items()
+            )
+        )
     print(
         f"[{spray_status}] Spray control: ON samples {spray_on_samples:,} | "
         f"OFF boundary samples {spray_off_transitions:,} | "
@@ -5098,6 +5249,55 @@ def run_stage3_numerical_tests() -> dict:
         - 40.0
     ) < 1e-6
     assert roll_inspection["orientation"]["status"] == "WARN"
+
+    # --------------------------------------------------------
+    # Test 24E: Orientation diagnostics distinguish a sharp source-mesh crease
+    # from a large spray-axis change on otherwise smooth adjacent faces.
+    # --------------------------------------------------------
+    crease_mesh = trimesh.Trimesh(
+        vertices=np.asarray([
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [0.0, 10.0, 0.0],
+            [0.0, 0.0, 10.0],
+        ], dtype=np.float64),
+        faces=np.asarray([[0, 1, 2], [1, 0, 3]], dtype=np.int64),
+        process=False,
+    )
+    crease_normals = np.asarray(crease_mesh.face_normals, dtype=np.float64)
+    crease_directions = -crease_normals
+    crease_frames = _build_parallel_transport_nozzle_frames(
+        crease_directions,
+        np.asarray([0, 0], dtype=np.int64),
+    )
+    crease_inspection = _inspect_generated_trajectory(
+        mesh=crease_mesh,
+        source_face_indices=np.asarray([0, 1], dtype=np.int64),
+        trajectory={
+            "face_indices": np.asarray([0, 1], dtype=np.int64),
+            "patch_ids": np.asarray([3, 3], dtype=np.int64),
+            "surface_normals": crease_normals,
+            "nozzle_points": np.asarray([
+                [0.0, 0.0, 180.0],
+                [1.0, 0.0, 180.0],
+            ], dtype=np.float64),
+            "spray_directions": crease_directions,
+            "nozzle_frames": crease_frames,
+            "segment_ids": np.asarray([0, 0], dtype=np.int64),
+            "segments": [{
+                "segment_id": 0,
+                "patch_id": 3,
+                "path_type": "test_crease",
+            }],
+        },
+        coordinate_unit="mm",
+        sample_spacing_mm=10.0,
+        track_spacing_mm=20.0,
+    )
+    crease_detail = crease_inspection["orientation"]["over_30_degree_change_details"][0]
+    assert crease_detail["cause_classification"] == "sharp_source_mesh_crease"
+    assert crease_detail["shared_source_face_vertices"] == 2
+    assert crease_detail["source_face_normal_change_deg"] > 30.0
 
     # --------------------------------------------------------
     # Test 24C: Continuity diagnostics identify exact source samples and faces.
