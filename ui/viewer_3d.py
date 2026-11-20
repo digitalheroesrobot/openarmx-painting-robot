@@ -146,6 +146,7 @@ class ProductViewer(QWidget):
         # Stage 3 sequential trajectory playback state.
         self._playback_index = 0
         self._playback_elapsed_s = 0.0
+        self._playback_last_path_render_index = -1
         self._playback_path_actor = None
         self._playback_nozzle_actor = None
         self._playback_gun_actors = []
@@ -1754,6 +1755,7 @@ class ProductViewer(QWidget):
             self._playback_gun_actors = []
             self._playback_index = 0
             self._playback_elapsed_s = 0.0
+            self._playback_last_path_render_index = -1
             self._playback_cache = None
             if hasattr(self, "trajectory_coverage_bar"):
                 self.trajectory_coverage_bar.setValue(0)
@@ -1899,6 +1901,7 @@ class ProductViewer(QWidget):
             "coverage_processed_index": -1,
             "coverage_render_stride": 4,
             "coverage_last_render_index": -1,
+            "path_render_stride": max(1, int(np.ceil(len(nozzle_points) / 500.0))),
             "sample_count_per_face": sample_count_per_face,
             "cone_tangent": cone_tangent,
             "cone_cosine": cone_cosine,
@@ -2222,25 +2225,34 @@ class ProductViewer(QWidget):
 
         index = int(np.clip(index, 0, len(nozzle_points) - 1))
         self._playback_index = index
-        path = self._make_playback_path_polydata(index)
 
-        if self._playback_path_actor is None:
-            if path.n_lines > 0:
-                self._playback_path_actor = self.plotter.add_mesh(
-                    path,
-                    color="#A9BAC5",
-                    line_width=3,
-                    opacity=0.28,
-                    render_lines_as_tubes=True,
-                    lighting=False,
-                    pickable=False,
-                )
-        elif self._playback_path_actor is not None:
-            # Also replace the mapper with an empty path when the operator
-            # scrubs back to sample 0 or to the first point of a new segment.
-            mapper = self._playback_path_actor.GetMapper()
-            mapper.SetInputData(path)
-            mapper.Update()
+        path_stride = cache["path_render_stride"]
+        path_rewound = index < self._playback_last_path_render_index
+        path_due = (
+            self._playback_path_actor is None
+            or path_rewound
+            or index == 0
+            or index == len(nozzle_points) - 1
+            or index - self._playback_last_path_render_index >= path_stride
+        )
+        if path_due:
+            path = self._make_playback_path_polydata(index)
+            if self._playback_path_actor is None:
+                if path.n_lines > 0:
+                    self._playback_path_actor = self.plotter.add_mesh(
+                        path,
+                        color="#A9BAC5",
+                        line_width=3,
+                        opacity=0.28,
+                        render_lines_as_tubes=True,
+                        lighting=False,
+                        pickable=False,
+                    )
+            else:
+                mapper = self._playback_path_actor.GetMapper()
+                mapper.SetInputData(path)
+                mapper.Update()
+            self._playback_last_path_render_index = index
 
         self._position_spray_gun(index)
         self._update_paint_coverage_visualization(index)
