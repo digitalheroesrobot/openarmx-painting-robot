@@ -1998,20 +1998,6 @@ class ProductViewer(QWidget):
                     # The selected patch is represented by its single parallel
                     # membrane only; its original patch contour remains below.
 
-                    # A translucent white wash gives the selected surface a
-                    # soft luminous appearance; the contour retains patch color.
-                    surface_actor = self.plotter.add_mesh(
-                        selected_polydata,
-                        color="#FFFFFF",
-                        opacity=0.14,
-                        show_edges=False,
-                        smooth_shading=False,
-                        lighting=False,
-                        ambient=1.0,
-                        diffuse=0.0,
-                        pickable=False,
-                    )
-
                     # The outer contour uses the patch's own color, not a
                     # universal cyan/white highlight.
                     edge_actor = self.plotter.add_mesh(
@@ -2028,7 +2014,6 @@ class ProductViewer(QWidget):
                     if previous_product_pose is not None:
                         for selected_actor in (
                             *glow_actors,
-                            surface_actor,
                             edge_actor,
                         ):
                             selected_actor.SetOrigin(0.0, 0.0, 0.0)
