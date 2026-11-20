@@ -89,13 +89,8 @@ class ProductViewer(QWidget):
 
         # Default display rotation is 180 degrees about local Z, centered
         # on the product bounding box; source CAD geometry remains unchanged.
-        self.pose_manipulation_enabled = False
         self._pose_actor = None
-        self._actor_style = None
-        self._pose_interaction_callback = None
         self._cad_axes_actor = None
-        self._rotation_widget = None
-        self._rotation_representation = None
         self._attitude_text_actor = None
         # Display-only bounds; operator must set actual work-cell extents.
         self.workspace_dimensions = np.array([1000.0, 1000.0, 1000.0], dtype=float)
@@ -756,7 +751,6 @@ class ProductViewer(QWidget):
     def _draw_empty_scene(self):
         self.plotter.clear()
         self._pose_actor = None
-        self._actor_style = None
         self._cad_axes_actor = None
         self.plotter.set_background("#07111D", top="#142B40")
 
@@ -782,7 +776,6 @@ class ProductViewer(QWidget):
         # Product pose manipulation is enabled; World reference geometry
         # remains locked and cannot be selected or dragged.
         self.pose_control_panel.show()
-        self.pose_manipulation_enabled = True
         self.confirm_pose_button.setEnabled(True)
         self.workspace_dimensions = np.maximum(
             np.asarray(self.current_mesh.extents, dtype=float) * 4.0,
@@ -1447,14 +1440,6 @@ class ProductViewer(QWidget):
             except Exception:
                 previous_camera = None
         self._attitude_text_actor = None
-        if self._rotation_widget is not None:
-            try:
-                self._rotation_widget.SetEnabled(0)
-            except Exception:
-                pass
-        self._rotation_widget = None
-        self._rotation_representation = None
-        self._product_selected = False
         self.plotter.clear()
         self.plotter.set_background("#07111D", top="#142B40")
 
@@ -1639,10 +1624,6 @@ class ProductViewer(QWidget):
 
         self.plotter.render()
 
-        # Reinstall actor manipulation after a redraw (for example, a
-        # display-unit change) without enabling it in analysis stages.
-        if self.display_mode == "product" and self.pose_manipulation_enabled:
-    
     def _add_classification_legend(self):
         legend = (
             "SURFACE CLASSIFICATION\n"
