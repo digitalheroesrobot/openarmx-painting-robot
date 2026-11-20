@@ -2407,7 +2407,10 @@ class ProductViewer(QWidget):
         if self.current_mesh is None:
             return
 
-        if self.display_mode == "product" and self._pose_actor is not None:
+        # RESET CAMERA always frames the product actor, including
+        # Stage 1 patch and Stage 2 classification display modes.
+        # The product pose and world position are not modified.
+        if self._pose_actor is not None:
             self._set_product_camera()
         else:
             self._set_standard_camera()
