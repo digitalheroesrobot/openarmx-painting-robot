@@ -102,6 +102,7 @@ class ProductViewer(QWidget):
 
         # Currently selected Stage 2 surface patch.
         self.selected_patch_id = None
+        self.hole_candidates = []
 
         self.display_mode = "product"
 
@@ -237,6 +238,126 @@ class ProductViewer(QWidget):
             )
 
         return value
+
+    def set_hole_candidates(self, candidates):
+        """Set preliminary STEP internal-cylinder candidates for 3D overlay."""
+        normalized = []
+        for item in candidates or []:
+            try:
+                center = np.asarray(
+                    item["axis_center_coordinate_units"], dtype=float
+                )
+                axis_point = np.asarray(
+                    item["closest_axis_point_to_origin_coordinate_units"],
+                    dtype=float,
+                )
+                axis = np.asarray(item["axis_direction"], dtype=float)
+                if (
+                    center.shape != (3,)
+                    or axis_point.shape != (3,)
+                    or axis.shape != (3,)
+                    or not np.all(np.isfinite(center))
+                    or not np.all(np.isfinite(axis_point))
+                    or not np.all(np.isfinite(axis))
+                ):
+                    continue
+                normalized.append(dict(item))
+            except (KeyError, TypeError, ValueError):
+                continue
+        self.hole_candidates = normalized
+        if self.current_mesh is not None:
+            self._render_product(reset_camera=False)
+
+    def _add_hole_candidate_overlay(self):
+        """Render detected hole axes and CAD-origin distance measurements."""
+        if not self.hole_candidates or self._pose_actor is None:
+            return
+
+        matrix = self._actor_matrix_array()
+
+        def transform_point(point):
+            homogeneous = matrix @ np.append(
+                np.asarray(point, dtype=float), 1.0
+            )
+            return homogeneous[:3] / homogeneous[3]
+
+        centers = []
+        labels = []
+        line_segments = []
+        unit_label = self._display_unit_label()
+
+        for item in self.hole_candidates:
+            center_source = np.asarray(
+                item["axis_center_coordinate_units"], dtype=float
+            )
+            axis_point_source = np.asarray(
+                item["closest_axis_point_to_origin_coordinate_units"],
+                dtype=float,
+            )
+            center_view = transform_point(center_source)
+            axis_point_view = transform_point(axis_point_source)
+            centers.append(center_view)
+
+            axis_distance = self._convert_source_length_to_display(
+                item["origin_to_axis_distance_coordinate_units"]
+            )
+            center_distance = self._convert_source_length_to_display(
+                item["origin_to_axis_center_distance_coordinate_units"]
+            )
+            radius = self._convert_source_length_to_display(
+                item["radius_coordinate_units"]
+            )
+            hole_id = int(item.get("hole_id", len(labels) + 1))
+            labels.append(
+                f"H{hole_id}  R={radius:.2f} {unit_label}\n"
+                f"O-AXIS={axis_distance:.2f} {unit_label}\n"
+                f"O-CENTER={center_distance:.2f} {unit_label}"
+            )
+            line_segments.append((
+                transform_point(np.zeros(3, dtype=float)),
+                axis_point_view,
+            ))
+
+        points = pv.PolyData(np.asarray(centers, dtype=float))
+        self.plotter.add_mesh(
+            points,
+            color="#FF3DCE",
+            style="points",
+            point_size=17,
+            render_points_as_spheres=True,
+            lighting=False,
+            pickable=False,
+        )
+        lines = self._build_line_polydata(line_segments)
+        if lines is not None:
+            self.plotter.add_mesh(
+                lines,
+                color="#FF3DCE",
+                line_width=2.5,
+                render_lines_as_tubes=True,
+                lighting=False,
+                pickable=False,
+            )
+        self.plotter.add_point_labels(
+            np.asarray(centers, dtype=float),
+            labels,
+            font_size=10,
+            text_color="#FFFFFF",
+            shape="rounded_rect",
+            shape_color="#35152F",
+            shape_opacity=0.94,
+            always_visible=True,
+            show_points=False,
+            margin=4,
+            pickable=False,
+        )
+        self.plotter.add_text(
+            f"INTERNAL CYLINDRICAL SURFACE CANDIDATES: {len(labels)}"
+            f"  |  DISTANCES FROM CAD ORIGIN (0,0,0)",
+            position="upper_left",
+            font_size=10,
+            color="#FF78E5",
+        )
 
     def set_source_unit(self, unit):
         normalized = self._normalize_unit(unit)
@@ -3309,6 +3430,7 @@ class ProductViewer(QWidget):
         # -------------------------------------------------
         # Fixed World XYZ box and moving Product CAD frame.
         self._add_pose_coordinate_frames()
+        self._add_hole_candidate_overlay()
 
         # -------------------------------------------------
         # CAMERA RESTORATION
