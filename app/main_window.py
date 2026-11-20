@@ -4036,16 +4036,10 @@ class MainWindow(QMainWindow):
         trajectory = self.current_stage3_result["trajectory"]
         face_surface_types = self._build_face_surface_types()
 
-        face_patch_ids = (
-            np.asarray(self.current_stage1_result.get("patch_labels"))
-            if self.current_stage1_result is not None
-            else None
-        )
         self.viewer.show_spray_trajectory(
             self.current_mesh,
             trajectory,
             face_surface_types=face_surface_types,
-            face_patch_ids=face_patch_ids,
         )
 
         self._update_viewer_display_unit()
