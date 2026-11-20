@@ -1638,7 +1638,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Full Product View",
-                "The complete product view could not be restored.\\n\\n"
+                "The complete product view could not be restored.\n\n"
                 f"{exc}",
             )
             return
