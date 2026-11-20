@@ -4122,26 +4122,23 @@ class MainWindow(QMainWindow):
         paint_count = sum(
             1
             for item in self.patch_inspection.values()
-            if item["inspected"]
-            and item["decision"] == DECISION_PAINT
+            if item["decision"] == DECISION_PAINT
         )
 
         no_paint_count = sum(
             1
             for item in self.patch_inspection.values()
-            if item["inspected"]
-            and item["decision"] == DECISION_NO_PAINT
+            if item["decision"] == DECISION_NO_PAINT
         )
 
+        # Review-required patches remain visible in their own
+        # category even though they are intentionally not marked
+        # as inspected / approved yet.
         requires_count = sum(
             1
             for item in self.patch_inspection.values()
-            if item["inspected"]
-            and item["decision"]
-            == DECISION_REQUIRES_INSPECTION
+            if item["decision"] == DECISION_REQUIRES_INSPECTION
         )
-
-        uninspected_count = total - inspected
 
         self.analysis_summary.setStyleSheet(
             "color: #00E676;"
@@ -4150,11 +4147,11 @@ class MainWindow(QMainWindow):
         )
 
         self.analysis_summary.setText(
-            f"REVIEWED: {inspected} / {total}\n"
-            f"PAINTABLE: {paint_count}\n"
-            f"EXCLUDED: {no_paint_count}\n"
-            f"REVIEW REQUIRED: {requires_count}\n"
-            f"UNREVIEWED: {uninspected_count}"
+            f"PATCH COVERAGE: {total:,} / {total:,} (100%)\n"
+            f"PAINT: {paint_count:,}\n"
+            f"UNPAINT: {no_paint_count:,}\n"
+            f"REVIEW REQUIRED: {requires_count:,}\n"
+            f"DECIDED: {inspected:,} / {total:,}"
         )
 
         if self.patch_inspection_path:
