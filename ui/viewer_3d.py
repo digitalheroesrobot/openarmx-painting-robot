@@ -1722,6 +1722,7 @@ class ProductViewer(QWidget):
             self._pose_actor = self.plotter.add_mesh(
                 self.current_mesh,
                 color="#9FB7C7",
+                opacity=0.42,
                 show_edges=True,
                 edge_color="#263E4D",
                 line_width=1.0,
