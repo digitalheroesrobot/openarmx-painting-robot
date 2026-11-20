@@ -378,11 +378,22 @@ class ProductViewer(QWidget):
                 border: 1px solid #28596A;
                 border-radius: 4px;
                 padding: 3px 8px;
-                min-height: 34px;
+                min-height: 42px;
+                color: #E4FCFF;
                 font-family: 'DejaVu Sans Mono';
-                font-size: 16px;
+                font-size: 18px;
                 font-weight: 700;
                 selection-background-color: #126A78;
+            }
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+                subcontrol-origin: border;
+                width: 22px;
+                background: #123A4B;
+                border-left: 1px solid #28596A;
+            }
+            QDoubleSpinBox::up-arrow, QDoubleSpinBox::down-arrow {
+                width: 8px;
+                height: 8px;
             }
             QDoubleSpinBox:focus {
                 border: 1px solid #45F0F5;
@@ -408,13 +419,15 @@ class ProductViewer(QWidget):
             caption = QLabel(f"{axis_name}   /   {axis_label}")
             field = QDoubleSpinBox(panel)
             field.setObjectName(object_name)
-            field.setRange(-3600.0, 3600.0)
+            field.setRange(-360.0, 360.0)
             field.setDecimals(2)
+            field.setValue(0.0)
             field.setSingleStep(0.5)
             field.setSuffix("°")
             field.setMinimumWidth(170)
             field.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            field.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+            field.setKeyboardTracking(False)
+            field.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.UpDownArrows)
             field.setToolTip(f"Set {axis_name.lower()} angle in degrees.")
             field.valueChanged.connect(self._apply_rpy_inputs)
             field.editingFinished.connect(self._apply_rpy_inputs)
@@ -623,33 +636,40 @@ class ProductViewer(QWidget):
         if self._pose_actor is None or self.display_mode != "product":
             return
         try:
-            from vtkmodules.vtkRenderingCore import vtkCellPicker, vtkPropPicker
+            from vtkmodules.vtkRenderingCore import vtkCellPicker
 
             self._create_rotation_gizmo()
             self._rotation_pick_pickers = []
             for ring_actor in self._rotation_ring_actors:
                 picker = vtkCellPicker()
-                picker.SetTolerance(0.015)
+                picker.SetTolerance(0.025)
                 picker.PickFromListOn()
                 picker.AddPickList(ring_actor)
                 self._rotation_pick_pickers.append(picker)
 
-            self._product_picker = vtkPropPicker()
+            # Use a cell picker for the CAD surface as well. It is more
+            # reliable for triangulated STEP meshes than vtkPropPicker.
+            self._product_picker = vtkCellPicker()
+            self._product_picker.SetTolerance(0.0005)
             self._product_picker.PickFromListOn()
             self._product_picker.AddPickList(self._pose_actor)
 
-            # QVTKRenderWindowInteractor is the actual Qt event receiver.
-            # The previous implementation registered VTK observers but did
-            # not install this class's eventFilter on the Qt widget.
+            # Install on the actual QVTK child widget which receives mouse
+            # events, and on the QtInteractor wrapper as a compatibility path.
             widget = self.plotter.interactor
             if not self._qt_mouse_filter_installed:
                 widget.installEventFilter(self)
+                self.plotter.installEventFilter(self)
                 self._qt_mouse_filter_installed = True
             widget.setMouseTracking(True)
+            self.plotter.setMouseTracking(True)
 
             self._rotation_drag_axis = None
             self._rotation_drag_start_vector = None
             self._rotation_drag_start_matrix = None
+            # Keep the manipulator visible as soon as a product is loaded.
+            # This avoids a hidden-gizmo dead end if surface picking fails.
+            self._product_selected = True
             self._update_rotation_gizmo_transform()
             self._update_pose_readout()
             self.plotter.render()
@@ -802,8 +822,8 @@ class ProductViewer(QWidget):
             return
         bounds = np.asarray(self.current_mesh.bounds, dtype=float)
         diagonal = float(np.linalg.norm(bounds[[1, 3, 5]] - bounds[[0, 2, 4]]))
-        radius = max(diagonal * 0.62, 10.0)
-        tube_radius = max(radius * 0.012, diagonal * 0.002)
+        radius = max(diagonal * 0.78, 10.0)
+        tube_radius = max(radius * 0.022, diagonal * 0.004)
         planes = (
             (np.array([0.0, 1.0, 0.0]), np.array([0.0, 0.0, 1.0])),
             (np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0])),
@@ -829,7 +849,7 @@ class ProductViewer(QWidget):
         matrix = self._vtk_matrix_from_numpy(self._actor_matrix_array())
         for ring_actor in self._rotation_ring_actors:
             ring_actor.SetUserMatrix(matrix)
-            ring_actor.SetVisibility(self._product_selected)
+            ring_actor.SetVisibility(True)
 
     def _screen_vector_from_cad_origin(self, display_x, display_y, axis_index):
         """Project a display point onto the plane normal to a local CAD axis."""
@@ -943,26 +963,7 @@ class ProductViewer(QWidget):
             field.blockSignals(True)
             field.setValue(float(value))
             field.blockSignals(False)
-        text = f"ROLL  {rpy[0]:.2f}°    PITCH  {rpy[1]:.2f}°    YAW  {rpy[2]:.2f}°"
-        if self._attitude_text_actor is None:
-            self._attitude_text_actor = self.plotter.add_text(
-                text, position="upper_left", font_size=12, color="#FFFFFF", shadow=True
-            )
-        else:
-            # add_text(position="upper_left") returns PyVista CornerAnnotation,
-            # which is updated with set_text(position, text), not SetInput().
-            if hasattr(self._attitude_text_actor, "set_text"):
-                self._attitude_text_actor.set_text("upper_left", text)
-            elif hasattr(self._attitude_text_actor, "SetInput"):
-                # Compatibility with a vtkOpenGLTextActor/Text return value.
-                self._attitude_text_actor.SetInput(text)
-            else:
-                # Recreate the overlay rather than letting a UI refresh crash.
-                self.plotter.remove_actor(self._attitude_text_actor, render=False)
-                self._attitude_text_actor = self.plotter.add_text(
-                    text, position="upper_left", font_size=12,
-                    color="#FFFFFF", shadow=True, render=False
-                )
+        # RPY is shown only in the three numeric selectors above the viewport.
         if self._cad_axes_actor is not None:
             self._cad_axes_actor.SetUserMatrix(self._vtk_matrix_from_numpy(self._actor_matrix_array()))
 
