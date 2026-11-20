@@ -395,10 +395,10 @@ class ProductViewer(QWidget):
             "color: #8FA3B2; font-weight: 700; padding: 2px 6px;"
         )
         self.trajectory_spray_state_label.setToolTip(
-            "A translucent fan sheet shows the configured spray angle and standoff "
-            "while spray is ON. It is a directional visual cue, not a calibrated paint "
-            "volume. Surface-area highlighting requires measured flat-fan thickness. "
-            "At segment boundaries spray is OFF; a robot travel path is not yet planned."
+            "The translucent spray preview follows the configured pattern and footprint. "
+            "Surface-area highlighting requires a known footprint thickness for flat-fan mode. "
+            "Spray is OFF between strokes; orange travel links are straight-line estimates only "
+            "and are not collision-checked or robot-reachability validated."
         )
         playback_row.addWidget(self.trajectory_spray_state_label)
 
