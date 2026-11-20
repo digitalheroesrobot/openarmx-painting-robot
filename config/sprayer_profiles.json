@@ -25,5 +25,6 @@
       "gun_body_diameter_mm": 0,
       "tcp_to_nozzle_tip_mm": 0
     }
-  ]
+  ],
+  "active_profile": "default sprayer"
 }
