@@ -66,10 +66,15 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
         profiles = payload.get("profiles", []) if isinstance(payload, dict) else []
         if not isinstance(profiles, list):
             raise ValueError("The profiles entry must be a list.")
-        valid = [
-            item for item in profiles
-            if isinstance(item, dict) and str(item.get("name", "")).strip()
-        ]
+        valid = []
+        for item in profiles:
+            if not isinstance(item, dict):
+                continue
+            if not str(item.get("name", "")).strip():
+                continue
+            merged = deepcopy(DEFAULT_SPRAYER_PROFILE)
+            merged.update(deepcopy(item))
+            valid.append(merged)
         if not any(
             str(item.get("name", "")).strip().lower() == "default sprayer"
             for item in valid
@@ -131,7 +136,11 @@ class SprayPatternPreview(QWidget):
         half_width_mm = standoff * math.tan(math.radians(angle * 0.5))
         spray_width_mm = 2.0 * half_width_mm
         visual_half_width = min(width * 0.40, max(12.0, spray_width_mm * 0.34))
-        visual_nozzle_length = min(42.0, max(8.0, nozzle_length * 0.8))
+        body_length = max(
+            nozzle_length,
+            float(profile.get("gun_body_length_mm", 0.0) or 0.0),
+        )
+        visual_nozzle_length = min(58.0, max(8.0, body_length * 0.45))
         nozzle_top = tip_y - visual_nozzle_length
 
         painter.setPen(QPen(QColor("#B7CAD5"), 2))
@@ -284,6 +293,9 @@ class SprayerSettingsDialog(QDialog):
         field_specs = [
             ("nozzle_orifice_mm", "Nozzle orifice (mm)", 0.1, 10.0, 2),
             ("nozzle_length_mm", "Nozzle length (mm)", 0.0, 300.0, 1),
+        ("gun_body_length_mm", "Gun body length (mm)", 0.0, 600.0, 1),
+        ("gun_body_diameter_mm", "Gun body diameter (mm)", 0.0, 200.0, 1),
+        ("tcp_to_nozzle_tip_mm", "TCP to nozzle tip (mm)", 0.0, 500.0, 1),
             ("standoff_mm", "Working distance (mm)", 20.0, 1000.0, 1),
             ("spray_cone_angle_deg", "Full spray angle (deg)", 1.0, 150.0, 1),
             ("fan_reference_distance_mm", "Reference distance (mm)", 10.0, 2000.0, 1),
@@ -301,6 +313,16 @@ class SprayerSettingsDialog(QDialog):
             spin.setDecimals(decimals)
             spin.setKeyboardTracking(False)
             spin.setSingleStep(0.1 if decimals > 1 else 1.0)
+            if key in ("nozzle_length_mm",):
+                spin.setToolTip(
+                    "This is a mechanical dimension. The default is illustrative; "
+                    "replace it with the actual sprayer drawing."
+                )
+            elif key in ("travel_speed_mm_s", "fluid_pressure_bar", "fluid_flow_ml_min"):
+                spin.setToolTip(
+                    "A value of 0 means not specified. Enter the value from "
+                    "the sprayer data sheet or validated paint process."
+                )
             spin.valueChanged.connect(self._refresh_preview)
             self.fields[key] = spin
             form.addRow(label, spin)
