@@ -833,15 +833,14 @@ class ProductViewer(QWidget):
 
     @staticmethod
     def _build_patch_light_beams(
-        mesh, face_mask, max_beams=48, radius_scale=0.105
+        mesh, face_mask, max_beams=48, radius_scale=0.055
     ):
         """
-        Build outward-expanding light cones from a selected patch.
+        Build soft white locator light for the selected patch.
 
-        Each cone starts at a triangle center and follows that triangle's
-        oriented normal. On correctly oriented watertight CAD/STL meshes,
-        normals on hole walls point into the cavity, so the light is
-        projected into the hole instead of merely outlining its rim.
+        Planar patches emit perpendicular to the surface. Cylindrical
+        patches emit along both directions of the fitted cylinder axis,
+        so the light travels toward both ends of a hole or tube.
         """
         face_mask = np.asarray(face_mask, dtype=bool)
 
@@ -851,79 +850,113 @@ class ProductViewer(QWidget):
             )
 
         face_indices = np.flatnonzero(face_mask)
-
         if face_indices.size == 0:
             return pv.PolyData()
 
         centers = np.asarray(mesh.triangles_center, dtype=float)
         normals = np.asarray(mesh.face_normals, dtype=float)
-
         valid = (
             np.all(np.isfinite(centers), axis=1)
             & np.all(np.isfinite(normals), axis=1)
         )
         face_indices = face_indices[valid[face_indices]]
-
         if face_indices.size == 0:
             return pv.PolyData()
 
-        # Keep the effect responsive even for very dense CAD meshes.
-        if face_indices.size > max_beams:
-            sample_positions = np.linspace(
-                0,
-                face_indices.size - 1,
-                num=max_beams,
-                dtype=int,
-            )
-            face_indices = face_indices[sample_positions]
+        patch_normals = normals[face_indices]
+        normal_lengths = np.linalg.norm(patch_normals, axis=1)
+        usable = normal_lengths > 1e-12
+        face_indices = face_indices[usable]
+        patch_normals = patch_normals[usable]
+        normal_lengths = normal_lengths[usable]
+        if face_indices.size == 0:
+            return pv.PolyData()
 
-        # trimesh.bounds has shape (2, 3): [minimum_xyz, maximum_xyz].
-        # Compute extents from vertices to avoid confusing it with VTK's
-        # flattened six-value bounds representation.
+        unit_normals = patch_normals / normal_lengths[:, None]
+        mean_normal = np.mean(unit_normals, axis=0)
+        normal_coherence = float(np.linalg.norm(mean_normal))
+
+        # A cylindrical wall has normals distributed around a circle:
+        # their covariance has two significant eigenvalues and one small
+        # eigenvalue. The eigenvector of the smallest eigenvalue is the
+        # cylinder axis. A planar patch instead has strongly aligned normals.
+        normal_covariance = unit_normals.T @ unit_normals / len(unit_normals)
+        eigenvalues, eigenvectors = np.linalg.eigh(normal_covariance)
+        cylindrical = (
+            float(eigenvalues[1]) > 0.12
+            and float(eigenvalues[0]) < 0.18
+            and normal_coherence < 0.80
+        )
+
+        if cylindrical:
+            cylinder_axis = eigenvectors[:, 0]
+            axis_length = float(np.linalg.norm(cylinder_axis))
+            if axis_length <= 1e-12:
+                cylindrical = False
+            else:
+                cylinder_axis = cylinder_axis / axis_length
+                # Limit the number of source points because each point
+                # creates two axial beams (toward both cylinder ends).
+                sample_limit = max(1, int(max_beams) // 2)
+                if face_indices.size > sample_limit:
+                    positions = np.linspace(
+                        0, face_indices.size - 1,
+                        num=sample_limit, dtype=int
+                    )
+                    face_indices = face_indices[positions]
+                beam_directions = (cylinder_axis, -cylinder_axis)
+        else:
+            # Planar patch: light travels perpendicular to the face.
+            mean_length = float(np.linalg.norm(mean_normal))
+            if mean_length > 1e-12:
+                surface_normal = mean_normal / mean_length
+            else:
+                surface_normal = unit_normals[0]
+            if face_indices.size > max_beams:
+                positions = np.linspace(
+                    0, face_indices.size - 1,
+                    num=max_beams, dtype=int
+                )
+                face_indices = face_indices[positions]
+            beam_directions = (surface_normal,)
+
         dimensions = np.ptp(
-            np.asarray(mesh.vertices, dtype=float),
-            axis=0,
+            np.asarray(mesh.vertices, dtype=float), axis=0
         )
         model_diagonal = float(np.linalg.norm(dimensions))
-
         if not np.isfinite(model_diagonal) or model_diagonal <= 0.0:
             return pv.PolyData()
 
-        # Long, clearly visible same-color beams project away from the
-        # selected patch so recessed and hole surfaces are easier to locate.
-        beam_length = model_diagonal * 0.72
+        # Half of the previous 0.72 x model-diagonal projection distance.
+        beam_length = model_diagonal * 0.36
         beam_radius = beam_length * float(radius_scale)
-
         beams = []
 
         for face_index in face_indices:
-            normal = normals[face_index]
-            normal_length = float(np.linalg.norm(normal))
-
-            if not np.isfinite(normal_length) or normal_length <= 1e-12:
-                continue
-
-            normal = normal / normal_length
             origin = centers[face_index]
+            for direction in beam_directions:
+                direction = np.asarray(direction, dtype=float)
+                direction_length = float(np.linalg.norm(direction))
+                if not np.isfinite(direction_length) or direction_length <= 1e-12:
+                    continue
+                direction = direction / direction_length
 
-            # VTK cone's apex is placed on the surface. Its wide end
-            # expands along +normal, like a small headlight beam.
-            cone_center = origin + normal * (beam_length * 0.5)
-
-            beams.append(
-                pv.Cone(
-                    center=cone_center,
-                    direction=-normal,
-                    height=beam_length,
-                    radius=beam_radius,
-                    resolution=10,
-                    capping=True,
+                # Cone apex starts at the surface and its soft body expands
+                # along the selected projection direction.
+                cone_center = origin + direction * (beam_length * 0.5)
+                beams.append(
+                    pv.Cone(
+                        center=cone_center,
+                        direction=-direction,
+                        height=beam_length,
+                        radius=beam_radius,
+                        resolution=16,
+                        capping=True,
+                    )
                 )
-            )
 
         if not beams:
             return pv.PolyData()
-
         return pv.MultiBlock(beams).combine()
 
     # =========================================================
@@ -1891,14 +1924,14 @@ class ProductViewer(QWidget):
                     if not np.isfinite(model_diagonal) or model_diagonal <= 0:
                         model_diagonal = 1.0
 
-                    # Stronger expanded shells plus long projected beams
-                    # make the selected patch visible at a glance, including
-                    # surfaces inside holes and recessed regions.
+                    # Soft white halo, kept close to the surface. The
+                    # directional white beams below provide the longer locator
+                    # effect without using the patch's classification color.
                     glow_actors = []
                     for offset_ratio, opacity in (
-                        (0.060, 0.10),
-                        (0.035, 0.20),
-                        (0.015, 0.38),
+                        (0.030, 0.05),
+                        (0.0175, 0.09),
+                        (0.0075, 0.14),
                     ):
                         try:
                             halo_polydata = self._build_offset_patch_shell(
@@ -1910,7 +1943,7 @@ class ProductViewer(QWidget):
                                 glow_actors.append(
                                     self.plotter.add_mesh(
                                         halo_polydata,
-                                        color=patch_color,
+                                        color="#FFFFFF",
                                         opacity=opacity,
                                         show_edges=False,
                                         lighting=False,
@@ -1927,21 +1960,21 @@ class ProductViewer(QWidget):
                                 f"{type(exc).__name__}: {exc}"
                             )
 
-                    # Project long, patch-colored headlight beams from
-                    # selected triangle surfaces. This is a visual locator,
-                    # not a physical lighting simulation.
+                    # Project soft white light from the selected patch.
+                    # Planar faces project along their normal; cylindrical
+                    # hole walls project along both directions of the axis.
                     try:
                         beam_polydata = self._build_patch_light_beams(
                             self.current_mesh,
                             selected_mask,
                             max_beams=64,
-                            radius_scale=0.075,
+                            radius_scale=0.055,
                         )
                         if beam_polydata.n_cells > 0:
                             beam_actor = self.plotter.add_mesh(
                                 beam_polydata,
-                                color=patch_color,
-                                opacity=0.24,
+                                color="#FFFFFF",
+                                opacity=0.11,
                                 show_edges=False,
                                 lighting=False,
                                 ambient=1.0,
@@ -1956,12 +1989,12 @@ class ProductViewer(QWidget):
                             f"{type(exc).__name__}: {exc}"
                         )
 
-                    # A translucent same-color wash reinforces the selected
-                    # area while leaving the original patch color recognizable.
+                    # A translucent white wash gives the selected surface a
+                    # soft luminous appearance; the contour retains patch color.
                     surface_actor = self.plotter.add_mesh(
                         selected_polydata,
-                        color=patch_color,
-                        opacity=0.30,
+                        color="#FFFFFF",
+                        opacity=0.18,
                         show_edges=False,
                         smooth_shading=False,
                         lighting=False,
