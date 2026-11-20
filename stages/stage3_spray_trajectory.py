@@ -1624,6 +1624,7 @@ def _order_trajectory_with_planar_raster(
     next_segment_id = 0
     rasterized_patch_ids = []
     curved_rasterized_patch_ids = []
+    normal_partitioned_patch_ids = []
     fallback_patch_ids = []
     fallback_reason_counts = {}
     fallback_patch_reasons = []
@@ -1661,6 +1662,7 @@ def _order_trajectory_with_planar_raster(
                 track_spacing_coordinate_units=track_spacing_coordinate_units,
                 diagnostics=curved_diagnostics,
             )
+            used_normal_partition = False
             if curved is None and curved_diagnostics.get("reason") in {
                 "inconsistent_or_cancelling_normals",
                 "folded_patch_opposing_normals",
@@ -1678,6 +1680,7 @@ def _order_trajectory_with_planar_raster(
                 )
                 if partitioned is not None:
                     curved = partitioned
+                    used_normal_partition = True
                     curved_diagnostics.update(partition_diagnostics)
                 else:
                     curved_diagnostics["partition_attempt_reason"] = (
@@ -1687,6 +1690,8 @@ def _order_trajectory_with_planar_raster(
             if curved is not None:
                 patch_result = curved
                 curved_rasterized_patch_ids.append(int(patch_id))
+                if used_normal_partition:
+                    normal_partitioned_patch_ids.append(int(patch_id))
                 for segment in curved["segments"]:
                     segment_metadata.append({
                         **segment,
@@ -1741,6 +1746,7 @@ def _order_trajectory_with_planar_raster(
     result["segments"] = segment_metadata
     result["rasterized_planar_patch_ids"] = rasterized_patch_ids
     result["rasterized_curved_patch_ids"] = curved_rasterized_patch_ids
+    result["normal_partitioned_patch_ids"] = normal_partitioned_patch_ids
     result["nearest_neighbor_fallback_patch_ids"] = fallback_patch_ids
 
     # Keep sample and segment counts by the actual generator used for each
@@ -1802,6 +1808,9 @@ def _order_trajectory_with_planar_raster(
         )),
         "planar_patch_ids": [int(value) for value in rasterized_patch_ids],
         "curved_patch_ids": [int(value) for value in curved_rasterized_patch_ids],
+        "normal_partitioned_patch_ids": [
+            int(value) for value in normal_partitioned_patch_ids
+        ],
         "fallback_patch_ids": [int(value) for value in fallback_patch_ids],
         "fallback_reason_counts": fallback_reason_counts,
         "fallback_patch_reasons": fallback_patch_reasons,
@@ -1832,6 +1841,10 @@ def _order_trajectory_with_planar_raster(
         f"Patches  | Planar: {len(rasterized_patch_ids)} | "
         f"Curved: {len(curved_rasterized_patch_ids)} | "
         f"Fallback: {len(fallback_patch_ids)}"
+    )
+    print(
+        f"Curved recovery | Normal-cone partitioned patches: "
+        f"{len(normal_partitioned_patch_ids)}"
     )
     if fallback_reason_counts:
         print("Fallback rejection reasons:")
