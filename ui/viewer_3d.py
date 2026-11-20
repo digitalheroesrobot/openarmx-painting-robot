@@ -1274,6 +1274,7 @@ class ProductViewer(QWidget):
         mesh,
         trajectory_data,
         face_surface_types=None,
+        face_patch_ids=None,
     ):
         if not isinstance(trajectory_data, dict):
             raise TypeError(
@@ -1423,6 +1424,17 @@ class ProductViewer(QWidget):
         self.face_status_labels = None
         self.selected_patch_id = None
         self.trajectory_data = data
+        self.stage3_patch_ids = None
+
+        if face_patch_ids is not None:
+            patch_ids = np.asarray(face_patch_ids)
+            if patch_ids.ndim != 1 or len(patch_ids) != len(mesh.faces):
+                raise ValueError(
+                    "face_patch_ids must contain one Patch ID for every mesh face."
+                )
+            if not np.all(np.isfinite(patch_ids)):
+                raise ValueError("face_patch_ids contains invalid values.")
+            self.stage3_patch_ids = patch_ids.astype(np.int64, copy=True)
 
         if face_surface_types is not None:
             surface_types = np.asarray(
@@ -1640,6 +1652,73 @@ class ProductViewer(QWidget):
 
         # Keep the 3D viewport free of diagnostic text. Stage 3 metrics
         # belong in the Summary panel, not over the product geometry.
+
+    def _add_stage3_surface_labels(self):
+        """Show one compact, surface-anchored Patch ID label per Stage 1 patch."""
+        if self.stage3_patch_ids is None or self.current_mesh is None:
+            return
+        if len(self.stage3_patch_ids) != len(self.current_mesh.faces):
+            return
+
+        visible_mask = self._get_trajectory_surface_mask()
+        face_centers = self.current_mesh.vertices[
+            self.current_mesh.faces
+        ].mean(axis=1)
+        transform = self.trajectory_product_transform
+        rotation = transform[:3, :3]
+        translation = transform[:3, 3]
+
+        label_points = []
+        label_text = []
+        for patch_id in np.unique(self.stage3_patch_ids[visible_mask]):
+            patch_mask = (
+                (self.stage3_patch_ids == patch_id) & visible_mask
+            )
+            if not np.any(patch_mask):
+                continue
+
+            center = face_centers[patch_mask].mean(axis=0)
+            world_center = rotation @ center + translation
+            label_points.append(world_center)
+
+            kinds = (
+                np.unique(self.face_surface_types[patch_mask])
+                if self.face_surface_types is not None
+                else np.asarray(["surface"])
+            )
+            kind = str(kinds[0]).upper()
+            if len(kinds) > 1:
+                kind = "MIXED"
+            label_text.append(f"P{int(patch_id)}  {kind}")
+
+        if label_points:
+            self.plotter.add_point_labels(
+                np.asarray(label_points, dtype=float),
+                label_text,
+                font_size=10,
+                text_color="#F4F7FA",
+                shape="rounded_rect",
+                shape_color="#07111D",
+                shape_opacity=0.82,
+                margin=3,
+                always_visible=True,
+                show_points=False,
+                pickable=False,
+                render=False,
+            )
+
+        if self.face_surface_types is not None:
+            self.plotter.add_text(
+                "SURFACE TYPES\n"
+                "TEAL   PLANAR\n"
+                "ORANGE CURVED\n"
+                "VIOLET REVIEW / UNKNOWN\n"
+                "P# = STAGE 1 PATCH ID",
+                position="upper_right",
+                font_size=10,
+                color="#F4F7FA",
+                shadow=True,
+            )
 
     def _trajectory_arrow_length(self):
         if self.trajectory_data is None:
@@ -2111,14 +2190,36 @@ class ProductViewer(QWidget):
             )
 
             if polydata.n_cells > 0:
-                self._pose_actor = self.plotter.add_mesh(
-                    polydata,
-                    color="#9FB7C7",
-                    opacity=0.92,
-                    show_edges=False,
-                    smooth_shading=True,
-                    pickable=False,
-                )
+                if self.face_surface_types is not None:
+                    type_colors = {
+                        "planar": (45, 212, 191),
+                        "curved": (245, 158, 11),
+                        "unknown": (167, 139, 250),
+                    }
+                    face_rgb = np.asarray([
+                        type_colors.get(str(kind).lower(), type_colors["unknown"])
+                        for kind in self.face_surface_types
+                    ], dtype=np.uint8)
+                    polydata.cell_data["Surface Type RGB"] = face_rgb[face_mask]
+                    self._pose_actor = self.plotter.add_mesh(
+                        polydata,
+                        scalars="Surface Type RGB",
+                        rgb=True,
+                        preference="cell",
+                        opacity=0.96,
+                        show_edges=False,
+                        smooth_shading=True,
+                        pickable=False,
+                    )
+                else:
+                    self._pose_actor = self.plotter.add_mesh(
+                        polydata,
+                        color="#9FB7C7",
+                        opacity=0.96,
+                        show_edges=False,
+                        smooth_shading=True,
+                        pickable=False,
+                    )
                 self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
                 self._pose_actor.SetUserMatrix(
                     self._vtk_matrix_from_numpy(self.trajectory_product_transform)
@@ -2126,6 +2227,7 @@ class ProductViewer(QWidget):
             else:
                 self._pose_actor = None
 
+            self._add_stage3_surface_labels()
             self._add_trajectory_visualization()
 
         # -------------------------------------------------
