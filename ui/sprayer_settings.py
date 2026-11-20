@@ -395,6 +395,7 @@ class SprayerSettingsDialog(QDialog):
             "spray_cone_angle_deg",
             "overlap_percent",
             "sampling_spacing_mm",
+            "fan_reference_distance_mm",
             "fan_thickness_at_reference_mm",
         }
 
