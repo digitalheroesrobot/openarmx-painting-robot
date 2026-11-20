@@ -2744,11 +2744,24 @@ def _inspect_generated_trajectory(
     jumps_mm = []
     orientation_changes_deg = []
     segment_blocks = []
+    patch_ids = np.asarray(
+        trajectory.get("patch_ids", np.full(len(points), -1)), dtype=np.int64
+    )
+    face_indices = np.asarray(
+        trajectory.get("face_indices", np.full(len(points), -1)), dtype=np.int64
+    )
+    segment_metadata_by_id = {
+        int(item.get("segment_id", -1)): item
+        for item in trajectory.get("segments", [])
+        if isinstance(item, dict)
+    }
+    continuity_outliers = []
     if len(segments):
         starts = np.r_[0, np.flatnonzero(np.diff(segments) != 0) + 1]
         ends = np.r_[starts[1:], len(segments)]
         for start, end in zip(starts, ends):
-            segment_blocks.append((int(start), int(end), int(segments[start])))
+            segment_id = int(segments[start])
+            segment_blocks.append((int(start), int(end), segment_id))
             if end - start > 1:
                 local_steps = np.linalg.norm(np.diff(points[start:end], axis=0), axis=1) * mm_per_unit
                 jumps_mm.extend(local_steps.tolist())
@@ -2758,7 +2771,58 @@ def _inspect_generated_trajectory(
                 orientation_changes_deg.extend(
                     np.degrees(np.arccos(np.clip(local_dots, -1.0, 1.0))).tolist()
                 )
+                for local_offset, step_mm in enumerate(local_steps):
+                    if float(step_mm) <= jump_limit_mm:
+                        continue
+                    sample_index = int(start + local_offset)
+                    next_index = sample_index + 1
+                    patch_a = int(patch_ids[sample_index]) if len(patch_ids) == len(points) else -1
+                    patch_b = int(patch_ids[next_index]) if len(patch_ids) == len(points) else -1
+                    face_a = int(face_indices[sample_index]) if len(face_indices) == len(points) else -1
+                    face_b = int(face_indices[next_index]) if len(face_indices) == len(points) else -1
+                    shared_vertices = None
+                    if (
+                        0 <= face_a < face_count
+                        and 0 <= face_b < face_count
+                    ):
+                        shared_vertices = int(
+                            len(np.intersect1d(mesh.faces[face_a], mesh.faces[face_b]))
+                        )
+                    if patch_a != patch_b:
+                        cause = "different_patches_inside_one_stroke"
+                    elif face_a == face_b and face_a >= 0:
+                        cause = "large_step_on_same_source_face"
+                    elif shared_vertices == 0:
+                        cause = "non_adjacent_source_faces_inside_one_stroke"
+                    elif shared_vertices is not None:
+                        cause = "large_step_between_vertex_adjacent_faces"
+                    else:
+                        cause = "source_face_adjacency_unavailable"
+                    segment_meta = segment_metadata_by_id.get(segment_id, {})
+                    continuity_outliers.append({
+                        "sample_index_from": sample_index,
+                        "sample_index_to": next_index,
+                        "segment_id": segment_id,
+                        "patch_id_from": patch_a,
+                        "patch_id_to": patch_b,
+                        "face_index_from": face_a,
+                        "face_index_to": face_b,
+                        "shared_source_face_vertices": shared_vertices,
+                        "step_distance_mm": float(step_mm),
+                        "allowed_step_mm": float(jump_limit_mm),
+                        "excess_over_limit_mm": float(step_mm - jump_limit_mm),
+                        "cause_classification": cause,
+                        "path_type": str(segment_meta.get("path_type", "unknown")),
+                        "point_from_coordinate_units": points[sample_index].astype(float).tolist(),
+                        "point_to_coordinate_units": points[next_index].astype(float).tolist(),
+                        "step_vector_coordinate_units": (
+                            points[next_index] - points[sample_index]
+                        ).astype(float).tolist(),
+                    })
 
+    continuity_outliers.sort(
+        key=lambda item: item["step_distance_mm"], reverse=True
+    )
     jumps = np.asarray(jumps_mm, dtype=np.float64)
     angles = np.asarray(orientation_changes_deg, dtype=np.float64)
     jump_outliers = int(np.count_nonzero(jumps > jump_limit_mm))
@@ -2789,6 +2853,13 @@ def _inspect_generated_trajectory(
             "p95_step_mm": p95_jump,
             "jump_limit_mm": jump_limit_mm,
             "jump_outlier_count": jump_outliers,
+            "outlier_details": continuity_outliers,
+            "outlier_detail_count": int(len(continuity_outliers)),
+            "outlier_detail_policy": (
+                "Every within-stroke adjacent sample pair above the limit is listed "
+                "with sample, segment, patch, source-face, distance and geometric "
+                "adjacency details. Face adjacency is estimated by shared mesh vertices."
+            ),
         },
         "orientation": {
             "status": orientation_status,
@@ -2830,6 +2901,18 @@ def _inspect_generated_trajectory(
         f"max {max_jump:.2f} mm | P95 {p95_jump:.2f} mm | "
         f"limit {jump_limit_mm:.2f} mm | outliers {jump_outliers}"
     )
+    if continuity_outliers:
+        print("CONTINUITY OUTLIER DETAILS (largest first)")
+        for item in continuity_outliers:
+            print(
+                f"  samples {item['sample_index_from']}->{item['sample_index_to']} | "
+                f"segment {item['segment_id']} | "
+                f"patch {item['patch_id_from']}->{item['patch_id_to']} | "
+                f"faces {item['face_index_from']}->{item['face_index_to']} | "
+                f"step {item['step_distance_mm']:.2f} mm "
+                f"(limit {jump_limit_mm:.2f}) | {item['cause_classification']} | "
+                f"path={item['path_type']}"
+            )
     print(
         f"[{orientation_status}] Nozzle orientation: max "
         f"{max_angle:.2f} deg | P95 {p95_angle:.2f} deg | "
@@ -4565,6 +4648,45 @@ def run_stage3_numerical_tests() -> dict:
     assert abs(inspection_result["surface_face_representation_percent"] - 100.0) < 1e-9
     assert inspection_result["continuity"]["jump_outlier_count"] == 0
     assert inspection_result["orientation"]["maximum_change_deg"] < 11.0
+
+    # --------------------------------------------------------
+    # Test 24C: Continuity diagnostics identify exact source samples and faces.
+    # --------------------------------------------------------
+    continuity_outlier_test = _inspect_generated_trajectory(
+        mesh=inspection_test_mesh,
+        source_face_indices=np.asarray([0, 1], dtype=np.int64),
+        trajectory={
+            "face_indices": np.asarray([0, 0, 1], dtype=np.int64),
+            "patch_ids": np.asarray([7, 7, 7], dtype=np.int64),
+            "nozzle_points": np.asarray([
+                [0.0, 0.0, 180.0],
+                [10.0, 0.0, 180.0],
+                [100.0, 0.0, 180.0],
+            ], dtype=np.float64),
+            "spray_directions": np.tile([0.0, 0.0, -1.0], (3, 1)),
+            "segment_ids": np.asarray([4, 4, 4], dtype=np.int64),
+            "segments": [{
+                "segment_id": 4,
+                "patch_id": 7,
+                "path_type": "test_raster",
+            }],
+        },
+        coordinate_unit="mm",
+        sample_spacing_mm=10.0,
+        track_spacing_mm=20.0,
+    )
+    assert continuity_outlier_test["continuity"]["jump_outlier_count"] == 1
+    outlier_detail = continuity_outlier_test["continuity"]["outlier_details"][0]
+    assert outlier_detail["sample_index_from"] == 1
+    assert outlier_detail["sample_index_to"] == 2
+    assert outlier_detail["segment_id"] == 4
+    assert outlier_detail["patch_id_from"] == 7
+    assert outlier_detail["face_index_from"] == 0
+    assert outlier_detail["face_index_to"] == 1
+    assert outlier_detail["shared_source_face_vertices"] == 2
+    assert outlier_detail["cause_classification"] == (
+        "large_step_between_vertex_adjacent_faces"
+    )
     assert inspection_result["spray_control"]["spray_off_transition_count"] == 1
     assert inspection_result["spray_control"]["spray_on_sample_count"] == 3
 
