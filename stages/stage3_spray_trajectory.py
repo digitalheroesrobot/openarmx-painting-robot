@@ -3177,6 +3177,7 @@ def _build_saved_report(
         "path_metrics": trajectory["path_metrics"],
         "segments": trajectory["segments"],
         "path_statistics": trajectory.get("path_statistics", {}),
+        "trajectory_validation": trajectory.get("trajectory_validation", {}),
         "rasterization": trajectory.get("rasterization", {}),
         "advanced_geometry_analysis": trajectory[
             "advanced_geometry_analysis"
