@@ -94,6 +94,8 @@ class ProductViewer(QWidget):
         self.face_status_labels = None
         self.trajectory_data = None
         self.trajectory_path_statistics = {}
+        self.trajectory_validation = {}
+        self._playback_spray_actor = None
         self.face_surface_types = None
 
         # Currently selected Stage 2 surface patch.
@@ -384,6 +386,17 @@ class ProductViewer(QWidget):
         playback_row.setSpacing(7)
         playback_row.addWidget(QLabel("PATH PLAYBACK:"))
 
+        self.trajectory_spray_state_label = QLabel("SPRAY: OFF")
+        self.trajectory_spray_state_label.setMinimumWidth(145)
+        self.trajectory_spray_state_label.setStyleSheet(
+            "color: #8FA3B2; font-weight: 700; padding: 2px 6px;"
+        )
+        self.trajectory_spray_state_label.setToolTip(
+            "The translucent amber cone is visible only while the simulated spray is ON. "
+            "At a segment boundary the spray is OFF; a robot travel path is not yet planned."
+        )
+        playback_row.addWidget(self.trajectory_spray_state_label)
+
         self.trajectory_play_button = QPushButton("Play")
         self.trajectory_play_button.setToolTip("Play the nozzle path from start to finish")
         self.trajectory_play_button.clicked.connect(self._toggle_trajectory_playback)
@@ -462,7 +475,53 @@ class ProductViewer(QWidget):
             "the path generator assigned to each surface patch."
         )
         root.addWidget(self.trajectory_path_stats_label)
+
+        self.trajectory_validation_label = QLabel(
+            "PATH CHECKS | Coverage: —  Continuity: —  Orientation: —  Spray: —"
+        )
+        self.trajectory_validation_label.setMinimumHeight(18)
+        self.trajectory_validation_label.setToolTip(
+            "Geometric inspection results. These checks do not certify paint deposition or robot reachability."
+        )
+        root.addWidget(self.trajectory_validation_label)
         return panel
+
+    def _update_trajectory_validation_label(self):
+        validation = self.trajectory_validation
+        if not hasattr(self, "trajectory_validation_label"):
+            return
+        if not validation:
+            self.trajectory_validation_label.setText(
+                "PATH CHECKS | Diagnostics unavailable"
+            )
+            return
+        continuity = validation.get("continuity", {})
+        orientation = validation.get("orientation", {})
+        spray = validation.get("spray_control", {})
+        coverage_status = validation.get("coverage_status", "UNKNOWN")
+        self.trajectory_validation_label.setText(
+            f"PATH CHECKS | Coverage: {coverage_status} "
+            f"{float(validation.get('surface_face_representation_percent', 0.0)):.1f}%  "
+            f"Continuity: {continuity.get('status', 'UNKNOWN')} "
+            f"({int(continuity.get('jump_outlier_count', 0))} jumps)  "
+            f"Orientation: {orientation.get('status', 'UNKNOWN')} "
+            f"(max {float(orientation.get('maximum_change_deg', 0.0)):.1f}°)  "
+            f"Spray: {int(spray.get('stroke_segment_count', 0))} strokes"
+        )
+        self.trajectory_validation_label.setToolTip(
+            "\n".join([
+                str(validation.get("note", "")),
+                f"Continuity max/P95: {float(continuity.get('maximum_step_mm', 0.0)):.2f} / "
+                f"{float(continuity.get('p95_step_mm', 0.0)):.2f} mm; "
+                f"limit {float(continuity.get('jump_limit_mm', 0.0)):.2f} mm",
+                f"Nozzle orientation max/P95: "
+                f"{float(orientation.get('maximum_change_deg', 0.0)):.2f} / "
+                f"{float(orientation.get('p95_change_deg', 0.0)):.2f} deg",
+                f"Spray ON samples: {int(spray.get('spray_on_sample_count', 0))}; "
+                f"OFF boundaries: {int(spray.get('spray_off_transition_count', 0))}",
+                str(spray.get("policy", "")),
+            ])
+        )
 
     def _on_trajectory_visibility_changed(self, key, checked):
         self.trajectory_visibility[key] = bool(checked)
@@ -1540,7 +1599,11 @@ class ProductViewer(QWidget):
         self.trajectory_path_statistics = trajectory_data.get(
             "path_statistics", {}
         )
+        self.trajectory_validation = trajectory_data.get(
+            "trajectory_validation", {}
+        )
         self._update_trajectory_path_statistics_label()
+        self._update_trajectory_validation_label()
         self.trajectory_product_transform = transform.copy()
         self._last_product_transform = transform.copy()
 
@@ -1800,7 +1863,7 @@ class ProductViewer(QWidget):
             self.trajectory_play_button.setText("Play")
         if reset:
             actors = list(self._playback_gun_actors)
-            actors.extend((self._playback_path_actor, self._playback_nozzle_actor))
+            actors.extend((self._playback_path_actor, self._playback_nozzle_actor, self._playback_spray_actor))
             seen = set()
             for actor in actors:
                 if actor is None or id(actor) in seen:
@@ -1813,6 +1876,7 @@ class ProductViewer(QWidget):
             self._playback_path_actor = None
             self._playback_nozzle_actor = None
             self._playback_gun_actors = []
+            self._playback_spray_actor = None
             self._playback_index = 0
             self._playback_elapsed_s = 0.0
             self._playback_last_path_render_index = -1
@@ -1821,6 +1885,8 @@ class ProductViewer(QWidget):
                 self.trajectory_coverage_bar.setValue(0)
             if hasattr(self, "trajectory_coverage_label"):
                 self.trajectory_coverage_label.setText("0.0% | 0.000 / 0.000 area")
+            if hasattr(self, "trajectory_spray_state_label"):
+                self.trajectory_spray_state_label.setText("SPRAY: OFF")
             self._restore_trajectory_surface_base_colors()
             if hasattr(self, "trajectory_playback_slider"):
                 self.trajectory_playback_slider.blockSignals(True)
@@ -1930,11 +1996,17 @@ class ProductViewer(QWidget):
         face_to_display_index[display_face_ids] = np.arange(len(display_face_ids), dtype=np.int64)
         target_display_indices = face_to_display_index[target_face_ids]
 
+        segment_ids = np.asarray(data["segment_ids"], dtype=np.int64)
+        spray_on_mask = np.ones(len(segment_ids), dtype=bool)
+        if len(segment_ids) > 1:
+            spray_on_mask[1:] = segment_ids[1:] == segment_ids[:-1]
+
         self._playback_cache = {
             "nozzle_points": nozzle_points,
             "spray_directions": spray_directions,
             "nozzle_frames": nozzle_frames,
-            "segment_ids": np.asarray(data["segment_ids"], dtype=np.int64),
+            "segment_ids": segment_ids,
+            "spray_on_mask": spray_on_mask,
             "travel_speeds_mm_s": np.asarray(
                 data.get("travel_speeds_mm_s", np.full(len(nozzle_points), 150.0)),
                 dtype=float,
@@ -2086,7 +2158,8 @@ class ProductViewer(QWidget):
         for path_index in range(
             cache["coverage_processed_index"] + 1, index + 1
         ):
-            self._mark_surface_samples_from_spray(path_index)
+            if cache["spray_on_mask"][path_index]:
+                self._mark_surface_samples_from_spray(path_index)
         cache["coverage_processed_index"] = max(
             cache["coverage_processed_index"], index
         )
@@ -2237,6 +2310,27 @@ class ProductViewer(QWidget):
                 pickable=False,
             ),
         ]
+        plume_height = max(standoff, 1e-6)
+        plume_radius = max(
+            plume_height * cache["cone_tangent"],
+            plume_height * 0.01,
+        )
+        plume_mesh = pv.Cone(
+            center=(0.0, 0.0, plume_height * 0.5),
+            direction=(0.0, 0.0, 1.0),
+            height=plume_height,
+            radius=plume_radius,
+            resolution=32,
+        )
+        self._playback_spray_actor = self.plotter.add_mesh(
+            plume_mesh,
+            color="#F4A340",
+            opacity=0.22,
+            smooth_shading=False,
+            lighting=False,
+            pickable=False,
+        )
+        self._playback_spray_actor.SetVisibility(0)
         self._playback_nozzle_actor = self._playback_gun_actors[0]
         return self._playback_gun_actors
 
@@ -2255,6 +2349,9 @@ class ProductViewer(QWidget):
         for actor in self._playback_gun_actors:
             actor.SetOrigin(0.0, 0.0, 0.0)
             actor.SetUserMatrix(vtk_matrix)
+        if self._playback_spray_actor is not None:
+            self._playback_spray_actor.SetOrigin(0.0, 0.0, 0.0)
+            self._playback_spray_actor.SetUserMatrix(vtk_matrix)
 
     def _make_playback_path_polydata(self, last_index):
         cache = self._prepare_trajectory_playback_cache()
@@ -2315,12 +2412,27 @@ class ProductViewer(QWidget):
             self._playback_last_path_render_index = index
 
         self._position_spray_gun(index)
+        spray_on = bool(cache["spray_on_mask"][index])
+        if self._playback_spray_actor is not None:
+            self._playback_spray_actor.SetVisibility(1 if spray_on else 0)
+        if hasattr(self, "trajectory_spray_state_label"):
+            if spray_on:
+                self.trajectory_spray_state_label.setText("SPRAY: ON")
+                self.trajectory_spray_state_label.setStyleSheet(
+                    "color: #FFB454; font-weight: 700; padding: 2px 6px;"
+                )
+            else:
+                self.trajectory_spray_state_label.setText("SPRAY: OFF · REPOSITION")
+                self.trajectory_spray_state_label.setStyleSheet(
+                    "color: #8FA3B2; font-weight: 700; padding: 2px 6px;"
+                )
         self._update_paint_coverage_visualization(index)
 
         total = len(nozzle_points)
         current_speed = float(cache["travel_speeds_mm_s"][index])
+        spray_text = "SPRAY ON" if spray_on else "SPRAY OFF"
         self.trajectory_playback_label.setText(
-            f"{index + 1} / {total} | {current_speed:.0f} mm/s"
+            f"{index + 1} / {total} | {current_speed:.0f} mm/s | {spray_text}"
         )
         self.trajectory_playback_slider.blockSignals(True)
         self.trajectory_playback_slider.setValue(index)
