@@ -638,7 +638,7 @@ def run_step_loader_tests():
         _FakeFace([_FakeEdge("seam"), _FakeEdge("seam")]),
     ]
     topology, _ = _build_brep_face_edge_adjacency(
-        object(), fake_faces, object(), _FakeExplorer, _FakeIndexedMap, object()
+        fake_faces, fake_faces, _FakeTopExp, _FakeExplorer, _FakeIndexedMap, object()
     )
     assert topology["face_adjacency"]["1"] == [2]
     assert topology["face_adjacency"]["2"] == [1]
