@@ -242,6 +242,22 @@ def analyze_step_faces(
         "faces": results,
     }
 
+    topology_diagnostics = report["analysis"]["topology_validation"]
+    print("\\nSTEP FACE ADJACENCY VALIDATION")
+    print(f"  Authority: {adjacency_source}")
+    print(f"  B-Rep adjacent face pairs: {topology_diagnostics['brep_adjacent_face_pairs']}")
+    print(f"  Mesh adjacent face pairs:  {topology_diagnostics['mesh_adjacent_face_pairs']}")
+    if has_brep_adjacency:
+        print(f"  Mesh-only adjacency pairs: {topology_diagnostics['mesh_only_adjacency_pairs']}")
+        print(f"  B-Rep-only adjacency pairs: {topology_diagnostics['brep_only_adjacency_pairs']}")
+    print(
+        "  Edge classes | shared: "
+        f"{topology_diagnostics['brep_shared_manifold_edges']} | "
+        f"boundary: {topology_diagnostics['brep_boundary_edges']} | "
+        f"seam: {topology_diagnostics['brep_seam_edges']} | "
+        f"non-manifold: {topology_diagnostics['brep_non_manifold_edges']}"
+    )
+
     return {
         "report": report,
         "triangle_status_labels": triangle_labels,
