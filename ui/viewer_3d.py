@@ -1872,7 +1872,7 @@ class ProductViewer(QWidget):
         # visible during both the initial product view and Stage 1/2
         # surface-patch inspection. Patch mode uses the same posed CAD
         # actor, so these references remain spatially registered.
-        if self.display_mode not in ("product", "patches"):
+        if self.display_mode not in ("product", "patches", "trajectory"):
             return
 
         if self._pose_actor is None:
