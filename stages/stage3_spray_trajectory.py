@@ -535,6 +535,58 @@ def _determine_normal_orientation(
 
 
 # ------------------------------------------------------------
+# Product pose and provisional nozzle frame
+# ------------------------------------------------------------
+
+def _validate_product_transform(product_transform: Any = None) -> np.ndarray:
+    """Validate a rigid CAD-to-World transform in source coordinate units."""
+    if product_transform is None:
+        return np.eye(4, dtype=np.float64)
+    matrix = np.asarray(product_transform, dtype=np.float64)
+    if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
+        raise ValueError("Product transform must be a finite 4x4 matrix.")
+    if not np.allclose(matrix[3], [0.0, 0.0, 0.0, 1.0], atol=1e-8):
+        raise ValueError("Product transform must be a homogeneous rigid transform.")
+    rotation = matrix[:3, :3]
+    if not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-5):
+        raise ValueError("Product transform rotation must be orthonormal.")
+    if not math.isclose(float(np.linalg.det(rotation)), 1.0, rel_tol=1e-5, abs_tol=1e-5):
+        raise ValueError("Product transform rotation must have determinant +1.")
+    return matrix.copy()
+
+
+def _build_nozzle_frames(spray_directions: np.ndarray) -> np.ndarray:
+    """Build provisional right-handed frames; columns X/Y/Z, Z points toward surface."""
+    directions = np.asarray(spray_directions, dtype=np.float64)
+    if directions.ndim != 2 or directions.shape[1] != 3:
+        raise ValueError("Spray directions must have shape (N, 3).")
+    frames = np.empty((len(directions), 3, 3), dtype=np.float64)
+    product_x = np.array([1.0, 0.0, 0.0])
+    product_y = np.array([0.0, 1.0, 0.0])
+    for index, direction in enumerate(directions):
+        length = float(np.linalg.norm(direction))
+        if not math.isfinite(length) or length <= NORMAL_EPSILON:
+            raise ValueError("Cannot build a nozzle frame from an invalid direction.")
+        z_axis = direction / length
+        projected = product_x - float(np.dot(product_x, z_axis)) * z_axis
+        if np.linalg.norm(projected) <= 1e-8:
+            projected = product_y - float(np.dot(product_y, z_axis)) * z_axis
+        x_axis = projected / np.linalg.norm(projected)
+        y_axis = np.cross(z_axis, x_axis)
+        y_axis /= np.linalg.norm(y_axis)
+        frames[index] = np.column_stack((x_axis, y_axis, z_axis))
+    return frames
+
+
+def _transform_points(points: np.ndarray, transform: np.ndarray) -> np.ndarray:
+    return np.asarray(points, dtype=np.float64) @ transform[:3, :3].T + transform[:3, 3]
+
+
+def _transform_vectors(vectors: np.ndarray, transform: np.ndarray) -> np.ndarray:
+    return np.asarray(vectors, dtype=np.float64) @ transform[:3, :3].T
+
+
+# ------------------------------------------------------------
 # Triangle sampling
 # ------------------------------------------------------------
 
@@ -821,6 +873,7 @@ def _order_trajectory_by_patch(
     surface_normals: np.ndarray,
     nozzle_points: np.ndarray,
     spray_directions: np.ndarray,
+    nozzle_frames: np.ndarray,
     face_indices: np.ndarray,
     patch_ids: np.ndarray,
 ) -> dict:
@@ -874,6 +927,7 @@ def _order_trajectory_by_patch(
         "surface_normals": surface_normals[order],
         "nozzle_points": nozzle_points[order],
         "spray_directions": spray_directions[order],
+        "nozzle_frames": nozzle_frames[order],
         "face_indices": face_indices[order],
         "patch_ids": patch_ids[order],
         "segment_ids": ordered_segment_ids,
@@ -1251,6 +1305,7 @@ def generate_spray_trajectory(
     stage1_report: dict | None = None,
     coordinate_unit: str | None = None,
     sprayer_profile: dict | None = None,
+    product_transform: np.ndarray | list | None = None,
 ) -> dict:
 
     if not isinstance(mesh, trimesh.Trimesh):
@@ -1263,6 +1318,8 @@ def generate_spray_trajectory(
             spray_angle_deg,
         )
     )
+
+    product_transform_matrix = _validate_product_transform(product_transform)
 
     # Resolve unit before performing any physical-distance calculation.
     source_unit = _resolve_coordinate_unit(
@@ -1372,15 +1429,27 @@ def generate_spray_trajectory(
     # 6. Spray direction points from nozzle toward surface.
     spray_directions = -surface_normals.copy()
 
+    # 6a. Construct a provisional geometric nozzle frame at each sample.
+    nozzle_frames = _build_nozzle_frames(spray_directions)
+
     # 7. Order trajectory points within individual patches.
     ordered = _order_trajectory_by_patch(
         surface_points=surface_points,
         surface_normals=surface_normals,
         nozzle_points=nozzle_points,
         spray_directions=spray_directions,
+        nozzle_frames=nozzle_frames,
         face_indices=face_indices,
         patch_ids=patch_ids,
     )
+
+    # 7a. Transform CAD-local samples and nozzle frames into World XYZ.
+    # The source mesh and CAD-local arrays remain unchanged.
+    world_surface_points = _transform_points(ordered['surface_points'], product_transform_matrix)
+    world_surface_normals = _transform_vectors(ordered['surface_normals'], product_transform_matrix)
+    world_nozzle_points = _transform_points(ordered['nozzle_points'], product_transform_matrix)
+    world_spray_directions = _transform_vectors(ordered['spray_directions'], product_transform_matrix)
+    world_nozzle_frames = np.einsum('ij,njk->nik', product_transform_matrix[:3, :3], ordered['nozzle_frames'])
 
     # 8. Calculate path metrics in both coordinate units and mm.
     path_metrics = _calculate_path_metrics(
