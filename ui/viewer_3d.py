@@ -591,10 +591,9 @@ class ProductViewer(QWidget):
         return {
             "world_frame": "WORLD_XYZ",
             "world_axis_definition": {
-                "origin": "CONVEYOR_PRODUCT_TRAVEL_START_POINT",
-                "X": "CONVEYOR_TRAVEL_DIRECTION / OPERATOR_RIGHT",
-                "Y": "OPERATOR_SIDE / TOWARD_VIEWER",
-                "-Y": "OPERATOR_VIEW_DIRECTION / INTO_WORKCELL",
+                "origin": "WORK_CELL_BOX_LONGITUDINAL_MIDPOINT_ON_CONVEYOR_CENTERLINE",
+                "X": "BOX_WIDTH_CENTERLINE / OPERATOR_RIGHT",
+                "Y": "CONVEYOR_TRAVEL_DIRECTION / INTO_WORKCELL",
                 "Z": "VERTICALLY_DOWN",
             },
             "hook_length_source_units": self.hook_length_source_units,
@@ -1294,17 +1293,19 @@ class ProductViewer(QWidget):
         """Display only the fixed World frame and work-cell box."""
         lx, ly, lz = np.asarray(self.workspace_dimensions, dtype=float)
 
-        # World origin = midpoint of the upper/front box edge.
+        # World origin is at the box's longitudinal midpoint on the
+        # conveyor centerline. The box is centered around Y=0.
         # +X = right, +Y = into the work cell, +Z = down.
+        half_ly = ly * 0.5
         corners = np.array([
-            [-lx * 0.5, 0.0, 0.0],
-            [ lx * 0.5, 0.0, 0.0],
-            [ lx * 0.5, ly, 0.0],
-            [-lx * 0.5, ly, 0.0],
-            [-lx * 0.5, 0.0, lz],
-            [ lx * 0.5, 0.0, lz],
-            [ lx * 0.5, ly, lz],
-            [-lx * 0.5, ly, lz],
+            [-lx * 0.5, -half_ly, 0.0],
+            [ lx * 0.5, -half_ly, 0.0],
+            [ lx * 0.5,  half_ly, 0.0],
+            [-lx * 0.5,  half_ly, 0.0],
+            [-lx * 0.5, -half_ly, lz],
+            [ lx * 0.5, -half_ly, lz],
+            [ lx * 0.5,  half_ly, lz],
+            [-lx * 0.5,  half_ly, lz],
         ], dtype=float)
 
         pairs = [
@@ -1362,7 +1363,7 @@ class ProductViewer(QWidget):
 
         self.plotter.add_point_labels(
             np.asarray([[0.0, 0.0, 0.0]]),
-            ["WORLD ORIGIN / CONVEYOR CENTERLINE (0, 0, 0)"],
+            ["WORLD ORIGIN / BOX Y-MIDPOINT (0, 0, 0)"],
             font_size=11,
             text_color="#FFFFFF",
             point_size=0,
@@ -1372,9 +1373,9 @@ class ProductViewer(QWidget):
 
         self.plotter.add_text(
             "WORLD FRAME\n"
-            "Origin: box centerline / conveyor start\n"
+            "Origin: box longitudinal midpoint / conveyor centerline\n"
             "X: right\n"
-            "Y: into work cell\n"
+            "Y: into work cell (+Y)\n"
             "Z: down",
             position="upper_left",
             font_size=11,
@@ -2158,7 +2159,8 @@ class ProductViewer(QWidget):
         # Operator is in front of the box at +Y and looks toward -Y.
         # Thus screen-right is +X and screen-down is +Z.
         lx, ly, lz = np.asarray(self.workspace_dimensions, dtype=float)
-        center = np.array([0.0, ly * 0.5, lz * 0.5], dtype=float)
+        # The box is centered at Y=0; its top-face centerline is Z=0.
+        center = np.array([0.0, 0.0, lz * 0.5], dtype=float)
         distance = max(float(np.linalg.norm(self.workspace_dimensions)), 100.0)
 
         camera_position = center + np.array(
