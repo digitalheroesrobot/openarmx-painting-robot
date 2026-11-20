@@ -771,10 +771,17 @@ class ProductViewer(QWidget):
 
         self.display_mode = "product"
         self._set_trajectory_controls_visible(False)
-        self.pose_control_panel.setVisible(True)
-        self.pose_manipulation_enabled = True
-        self.confirm_pose_button.setEnabled(True)
-        self.workspace_dimensions = np.maximum(np.asarray(self.current_mesh.extents, dtype=float) * 4.0, 100.0)
+
+        # Initial work-cell setup screen: only the World frame and box are
+        # shown. Product placement/orientation will be enabled in the next
+        # implementation step after the coordinate system is verified.
+        self.pose_control_panel.hide()
+        self.pose_manipulation_enabled = False
+        self.confirm_pose_button.setEnabled(False)
+        self.workspace_dimensions = np.maximum(
+            np.asarray(self.current_mesh.extents, dtype=float) * 4.0,
+            100.0,
+        )
         for field, value in zip(self.workspace_size_inputs, self.workspace_dimensions):
             field.setValue(float(value))
         # World origin is the conveyor travel start point. The CAD origin
@@ -1552,33 +1559,11 @@ class ProductViewer(QWidget):
         # DEFAULT PRODUCT MODE
         # -------------------------------------------------
         else:
-            polydata = self._to_polydata(self.current_mesh)
-
-            # Keep tessellation edges visible for geometric inspection.
-            # Smooth shading improves the surface appearance without hiding
-            # the triangle boundaries.
-            self._pose_actor = self.plotter.add_mesh(
-                polydata,
-                color="#4C8DAD",
-                show_edges=True,
-                edge_color="#182C38",
-                line_width=1,
-                smooth_shading=True,
-                specular=0.25,
-                specular_power=20,
-            )
-            # Default product presentation: rotate 180 degrees about local Z
-            # around the product bounding-box center. Keep source mesh vertices
-            # and CAD-face/triangle correspondence unchanged.
-            self._pose_actor.SetOrigin(*self.rotation_pivot.tolist())
-            self._pose_actor.SetOrientation(0.0, 0.0, 180.0)
-            # Restore the requested CAD-origin world position after creating
-            # a fresh actor; VTK's actor position is not the CAD-origin pose
-            # when rotation is performed about a nonzero product pivot.
-            desired_origin = np.asarray([field.value() for field in self.world_position_inputs], dtype=float)
-            self._set_cad_origin_world_position(desired_origin)
-            self._sync_world_position_inputs()
-            self._update_pose_readout()
+            # STEP 1: do not display the product yet.
+            # The only visible 3D objects are the fixed World frame and
+            # the work-cell box. This lets us verify the coordinate system
+            # independently before introducing CAD/product transforms.
+            self._pose_actor = None
 
         # -------------------------------------------------
         # COMMON VIEWER ELEMENTS
