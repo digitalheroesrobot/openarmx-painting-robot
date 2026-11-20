@@ -2278,6 +2278,10 @@ def _order_trajectory_with_planar_raster(
         f"{len(normal_partitioned_patch_ids)}"
     )
     print(
+        "SURFACE ADJACENCY AUTHORITY | "
+        f"{surface_boundary_splits['adjacency_authority']}"
+    )
+    print(
         "SURFACE BOUNDARY SPLITS | "
         f"{surface_boundary_splits['added_stroke_count']} additional strokes | "
         f"non-adjacent faces: "
