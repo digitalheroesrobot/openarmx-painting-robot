@@ -1171,6 +1171,31 @@ def _generate_planar_raster_for_patch(
 
 
 
+def _split_raster_lane_at_discontinuities(
+    lane_points: np.ndarray,
+    maximum_step_coordinate_units: float,
+) -> list[tuple[int, int]]:
+    """Return half-open sample ranges separated by oversized 3-D lane jumps."""
+    points = np.asarray(lane_points, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("Raster lane points must have shape (N, 3).")
+    maximum_step = float(maximum_step_coordinate_units)
+    if not math.isfinite(maximum_step) or maximum_step <= 0.0:
+        raise ValueError("Maximum raster step must be finite and positive.")
+    if len(points) == 0:
+        return []
+    if len(points) == 1:
+        return [(0, 1)]
+    step_lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    split_after = (np.flatnonzero(step_lengths > maximum_step) + 1).tolist()
+    boundaries = [0, *split_after, len(points)]
+    return [
+        (int(start), int(end))
+        for start, end in zip(boundaries[:-1], boundaries[1:])
+        if end > start
+    ]
+
+
 def _generate_surface_following_raster_for_patch(
     mesh: trimesh.Trimesh,
     face_indices: np.ndarray,
@@ -1446,38 +1471,76 @@ def _generate_surface_following_raster_for_patch(
 
             lane_points = np.asarray(lane_points, dtype=np.float64)
             lane_normals = np.asarray(lane_normals, dtype=np.float64)
-            # Smooth small facet-to-facet normal jumps while keeping the
-            # reconstructed surface points exactly on their source triangles.
-            if len(lane_normals) >= 3:
-                padded = np.pad(lane_normals, ((1, 1), (0, 0)), mode="edge")
-                lane_normals = (
-                    padded[:-2] + 2.0 * padded[1:-1] + padded[2:]
-                ) / 4.0
-                lane_normals /= np.maximum(
-                    np.linalg.norm(lane_normals, axis=1, keepdims=True),
-                    NORMAL_EPSILON,
-                )
+            lane_face_ids = np.asarray(lane_face_ids, dtype=np.int64)
 
-            lane_directions = -lane_normals
-            lane_nozzles = (
-                lane_points
-                + float(standoff_coordinate_units) * lane_normals
+            # A PCA projection can make distant 3-D surface regions overlap
+            # in 2-D. Never keep an oversized reconstructed 3-D jump inside
+            # one spray stroke: split it into separate strokes (spray OFF
+            # between them) while preserving every original surface sample.
+            maximum_step_coordinate_units = max(
+                3.0 * float(sample_spacing_coordinate_units),
+                2.0 * float(track_spacing_coordinate_units),
+                1e-9,
             )
-            out_surface.extend(lane_points)
-            out_normals.extend(lane_normals)
-            out_directions.extend(lane_directions)
-            out_nozzle.extend(lane_nozzles)
-            out_faces.extend(lane_face_ids)
-            out_segments.extend([segment_id] * len(lane_points))
-            segment_records.append({
-                "segment_id": int(segment_id),
-                "lane_index": int(lane_index),
-                "sample_count": int(len(lane_points)),
-                "length_coordinate_units": float(end - start),
-                "path_type": "curved_surface_raster",
-                "spray_enabled_connector": False,
-            })
-            segment_id += 1
+            lane_chunks = _split_raster_lane_at_discontinuities(
+                lane_points,
+                maximum_step_coordinate_units,
+            )
+            for chunk_index, (chunk_start, chunk_end) in enumerate(lane_chunks):
+                chunk_points = lane_points[chunk_start:chunk_end]
+                chunk_normals = lane_normals[chunk_start:chunk_end].copy()
+                chunk_face_ids = lane_face_ids[chunk_start:chunk_end]
+
+                # Smooth only within this continuous 3-D stroke. Do not blend
+                # nozzle orientation across a projection-discontinuity split.
+                if len(chunk_normals) >= 3:
+                    padded = np.pad(
+                        chunk_normals, ((1, 1), (0, 0)), mode="edge"
+                    )
+                    chunk_normals = (
+                        padded[:-2] + 2.0 * padded[1:-1] + padded[2:]
+                    ) / 4.0
+                    chunk_normals /= np.maximum(
+                        np.linalg.norm(
+                            chunk_normals, axis=1, keepdims=True
+                        ),
+                        NORMAL_EPSILON,
+                    )
+
+                chunk_directions = -chunk_normals
+                chunk_nozzles = (
+                    chunk_points
+                    + float(standoff_coordinate_units) * chunk_normals
+                )
+                out_surface.extend(chunk_points)
+                out_normals.extend(chunk_normals)
+                out_directions.extend(chunk_directions)
+                out_nozzle.extend(chunk_nozzles)
+                out_faces.extend(chunk_face_ids.tolist())
+                out_segments.extend([segment_id] * len(chunk_points))
+                segment_records.append({
+                    "segment_id": int(segment_id),
+                    "lane_index": int(lane_index),
+                    "projection_interval_index": int(
+                        len(segment_records)
+                    ),
+                    "sample_count": int(len(chunk_points)),
+                    "length_coordinate_units": float(
+                        np.sum(np.linalg.norm(
+                            np.diff(chunk_points, axis=0), axis=1
+                        ))
+                    ) if len(chunk_points) > 1 else 0.0,
+                    "path_type": "curved_surface_raster",
+                    "projection_discontinuity_split": bool(
+                        len(lane_chunks) > 1
+                    ),
+                    "split_chunk_index": int(chunk_index),
+                    "maximum_allowed_step_coordinate_units": float(
+                        maximum_step_coordinate_units
+                    ),
+                    "spray_enabled_connector": False,
+                })
+                segment_id += 1
 
     if not out_surface:
         return reject("no_intersecting_scanlines")
@@ -4422,6 +4485,34 @@ def run_stage3_numerical_tests() -> dict:
     )
 
     # --------------------------------------------------------
+    # Test 22E: Projected 2-D overlap cannot create a large 3-D spray stroke.
+    # --------------------------------------------------------
+    discontinuous_lane_test = np.asarray([
+        [0.0, 0.0, 0.0],
+        [10.0, 0.0, 0.0],
+        [20.0, 0.0, 0.0],
+        [300.0, 0.0, 0.0],
+        [310.0, 0.0, 0.0],
+        [320.0, 0.0, 0.0],
+        [330.0, 0.0, 0.0],
+    ], dtype=np.float64)
+    discontinuous_chunks = _split_raster_lane_at_discontinuities(
+        discontinuous_lane_test,
+        maximum_step_coordinate_units=30.0,
+    )
+    assert discontinuous_chunks == [(0, 3), (3, 7)]
+    for chunk_start, chunk_end in discontinuous_chunks:
+        if chunk_end - chunk_start > 1:
+            chunk_steps = np.linalg.norm(
+                np.diff(
+                    discontinuous_lane_test[chunk_start:chunk_end],
+                    axis=0,
+                ),
+                axis=1,
+            )
+            assert np.all(chunk_steps <= 30.0)
+
+    # --------------------------------------------------------
     # Test 22D: A small normal group is merged only when directionally safe.
     # --------------------------------------------------------
     merge_test_normals = np.asarray([
@@ -4722,6 +4813,7 @@ def run_stage3_numerical_tests() -> dict:
             "inter_segment_spray_off_travel_estimates": "PASS",
             "greedy_stroke_travel_ordering": "PASS",
             "exact_continuity_outlier_diagnostics": "PASS",
+            "curved_raster_projection_jump_splitting": "PASS",
         },
         "sample_count": int(sample_count),
         "unit_standoff_tests": unit_test_results,
