@@ -1241,11 +1241,17 @@ def _generate_surface_following_raster_for_patch(
 
     # Reject triangles that collapse in the PCA plane. A large number of
     # collapsed projections indicates a folded/near-edge-on patch.
+    projected_edge_a = (
+        projected_triangles[:, 1] - projected_triangles[:, 0]
+    )
+    projected_edge_b = (
+        projected_triangles[:, 2] - projected_triangles[:, 0]
+    )
+    # 2-D scalar cross product (determinant). Avoid np.cross on 2-D
+    # vectors, which raises in newer NumPy versions.
     projected_areas = np.abs(
-        np.cross(
-            projected_triangles[:, 1] - projected_triangles[:, 0],
-            projected_triangles[:, 2] - projected_triangles[:, 0],
-        )
+        projected_edge_a[:, 0] * projected_edge_b[:, 1]
+        - projected_edge_a[:, 1] * projected_edge_b[:, 0]
     )
     source_areas = np.linalg.norm(
         np.cross(
