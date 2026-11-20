@@ -35,8 +35,10 @@ PySide6, PyVista, PyVistaQt, Trimesh, NumPy and SciPy remain the application and
 
 ## Manual reference pose capture
 
-The manual pose viewer displays two coordinate frames: **World NED**, fixed at the chain-entry point (+X along the chain, +Y lateral, +Z down), and **Product CAD**, attached to the CAD origin and moving with the product. The hook rotation pivot is shown as a magenta point, not as a separate coordinate frame. The live readout reports the Product CAD origin in World NED coordinates and its roll-pitch-yaw. Drag the product actor to adjust its pose about the configured hook pivot. **CONFIRM & SAVE POSE** appends a reference pose to:
+The manual pose viewer uses a fixed **World XYZ** work-cell frame whose origin is the chain entry point: +X follows chain travel toward screen right, +Y points inward into the work area, and +Z points vertically downward. A configurable wireframe box and bottom-plane grid provide spatial context. Box dimensions are visualization bounds entered by the operator, not measured work-cell dimensions.
+
+The product frame is the STEP **CAD frame**. Its rotation pivot is always the STEP file's existing CAD origin (0, 0, 0); no hook pivot is requested or inferred. Drag the product to rotate it about that CAD origin. Set the CAD origin's world position with the World X/Y/Z fields. The live readout reports the CAD origin position in World XYZ and its roll-pitch-yaw. **CONFIRM & SAVE POSE** appends a reference pose to:
 
     results/<product>/stage1/reference_poses.json
 
-The saved record includes the World NED definition, hook pivot, Product CAD origin position, RPY, rotation matrix, homogeneous transform, source/display units, and UTC timestamp. This is an operator-defined reference pose, not a depth-camera measurement. Camera and robot frames will be added after their mounting and calibration transforms are known; unknown frames are not drawn at invented positions.
+The saved record includes the World XYZ definition, CAD-origin rotation pivot, CAD-origin world position, RPY, rotation matrix, homogeneous transform, configurable display-box dimensions, source/display units, and UTC timestamp. This is an operator-defined reference pose, not a depth-camera measurement. Camera and robot frames will be added after their mounting and calibration transforms are known; unknown frames are not drawn at invented positions.
