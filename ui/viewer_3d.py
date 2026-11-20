@@ -855,12 +855,11 @@ class ProductViewer(QWidget):
         mesh, face_mask, max_beams=48, radius_scale=0.055
     ):
         """
-        Build broad, soft white light columns instead of pointed cones.
+        Build broad, soft white light columns that project outward only.
 
-        Planar patches produce a broad column perpendicular to the face.
-        Cylindrical patches produce a coaxial column extending in both
-        directions along the cylinder axis, making a hole's location and
-        direction easier to read.
+        Planar patches project along their outward-facing surface normal.
+        Cylindrical patches project in one axial direction only, chosen
+        away from the product's overall geometric center.
         """
         face_mask = np.asarray(face_mask, dtype=bool)
         if len(face_mask) != len(mesh.faces):
@@ -872,9 +871,10 @@ class ProductViewer(QWidget):
         if face_indices.size == 0:
             return pv.PolyData()
 
+        vertices = np.asarray(mesh.vertices, dtype=float)
         faces = np.asarray(mesh.faces, dtype=np.int64)[face_indices]
         vertex_ids = np.unique(faces)
-        points = np.asarray(mesh.vertices, dtype=float)[vertex_ids]
+        points = vertices[vertex_ids]
         normals = np.asarray(mesh.face_normals, dtype=float)[face_indices]
         normals = normals[
             np.all(np.isfinite(normals), axis=1)
@@ -883,11 +883,13 @@ class ProductViewer(QWidget):
         if len(points) < 3 or len(normals) == 0:
             return pv.PolyData()
 
-        dimensions = np.ptp(np.asarray(mesh.vertices, dtype=float), axis=0)
+        dimensions = np.ptp(vertices, axis=0)
         model_diagonal = float(np.linalg.norm(dimensions))
         if not np.isfinite(model_diagonal) or model_diagonal <= 0.0:
             return pv.PolyData()
 
+        bounds = np.asarray(mesh.bounds, dtype=float)
+        model_center = (bounds[0] + bounds[1]) * 0.5
         center = points.mean(axis=0)
         centered = points - center
         point_covariance = centered.T @ centered / max(len(centered), 1)
@@ -911,7 +913,8 @@ class ProductViewer(QWidget):
             and normal_coherence < 0.80
         )
 
-        beam_length = model_diagonal * 0.36
+        # Half the previous beam length: 18% of the product diagonal.
+        beam_length = model_diagonal * 0.18
         cylinders = []
 
         if cylindrical:
@@ -919,27 +922,39 @@ class ProductViewer(QWidget):
             axis = normal_eigenvectors[:, 0]
             axis /= max(float(np.linalg.norm(axis)), 1e-12)
 
+            # Keep only the axial ray pointing away from the product center.
+            axial_offset = float(np.dot(center - model_center, axis))
+            if axial_offset < -1e-9:
+                axis = -axis
+            elif abs(axial_offset) <= 1e-9:
+                # Stable tie-break for a cylinder centered on the product.
+                dominant = int(np.argmax(np.abs(axis)))
+                if axis[dominant] < 0.0:
+                    axis = -axis
+
             axial = centered @ axis
             radial_vectors = centered - axial[:, None] * axis[None, :]
             radial_distances = np.linalg.norm(radial_vectors, axis=1)
             radial_radius = float(np.median(radial_distances))
 
-            # The translucent column sits inside the cylindrical wall and
-            # spans both axial directions from the selected patch center.
             radius = max(
                 radial_radius * 0.62,
                 model_diagonal * float(radius_scale) * 0.35,
             )
-            beam_center = center
             beam_direction = axis
+            beam_center = center + axis * (beam_length * 0.5)
         else:
-            # A planar patch: project a broad column perpendicular to it.
+            # A planar patch: orient its normal away from the product center.
             normal = normal_mean
             normal_length = float(np.linalg.norm(normal))
             if normal_length <= 1e-12:
                 normal = point_eigenvectors[:, 0]
-            else:
-                normal = normal / normal_length
+                normal_length = float(np.linalg.norm(normal))
+            normal = normal / max(normal_length, 1e-12)
+
+            outward_hint = center - model_center
+            if float(np.dot(normal, outward_hint)) < 0.0:
+                normal = -normal
 
             tangent_spans = np.sqrt(
                 np.maximum(point_eigenvalues[1:], 0.0)
@@ -952,8 +967,7 @@ class ProductViewer(QWidget):
             beam_direction = normal
             beam_center = center + normal * (beam_length * 0.5)
 
-        # Two translucent concentric cylindrical shells create a soft,
-        # broad-edged white column. No pointed cone is used.
+        # Two translucent concentric shells share the same outward direction.
         for scale in (1.0, 0.78):
             cylinders.append(
                 pv.Cylinder(
