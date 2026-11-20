@@ -1371,22 +1371,78 @@ class MainWindow(QMainWindow):
     
     def _initialize_patch_inspection(self):
         """
-        Default painting configuration:
-        - Every patch is included for painting.
-        - Every patch checkbox is checked.
-        - Every patch decision is Paint.
-        - Initial progress is 100%.
+        Assign every Stage 1 surface patch to exactly one initial
+        Stage 2 decision.
+
+        PLANAR / CURVED -> Paint (included, inspection complete)
+        UNCERTAIN / INVALID / unknown -> Requires Inspection
+
+        No patch is silently omitted. Stage 1 patch IDs must cover
+        every mesh triangle and match the Stage 1 patch report.
         """
 
-        patch_ids = self._get_stage1_patch_ids()
+        if self.current_stage1_result is None:
+            raise RuntimeError(
+                "Stage 1 results are required to initialize patch decisions."
+            )
 
-        self.patch_inspection = {
-            patch_id: {
-                "inspected": True,
-                "decision": DECISION_PAINT,
-            }
-            for patch_id in patch_ids
+        labels = np.asarray(
+            self.current_stage1_result.get("patch_labels", [])
+        )
+
+        if (
+            labels.ndim != 1
+            or labels.size == 0
+            or len(labels) != len(self.current_mesh.faces)
+        ):
+            raise ValueError(
+                "Stage 1 patch labels do not cover the complete mesh."
+            )
+
+        if np.any(labels < 0):
+            raise ValueError(
+                "Some mesh triangles have no Surface Patch ID. "
+                "Complete surface coverage cannot be guaranteed."
+            )
+
+        report_patches = (
+            self.current_stage1_result.get("report", {})
+            .get("surface_segmentation", {})
+            .get("patches", [])
+        )
+
+        geometry_by_id = {
+            int(patch["patch_id"]): str(
+                patch.get("classification", "unknown")
+            ).strip().lower()
+            for patch in report_patches
         }
+
+        mesh_patch_ids = {
+            int(value) for value in np.unique(labels)
+        }
+
+        if not geometry_by_id or mesh_patch_ids != set(geometry_by_id):
+            raise ValueError(
+                "Stage 1 patch report and mesh patch labels do not match. "
+                "Every product surface must belong to a reported patch."
+            )
+
+        self.patch_inspection = {}
+
+        for patch_id in sorted(mesh_patch_ids):
+            geometry_class = geometry_by_id[patch_id]
+
+            if geometry_class in ("planar", "curved"):
+                self.patch_inspection[patch_id] = {
+                    "inspected": True,
+                    "decision": DECISION_PAINT,
+                }
+            else:
+                self.patch_inspection[patch_id] = {
+                    "inspected": False,
+                    "decision": DECISION_REQUIRES_INSPECTION,
+                }
 
         self.selected_patch_id = None
 
@@ -1786,17 +1842,6 @@ class MainWindow(QMainWindow):
 
         for patch_id, state in self.patch_inspection.items():
 
-            # ------------------------------------------------
-            # CRITICAL RULE:
-            #
-            # An unchecked patch has NOT been manually
-            # reviewed. Therefore its automatic Stage 2
-            # classification must remain unchanged.
-            # ------------------------------------------------
-
-            if not bool(state.get("inspected", False)):
-                continue
-
             decision = state.get("decision")
 
             if decision not in DECISION_TO_FACE_STATUS:
@@ -1807,20 +1852,26 @@ class MainWindow(QMainWindow):
             if not np.any(mask):
                 continue
 
-            manual_status = DECISION_TO_FACE_STATUS[
-                decision
-            ]
+            # Keep every uncertain / invalid patch explicitly in
+            # the REVIEW REQUIRED surface category until an operator
+            # resolves it. This also maps Stage 2's provisional
+            # INVALID patch result into the review bucket; it does
+            # not make that surface paintable.
+            if decision == DECISION_REQUIRES_INSPECTION:
+                face_labels[mask] = FACE_REQUIRES_INSPECTION
+                continue
 
-            # Preserve faces that Stage 2 itself marked INVALID.
-            #
-            # Manual operator decisions should not magically turn
-            # geometrically invalid faces into valid spray faces.
-            invalid_mask = (
-                automatic_labels == FACE_INVALID
-            )
+            # An unchecked patch has not been manually reviewed.
+            if not bool(state.get("inspected", False)):
+                continue
 
+            manual_status = DECISION_TO_FACE_STATUS[decision]
+
+            # Preserve genuinely invalid Stage 2 triangles. A manual
+            # Paint decision must not turn degenerate / invalid mesh
+            # geometry into a valid spray surface.
+            invalid_mask = automatic_labels == FACE_INVALID
             apply_mask = mask & ~invalid_mask
-
             face_labels[apply_mask] = manual_status
 
         self.current_stage2_result[
