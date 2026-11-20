@@ -431,7 +431,7 @@ class ProductViewer(QWidget):
         """)
         playback_row.addWidget(self.trajectory_coverage_bar)
 
-        self.trajectory_coverage_label = QLabel("0.0% | 0.000 / 0.000 m²")
+        self.trajectory_coverage_label = QLabel("0.0% | 0.000 / 0.000 area")
         self.trajectory_coverage_label.setMinimumWidth(250)
         self.trajectory_coverage_label.setToolTip(
             "Estimated geometric area reached by the spray envelope. "
@@ -1756,7 +1756,7 @@ class ProductViewer(QWidget):
             if hasattr(self, "trajectory_coverage_bar"):
                 self.trajectory_coverage_bar.setValue(0)
             if hasattr(self, "trajectory_coverage_label"):
-                self.trajectory_coverage_label.setText("0.0% | 0.000 / 0.000 m²")
+                self.trajectory_coverage_label.setText("0.0% | 0.000 / 0.000 area")
             self._restore_trajectory_surface_base_colors()
             if hasattr(self, "trajectory_playback_slider"):
                 self.trajectory_playback_slider.blockSignals(True)
