@@ -891,9 +891,11 @@ class ProductViewer(QWidget):
 
         self.display_mode = "patches"
         self._set_trajectory_controls_visible(False)
-        self.pose_control_panel.hide()
 
-        self._render_product(reset_camera=True)
+        # Keep the reference-pose controls available after Stage 1.
+        # The current CAD actor matrix and camera are preserved by the
+        # non-resetting render path; Stage 1 must not reset the user's RPY.
+        self._render_product(reset_camera=False)
 
     def set_selected_patch(self, patch_id):
         """
@@ -1642,7 +1644,7 @@ class ProductViewer(QWidget):
                 self.patch_labels.astype(float)
             )
 
-            self.plotter.add_mesh(
+            self._pose_actor = self.plotter.add_mesh(
                 polydata,
                 scalars="Surface Patch",
                 cmap="turbo",
@@ -1659,6 +1661,23 @@ class ProductViewer(QWidget):
                 },
             )
 
+            # Reapply the exact STEP CAD actor pose captured before
+            # clearing the renderer. This keeps the displayed patch map
+            # aligned with the user's confirmed Roll/Pitch/Yaw pose.
+            if previous_product_pose is not None:
+                from vtkmodules.vtkCommonTransforms import vtkTransform
+                patch_transform = vtkTransform()
+                patch_transform.SetMatrix(
+                    self._vtk_matrix_from_numpy(previous_product_pose)
+                )
+                self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
+                self._pose_actor.SetOrientation(
+                    *patch_transform.GetOrientation()
+                )
+                self._pose_actor.SetPosition(
+                    *previous_product_pose[:3, 3].tolist()
+                )
+
             # -------------------------------------------------
             # SELECTED PATCH HIGHLIGHT
             # No text overlay.
@@ -1674,7 +1693,7 @@ class ProductViewer(QWidget):
                 )
 
                 if selected_polydata.n_cells > 0:
-                    self.plotter.add_mesh(
+                    selected_actor = self.plotter.add_mesh(
                         selected_polydata,
                         color="#FFD740",
                         show_edges=True,
@@ -1683,6 +1702,14 @@ class ProductViewer(QWidget):
                         smooth_shading=False,
                         lighting=False,
                     )
+                    if previous_product_pose is not None:
+                        selected_actor.SetOrigin(0.0, 0.0, 0.0)
+                        selected_actor.SetOrientation(
+                            *patch_transform.GetOrientation()
+                        )
+                        selected_actor.SetPosition(
+                            *previous_product_pose[:3, 3].tolist()
+                        )
 
         # -------------------------------------------------
         # TRAJECTORY MODE
