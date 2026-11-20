@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from core.stl_loader import load_stl
 from core.step_loader import load_step, convert_step_report_units
 from core.result_manager import ResultManager
+from core.geometry_analyzer import detect_hole_candidates
 
 from stages.stage1_geometry import execute_stage1
 from stages.stage2_surface_identification import execute_stage2
@@ -3339,6 +3340,24 @@ class MainWindow(QMainWindow):
         self.active_stage = STAGE_GEOMETRY_INSPECTION
 
         self.viewer.show_product(mesh)
+
+        # STEP is translated into canonical millimetres by Open CASCADE.
+        # Detect internal cylindrical surfaces immediately after import so
+        # hole locations and CAD-origin distances are visible before Stage 1.
+        hole_candidates = []
+        if is_step:
+            try:
+                hole_candidates = detect_hole_candidates(
+                    mesh,
+                    coordinate_unit="mm",
+                )
+            except Exception as exc:
+                traceback.print_exc()
+                self.status_bar.showMessage(
+                    f"STEP loaded, but preliminary hole detection failed: {exc}",
+                    12000,
+                )
+        self.viewer.set_hole_candidates(hole_candidates)
 
         self.part_name_label.setText(
             self.current_stl_path.name
