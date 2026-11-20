@@ -2314,6 +2314,17 @@ def _detect_holes_from_step_brep(mesh: trimesh.Trimesh) -> list[dict]:
 
     # Group face records sharing the same analytic cylinder. Direction sign
     # is irrelevant; axis-line distance is measured perpendicular to axis.
+    orientation_counts = {
+        "REVERSED": sum(v["orientation"] == "REVERSED" for v in cylinders),
+        "FORWARD_OR_OTHER": sum(v["orientation"] != "REVERSED" for v in cylinders),
+    }
+    mesh.metadata["hole_detection_diagnostics"] = {
+        "method": "EXACT_STEP_BREP_CYLINDERS",
+        "step_face_count": len(face_records),
+        "cylindrical_face_count": len(cylinders),
+        "cylinder_orientation_counts": orientation_counts,
+    }
+
     groups = []
     for item in cylinders:
         assigned = False
@@ -2383,6 +2394,18 @@ def _detect_holes_from_step_brep(mesh: trimesh.Trimesh) -> list[dict]:
             "classification": "STEP_BREP_INTERNAL_CYLINDER_CANDIDATE",
             "note": "Exact STEP analytic cylinder; through/blind status requires boundary and solid-topology analysis.",
         })
+    mesh.metadata["hole_detection_diagnostics"].update({
+        "coaxial_cylinder_groups": len(groups),
+        "internal_cylinder_candidate_groups": len(candidates),
+        "candidate_face_groups": [item["brep_face_ids"] for item in candidates],
+    })
+    print(
+        "[STEP HOLE DETECTION] "
+        f"cylindrical_faces={len(cylinders)}, "
+        f"reversed={orientation_counts['REVERSED']}, "
+        f"forward_or_other={orientation_counts['FORWARD_OR_OTHER']}, "
+        f"coaxial_groups={len(groups)}, candidates={len(candidates)}"
+    )
     return candidates
 
 
