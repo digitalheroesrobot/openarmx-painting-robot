@@ -801,7 +801,7 @@ class ProductViewer(QWidget):
         )
 
     @staticmethod
-    def _build_patch_light_beams(mesh, face_mask, max_beams=48):
+    def _build_patch_light_beams(\n        mesh, face_mask, max_beams=48, radius_scale=0.105\n    ):
         """
         Build outward-expanding light cones from a selected patch.
 
@@ -853,7 +853,7 @@ class ProductViewer(QWidget):
 
         # Long enough to visibly project from small holes and recesses.
         beam_length = model_diagonal * 0.28
-        beam_radius = beam_length * 0.105
+        beam_radius = beam_length * float(radius_scale)
 
         beams = []
 
@@ -1848,6 +1848,7 @@ class ProductViewer(QWidget):
                             self.current_mesh,
                             selected_mask,
                             max_beams=48,
+                            radius_scale=0.045,
                         )
                         if core_beams.n_cells > 0:
                             light_actors.append(
@@ -1860,7 +1861,6 @@ class ProductViewer(QWidget):
                                     ambient=1.0,
                                     diffuse=0.0,
                                     specular=0.0,
-                                    scale=0.72,
                                 )
                             )
 
