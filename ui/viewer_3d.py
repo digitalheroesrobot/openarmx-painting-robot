@@ -359,13 +359,26 @@ class ProductViewer(QWidget):
             field.setSuffix(f"° {label}")
             field.setFixedWidth(112)
             field.setToolTip(
-                f"Absolute {label.lower()} angle in the World XYZ frame; "
-                "each arrow step changes the value by 0.01 degree."
+                f"Absolute {label.lower()} angle in the World XYZ frame. "
+                "The arrow increment is controlled by ANGLE STEP."
             )
             field.valueChanged.connect(self._apply_rpy_inputs)
             field.editingFinished.connect(self._apply_rpy_inputs)
             layout.addWidget(field)
             self.rpy_inputs.append(field)
+
+        layout.addWidget(QLabel("ANGLE STEP (°):"))
+        self.rpy_step_input = QDoubleSpinBox()
+        self.rpy_step_input.setRange(0.01, 360.00)
+        self.rpy_step_input.setDecimals(2)
+        self.rpy_step_input.setSingleStep(0.01)
+        self.rpy_step_input.setValue(0.01)
+        self.rpy_step_input.setFixedWidth(100)
+        self.rpy_step_input.setToolTip(
+            "Sets the change applied by each Roll, Pitch and Yaw arrow click."
+        )
+        self.rpy_step_input.valueChanged.connect(self._on_rpy_step_changed)
+        layout.addWidget(self.rpy_step_input)
         layout.addStretch(1)
 
         # Hidden compatibility controls used by the existing pose workflow.
@@ -397,6 +410,12 @@ class ProductViewer(QWidget):
         ):
             widget.hide()
         return panel
+
+    def _on_rpy_step_changed(self, value):
+        """Apply the selected angular increment to all three RPY selectors."""
+        step = max(0.01, float(value))
+        for field in self.rpy_inputs:
+            field.setSingleStep(step)
 
     def _apply_rpy_inputs(self):
         """Set absolute World-frame ZYX Roll/Pitch/Yaw orientation."""
