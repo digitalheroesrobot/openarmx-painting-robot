@@ -4163,6 +4163,13 @@ class MainWindow(QMainWindow):
         parameters = trajectory.get("parameters", {})
         sprayer = parameters.get("sprayer_profile", {})
         sprayer_name = sprayer.get("name", "UNSPECIFIED")
+        nozzle_frame = parameters.get("nozzle_frame_convention", {})
+        nozzle_frame_status = nozzle_frame.get("status", "NOT AVAILABLE")
+        pose_matrix = parameters.get("product_transform_4x4")
+        product_pose_status = (
+            "CAD TO WORLD CAPTURED"
+            if pose_matrix is not None else "IDENTITY / NOT RECORDED"
+        )
         spray_width = parameters.get("spray_width_at_standoff_mm")
         nominal_track_spacing = parameters.get(
             "nominal_track_spacing_from_overlap_mm"
@@ -4182,9 +4189,12 @@ class MainWindow(QMainWindow):
             f"SPRAYER: {sprayer_name}\n"
             f"SURFACE SAMPLES: {sample_count:,}\n"
             f"TRAJECTORY SEGMENTS: {segment_count:,}\n"
+            f"PRODUCT POSE: {product_pose_status}\n"
+            f"NOZZLE FRAME: {nozzle_frame_status}\n"
             f"SPRAY WIDTH AT STANDOFF: {spray_width_text}\n"
             f"NOMINAL TRACK SPACING: {track_spacing_text}\n"
-            "NOTE: TRACK SPACING IS CALCULATED, NOT YET USED TO CREATE RASTER PASSES."
+            "NOTE: NOZZLE FRAME IS GEOMETRIC / PROVISIONAL, NOT TCP-CALIBRATED.\n"
+            "TRACK SPACING IS CALCULATED, NOT YET USED TO CREATE RASTER PASSES."
         )
 
         self.analysis_summary.setStyleSheet(
