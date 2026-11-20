@@ -366,7 +366,14 @@ class SprayerSettingsDialog(QDialog):
                     "This is a mechanical dimension. The default is illustrative; "
                     "replace it with the actual sprayer drawing."
                 )
-            elif key in ("travel_speed_mm_s", "fluid_pressure_bar", "fluid_flow_ml_min"):
+            elif key in (
+                "gun_body_length_mm",
+                "gun_body_diameter_mm",
+                "tcp_to_nozzle_tip_mm",
+                "travel_speed_mm_s",
+                "fluid_pressure_bar",
+                "fluid_flow_ml_min",
+            ):
                 spin.setToolTip(
                     "A value of 0 means not specified. Enter the value from "
                     "the sprayer data sheet or validated paint process."
@@ -482,8 +489,17 @@ class SprayerSettingsDialog(QDialog):
             key: float(spin.value())
             for key, spin in self.fields.items()
         })
+        previous_nozzle_length = float(
+            self.current_profile.get("nozzle_length_mm", 25.0)
+        )
         profile["nozzle_length_is_estimate"] = bool(
             self.current_profile.get("nozzle_length_is_estimate", False)
+            and math.isclose(
+                profile["nozzle_length_mm"],
+                previous_nozzle_length,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
         )
         return profile
 
