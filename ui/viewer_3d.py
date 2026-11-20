@@ -855,17 +855,15 @@ class ProductViewer(QWidget):
         mesh, face_mask, max_beams=48, radius_scale=0.055
     ):
         """
-        Build broad, soft white light columns that project outward only.
+        Build a small white visual halo around the selected patch.
 
-        Planar patches project along their outward-facing surface normal.
-        Cylindrical patches project in one axial direction only, chosen
-        away from the product's overall geometric center.
+        Ordinary patches use a thin, nearly surface-following white shell.
+        Cylindrical/hole patches keep a short one-way axial light column so
+        the opening direction remains easy to identify.
         """
         face_mask = np.asarray(face_mask, dtype=bool)
         if len(face_mask) != len(mesh.faces):
-            raise ValueError(
-                "Selected patch mask does not match mesh triangles."
-            )
+            raise ValueError("Selected patch mask does not match mesh triangles.")
 
         face_indices = np.flatnonzero(face_mask)
         if face_indices.size == 0:
@@ -893,19 +891,13 @@ class ProductViewer(QWidget):
         center = points.mean(axis=0)
         centered = points - center
         point_covariance = centered.T @ centered / max(len(centered), 1)
-        point_eigenvalues, point_eigenvectors = np.linalg.eigh(
-            point_covariance
-        )
+        point_eigenvalues, point_eigenvectors = np.linalg.eigh(point_covariance)
 
-        unit_normals = normals / np.linalg.norm(
-            normals, axis=1
-        )[:, None]
+        unit_normals = normals / np.linalg.norm(normals, axis=1)[:, None]
         normal_mean = unit_normals.mean(axis=0)
         normal_coherence = float(np.linalg.norm(normal_mean))
         normal_covariance = unit_normals.T @ unit_normals / len(unit_normals)
-        normal_eigenvalues, normal_eigenvectors = np.linalg.eigh(
-            normal_covariance
-        )
+        normal_eigenvalues, normal_eigenvectors = np.linalg.eigh(normal_covariance)
 
         cylindrical = (
             float(normal_eigenvalues[1]) > 0.12
@@ -913,21 +905,15 @@ class ProductViewer(QWidget):
             and normal_coherence < 0.80
         )
 
-        # Half the previous beam length: 18% of the product diagonal.
-        beam_length = model_diagonal * 0.18
-        cylinders = []
-
         if cylindrical:
-            # The smallest-eigenvalue normal direction is the cylinder axis.
+            # Hole/cylindrical patch: retain a short one-way axial indicator.
             axis = normal_eigenvectors[:, 0]
             axis /= max(float(np.linalg.norm(axis)), 1e-12)
 
-            # Keep only the axial ray pointing away from the product center.
             axial_offset = float(np.dot(center - model_center, axis))
             if axial_offset < -1e-9:
                 axis = -axis
             elif abs(axial_offset) <= 1e-9:
-                # Stable tie-break for a cylinder centered on the product.
                 dominant = int(np.argmax(np.abs(axis)))
                 if axis[dominant] < 0.0:
                     axis = -axis
@@ -937,50 +923,80 @@ class ProductViewer(QWidget):
             radial_distances = np.linalg.norm(radial_vectors, axis=1)
             radial_radius = float(np.median(radial_distances))
 
+            beam_length = model_diagonal * 0.18
             radius = max(
                 radial_radius * 0.62,
                 model_diagonal * float(radius_scale) * 0.35,
             )
-            beam_direction = axis
             beam_center = center + axis * (beam_length * 0.5)
-        else:
-            # A planar patch: orient its normal away from the product center.
-            normal = normal_mean
-            normal_length = float(np.linalg.norm(normal))
-            if normal_length <= 1e-12:
-                normal = point_eigenvectors[:, 0]
-                normal_length = float(np.linalg.norm(normal))
-            normal = normal / max(normal_length, 1e-12)
 
-            outward_hint = center - model_center
-            if float(np.dot(normal, outward_hint)) < 0.0:
-                normal = -normal
-
-            tangent_spans = np.sqrt(
-                np.maximum(point_eigenvalues[1:], 0.0)
-            )
-            narrow_span = float(np.min(tangent_spans))
-            radius = max(
-                narrow_span * 0.34,
-                model_diagonal * float(radius_scale),
-            )
-            beam_direction = normal
-            beam_center = center + normal * (beam_length * 0.5)
-
-        # Two translucent concentric shells share the same outward direction.
-        for scale in (1.0, 0.78):
-            cylinders.append(
+            cylinders = [
                 pv.Cylinder(
                     center=beam_center,
-                    direction=beam_direction,
+                    direction=axis,
                     radius=radius * scale,
                     height=beam_length,
                     resolution=40,
                     capping=False,
                 )
-            )
+                for scale in (1.0, 0.78)
+            ]
+            return pv.MultiBlock(cylinders).combine()
 
-        return pv.MultiBlock(cylinders).combine()
+        # Ordinary planar/curved patches: create a small, constant-distance
+        # white shell around the selected surface instead of a long beam.
+        #
+        # The shell is built from the selected patch triangles themselves,
+        # so its shape follows the actual patch boundary.
+        halo_distance = model_diagonal * 0.012
+        halo_distance = max(halo_distance, 0.35)
+
+        selected_faces = vertices[faces]
+        face_normals = np.asarray(mesh.face_normals, dtype=float)[face_indices]
+        valid = (
+            np.all(np.isfinite(face_normals), axis=1)
+            & (np.linalg.norm(face_normals, axis=1) > 1e-12)
+        )
+        if not np.any(valid):
+            return pv.PolyData()
+
+        selected_faces = selected_faces[valid]
+        face_normals = face_normals[valid]
+        face_normals /= np.linalg.norm(face_normals, axis=1)[:, None]
+
+        offset_triangles = (
+            selected_faces
+            + face_normals[:, None, :] * halo_distance
+        )
+
+        shell_points = offset_triangles.reshape(-1, 3)
+        shell_faces = np.arange(len(shell_points), dtype=np.int64).reshape(-1, 3)
+        shell = pv.PolyData(
+            shell_points,
+            np.hstack([
+                np.full((len(shell_faces), 1), 3, dtype=np.int64),
+                shell_faces,
+            ]).ravel(),
+        )
+
+        # A second, slightly weaker layer softens the edge without creating
+        # a directional beam or visually filling the product interior.
+        inner_offset = halo_distance * 0.55
+        soft_triangles = (
+            selected_faces
+            + face_normals[:, None, :] * inner_offset
+        )
+        soft_points = soft_triangles.reshape(-1, 3)
+        soft_faces = np.arange(len(soft_points), dtype=np.int64).reshape(-1, 3)
+        soft_shell = pv.PolyData(
+            soft_points,
+            np.hstack([
+                np.full((len(soft_faces), 1), 3, dtype=np.int64),
+                soft_faces,
+            ]).ravel(),
+        )
+
+        return pv.MultiBlock([shell, soft_shell]).combine()
 
     # =========================================================
     # EMPTY SCENE
