@@ -1196,6 +1196,75 @@ def _split_raster_lane_at_discontinuities(
     ]
 
 
+def _smooth_normals_with_deviation_limit(
+    normals: np.ndarray,
+    max_deviation_deg: float = 8.0,
+    iterations: int = 6,
+) -> tuple[np.ndarray, float]:
+    """
+    Smooth sample-to-sample normal noise while staying inside a cone around
+    every original source normal. Surface positions are never modified.
+    """
+    original = np.asarray(normals, dtype=np.float64)
+    if original.ndim != 2 or original.shape[1] != 3:
+        raise ValueError("Normals must have shape (N, 3).")
+    if not np.all(np.isfinite(original)):
+        raise ValueError("Normals must contain only finite values.")
+    if not math.isfinite(float(max_deviation_deg)) or not 0.0 <= max_deviation_deg <= 45.0:
+        raise ValueError("Normal smoothing deviation must be between 0 and 45 degrees.")
+    if int(iterations) < 0 or int(iterations) > 50:
+        raise ValueError("Normal smoothing iterations must be between 0 and 50.")
+    if len(original) == 0:
+        return original.copy(), 0.0
+
+    lengths = np.linalg.norm(original, axis=1)
+    if np.any(lengths <= NORMAL_EPSILON):
+        raise ValueError("Cannot smooth a zero-length surface normal.")
+    reference = original / lengths[:, None]
+    smoothed = reference.copy()
+    max_angle_rad = math.radians(float(max_deviation_deg))
+
+    for _ in range(int(iterations)):
+        if len(smoothed) < 3:
+            break
+        padded = np.pad(smoothed, ((1, 1), (0, 0)), mode="edge")
+        candidate = (
+            0.25 * padded[:-2]
+            + 0.50 * padded[1:-1]
+            + 0.25 * padded[2:]
+        )
+        candidate_lengths = np.linalg.norm(candidate, axis=1)
+        candidate /= np.maximum(candidate_lengths[:, None], NORMAL_EPSILON)
+
+        dots = np.clip(np.einsum("ij,ij->i", reference, candidate), -1.0, 1.0)
+        angles = np.arccos(dots)
+        limited = candidate.copy()
+        for index, angle in enumerate(angles):
+            if float(angle) <= max_angle_rad or float(angle) <= 1e-12:
+                continue
+            fraction = max_angle_rad / float(angle)
+            sin_angle = math.sin(float(angle))
+            if abs(sin_angle) <= 1e-10:
+                limited[index] = reference[index]
+                continue
+            limited[index] = (
+                math.sin((1.0 - fraction) * float(angle)) / sin_angle
+            ) * reference[index] + (
+                math.sin(fraction * float(angle)) / sin_angle
+            ) * candidate[index]
+        limited /= np.maximum(
+            np.linalg.norm(limited, axis=1, keepdims=True),
+            NORMAL_EPSILON,
+        )
+        smoothed = limited
+
+    final_dots = np.clip(
+        np.einsum("ij,ij->i", reference, smoothed), -1.0, 1.0
+    )
+    final_deviation = np.degrees(np.arccos(final_dots))
+    return smoothed, float(np.max(final_deviation)) if len(final_deviation) else 0.0
+
+
 def _generate_surface_following_raster_for_patch(
     mesh: trimesh.Trimesh,
     face_indices: np.ndarray,
@@ -1407,6 +1476,7 @@ def _generate_surface_following_raster_for_patch(
     out_segments = []
     segment_records = []
     segment_id = 0
+    maximum_normal_smoothing_deviation_deg = 0.0
 
     for lane_index, offset in enumerate(lane_offsets):
         intervals = []
@@ -1495,21 +1565,20 @@ def _generate_surface_following_raster_for_patch(
                 chunk_normals = lane_normals[chunk_start:chunk_end].copy()
                 chunk_face_ids = lane_face_ids[chunk_start:chunk_end]
 
-                # Smooth only within this continuous 3-D stroke. Do not blend
-                # nozzle orientation across a projection-discontinuity split.
-                if len(chunk_normals) >= 3:
-                    padded = np.pad(
-                        chunk_normals, ((1, 1), (0, 0)), mode="edge"
+                # Smooth normal noise only inside this continuous 3-D
+                # stroke. Each result remains within 8 degrees of its source
+                # face normal; positions and physical standoff stay unchanged.
+                chunk_normals, chunk_normal_deviation_deg = (
+                    _smooth_normals_with_deviation_limit(
+                        chunk_normals,
+                        max_deviation_deg=8.0,
+                        iterations=6,
                     )
-                    chunk_normals = (
-                        padded[:-2] + 2.0 * padded[1:-1] + padded[2:]
-                    ) / 4.0
-                    chunk_normals /= np.maximum(
-                        np.linalg.norm(
-                            chunk_normals, axis=1, keepdims=True
-                        ),
-                        NORMAL_EPSILON,
-                    )
+                )
+                maximum_normal_smoothing_deviation_deg = max(
+                    maximum_normal_smoothing_deviation_deg,
+                    chunk_normal_deviation_deg,
+                )
 
                 chunk_directions = -chunk_normals
                 chunk_nozzles = (
@@ -1549,6 +1618,9 @@ def _generate_surface_following_raster_for_patch(
                     "maximum_allowed_step_coordinate_units": float(
                         maximum_step_coordinate_units
                     ),
+                    "max_normal_smoothing_deviation_deg": float(
+                        chunk_normal_deviation_deg
+                    ),
                     "spray_enabled_connector": False,
                 })
                 segment_id += 1
@@ -1577,6 +1649,9 @@ def _generate_surface_following_raster_for_patch(
         "projection_is_approximate": True,
         "adaptive_scanline_offsets_used": bool(adaptive_scanline_offsets_used),
         "adaptive_scanline_count": int(len(lane_offsets)) if adaptive_scanline_offsets_used else 0,
+        "max_normal_smoothing_deviation_deg": float(
+            maximum_normal_smoothing_deviation_deg
+        ),
     }
 
 
@@ -1806,6 +1881,10 @@ def _generate_partitioned_surface_raster_for_patch(
     combined["segments"] = segment_records
     combined["lane_count"] = int(len(segment_records))
     combined["normal_cluster_count"] = int(len(parts))
+    combined["max_normal_smoothing_deviation_deg"] = float(max(
+        part.get("max_normal_smoothing_deviation_deg", 0.0)
+        for part in parts
+    ))
     combined["normal_cluster_max_angle_deg"] = angle
     combined["normal_cluster_merged_singleton_count"] = int(
         merged_singleton_count
@@ -1848,6 +1927,7 @@ def _order_trajectory_with_planar_raster(
     fallback_patch_ids = []
     fallback_reason_counts = {}
     fallback_patch_reasons = []
+    curved_normal_smoothing_deviation_max_deg = 0.0
 
     for patch_id in np.unique(patch_ids):
         indices = np.flatnonzero(patch_ids == patch_id)
@@ -1909,6 +1989,10 @@ def _order_trajectory_with_planar_raster(
 
             if curved is not None:
                 patch_result = curved
+                curved_normal_smoothing_deviation_max_deg = max(
+                    curved_normal_smoothing_deviation_max_deg,
+                    float(curved.get("max_normal_smoothing_deviation_deg", 0.0)),
+                )
                 curved_rasterized_patch_ids.append(int(patch_id))
                 if used_normal_partition:
                     normal_partitioned_patch_ids.append(int(patch_id))
@@ -1969,6 +2053,9 @@ def _order_trajectory_with_planar_raster(
     )
     result["segments"] = segment_metadata
     result["travel_ordering"] = travel_ordering
+    result["max_normal_smoothing_deviation_deg"] = float(
+        curved_normal_smoothing_deviation_max_deg
+    )
     result["rasterized_planar_patch_ids"] = rasterized_patch_ids
     result["rasterized_curved_patch_ids"] = curved_rasterized_patch_ids
     result["normal_partitioned_patch_ids"] = normal_partitioned_patch_ids
@@ -2911,7 +2998,10 @@ def _inspect_generated_trajectory(
 
     coverage_status = "PASS" if face_coverage_percent >= 95.0 else "WARN"
     continuity_status = "PASS" if jump_outliers == 0 else "WARN"
-    orientation_status = "PASS" if max_angle <= 60.0 else "WARN"
+    orientation_warning_threshold_deg = 30.0
+    orientation_status = (
+        "PASS" if max_angle <= orientation_warning_threshold_deg else "WARN"
+    )
     spray_status = "PASS" if segment_count > 0 else "FAIL"
 
     report = {
@@ -2940,7 +3030,11 @@ def _inspect_generated_trajectory(
             "maximum_change_deg": max_angle,
             "p95_change_deg": p95_angle,
             "changes_over_30_deg": orientation_over_30,
-            "warning_threshold_deg": 60.0,
+            "warning_threshold_deg": orientation_warning_threshold_deg,
+            "max_normal_smoothing_deviation_deg": float(
+                trajectory.get("max_normal_smoothing_deviation_deg", 0.0)
+            ),
+            "surface_normal_deviation_limit_deg": 8.0,
         },
         "spray_control": {
             "status": spray_status,
@@ -2990,7 +3084,10 @@ def _inspect_generated_trajectory(
     print(
         f"[{orientation_status}] Nozzle orientation: max "
         f"{max_angle:.2f} deg | P95 {p95_angle:.2f} deg | "
-        f"changes >30 deg: {orientation_over_30}"
+        f"changes >30 deg: {orientation_over_30} | "
+        f"max smoothing deviation: "
+        f"{report['orientation']['max_normal_smoothing_deviation_deg']:.2f} deg "
+        f"(limit 8.00 deg)"
     )
     print(
         f"[{spray_status}] Spray control: ON samples {spray_on_samples:,} | "
@@ -4524,6 +4621,42 @@ def run_stage3_numerical_tests() -> dict:
             assert np.all(chunk_steps <= 30.0)
 
     # --------------------------------------------------------
+    # Test 22F: Normal smoothing reduces zig-zag while preserving a strict
+    # angular bound from every original source normal.
+    # --------------------------------------------------------
+    zigzag_angles = np.radians(np.asarray(
+        [0.0, 40.0, 0.0, 40.0, 0.0, 40.0, 0.0],
+        dtype=np.float64,
+    ))
+    zigzag_normals = np.column_stack((
+        np.cos(zigzag_angles),
+        np.sin(zigzag_angles),
+        np.zeros(len(zigzag_angles)),
+    ))
+    smoothed_zigzag, max_zigzag_deviation = (
+        _smooth_normals_with_deviation_limit(
+            zigzag_normals,
+            max_deviation_deg=8.0,
+            iterations=6,
+        )
+    )
+    raw_zigzag_steps = np.degrees(np.arccos(np.clip(
+        np.einsum("ij,ij->i", zigzag_normals[:-1], zigzag_normals[1:]),
+        -1.0,
+        1.0,
+    )))
+    smooth_zigzag_steps = np.degrees(np.arccos(np.clip(
+        np.einsum("ij,ij->i", smoothed_zigzag[:-1], smoothed_zigzag[1:]),
+        -1.0,
+        1.0,
+    )))
+    assert float(np.max(smooth_zigzag_steps)) < float(np.max(raw_zigzag_steps))
+    assert max_zigzag_deviation <= 8.0 + 1e-6
+    assert np.allclose(
+        np.linalg.norm(smoothed_zigzag, axis=1), 1.0, atol=1e-6
+    )
+
+    # --------------------------------------------------------
     # Test 22D: A small normal group is merged only when directionally safe.
     # --------------------------------------------------------
     merge_test_normals = np.asarray([
@@ -4825,6 +4958,7 @@ def run_stage3_numerical_tests() -> dict:
             "greedy_stroke_travel_ordering": "PASS",
             "exact_continuity_outlier_diagnostics": "PASS",
             "curved_raster_projection_jump_splitting": "PASS",
+            "curved_normal_smoothing_with_8deg_deviation_limit": "PASS",
         },
         "sample_count": int(sample_count),
         "unit_standoff_tests": unit_test_results,
