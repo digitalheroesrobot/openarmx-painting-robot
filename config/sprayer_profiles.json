@@ -14,7 +14,7 @@
       "fan_reference_distance_mm": 200,
       "overlap_percent": 50,
       "sampling_spacing_mm": 20,
-      "travel_speed_mm_s": 0,
+      "travel_speed_mm_s": 150,
       "fan_air_pressure_bar": 1.7,
       "atomizing_air_pressure_bar": 1.7,
       "fluid_pressure_bar": 0,
@@ -24,7 +24,9 @@
       "gun_body_length_mm": 0,
       "gun_body_diameter_mm": 0,
       "tcp_to_nozzle_tip_mm": 0,
-      "fan_thickness_at_reference_mm": 0
+      "fan_thickness_at_reference_mm": 0,
+      "min_travel_speed_mm_s": 40,
+      "max_travel_acceleration_mm_s2": 500
     }
   ],
   "active_profile": "default sprayer"
