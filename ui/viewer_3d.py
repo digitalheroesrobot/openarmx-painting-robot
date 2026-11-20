@@ -309,30 +309,38 @@ class ProductViewer(QWidget):
             }
 
             QCheckBox {
-                color: #D6E0E2;
-                spacing: 6px;
+                color: #D8E5ED;
+                spacing: 5px;
                 padding: 3px;
             }
 
             QCheckBox::indicator {
                 width: 14px;
                 height: 14px;
-                border-radius: 3px;
             }
 
             QCheckBox::indicator:unchecked {
-                background-color: #26343A;
-                border: 1px solid #71858A;
+                background-color: #14232E;
+                border: 1px solid #557887;
+                border-radius: 2px;
             }
 
             QCheckBox::indicator:checked {
-                background-color: #789B91;
-                border: 1px solid #9AB8AA;
+                background-color: #00E676;
+                border: 1px solid #00E676;
+                border-radius: 2px;
             }
 
-            QCheckBox::indicator:checked:hover {
-                background-color: #86A99E;
-                border: 1px solid #B2C9BF;
+            QCheckBox#TrajectoryPlanarSurfaceCheckbox::indicator:checked {
+                background-color: #78AFA5;
+                border: 1px solid #78AFA5;
+                border-radius: 2px;
+            }
+
+            QCheckBox#TrajectoryCurvedSurfaceCheckbox::indicator:checked {
+                background-color: #C69A62;
+                border: 1px solid #C69A62;
+                border-radius: 2px;
             }
         """)
 
@@ -356,6 +364,10 @@ class ProductViewer(QWidget):
 
         for key, label_text in checkbox_items:
             checkbox = QCheckBox(label_text)
+            if key == "planar":
+                checkbox.setObjectName("TrajectoryPlanarSurfaceCheckbox")
+            elif key == "curved":
+                checkbox.setObjectName("TrajectoryCurvedSurfaceCheckbox")
             checkbox.setChecked(self.trajectory_visibility[key])
 
             checkbox.toggled.connect(
@@ -2117,8 +2129,9 @@ class ProductViewer(QWidget):
             if polydata.n_cells > 0:
                 if self.face_surface_types is not None:
                     type_colors = {
-                        "planar": (45, 212, 191),
-                        "curved": (245, 158, 11),
+                        # Muted colors intentionally match the two surface filters.
+                        "planar": (120, 175, 165),   # #78AFA5
+                        "curved": (198, 154, 98),    # #C69A62
                         "unknown": (167, 139, 250),
                     }
                     face_rgb = np.asarray([
