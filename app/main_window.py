@@ -9,6 +9,7 @@ from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtCore import QThread, Signal, Qt, QSize
 from PySide6.QtWidgets import (
     QMainWindow,
+    QDialog,
     QWidget,
     QFrame,
     QLabel,
@@ -2441,7 +2442,7 @@ class MainWindow(QMainWindow):
             current_profile=self.sprayer_profile,
             parent=self,
         )
-        if dialog.exec() != dialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         if dialog.selected_profile is None:
