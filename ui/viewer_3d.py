@@ -138,7 +138,8 @@ class ProductViewer(QWidget):
         self.display_control_panel = self._build_trajectory_controls()
         layout.addWidget(self.display_control_panel)
         self.pose_control_panel = self._build_pose_controls()
-        self.pose_control_panel.setMaximumHeight(48)
+        self.pose_control_panel.setMinimumHeight(72)
+        self.pose_control_panel.setMaximumHeight(76)
         layout.addWidget(self.pose_control_panel)
         layout.addWidget(self.plotter.interactor, 1)
 
@@ -352,66 +353,79 @@ class ProductViewer(QWidget):
     # =========================================================
 
     def _build_pose_controls(self):
-        """Satellite-control style attitude HUD; only RPY is operator-visible."""
+        """Compact three-axis attitude control strip."""
         panel = QFrame()
         panel.setObjectName("AttitudeHUD")
         panel.setStyleSheet("""
             QFrame#AttitudeHUD {
-                background-color: #071522;
+                background-color: #081521;
                 border: 1px solid #1B7184;
                 border-top: 2px solid #27D9E8;
-                border-radius: 4px;
+                border-radius: 5px;
             }
-            QLabel { color: #75B9C7; background: transparent; border: none; font-family: 'Rajdhani'; font-size: 10px; font-weight: 700; letter-spacing: 2px; }
-            QLabel#HudTitle { color: #35E4F0; font-size: 11px; letter-spacing: 3px; }
-            QLabel#HudUnit { color: #4E8794; font-size: 9px; letter-spacing: 1px; }
+            QLabel {
+                color: #8AAEBB;
+                background: transparent;
+                border: none;
+                font-family: 'DejaVu Sans';
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 2px;
+            }
             QDoubleSpinBox {
-                color: #D9FCFF; background-color: #0B2533;
-                border: 1px solid #246477; border-radius: 3px;
-                padding: 4px 7px; min-height: 25px;
-                font-family: 'JetBrains Mono'; font-size: 12px; font-weight: 600;
+                color: #E4FCFF;
+                background-color: #0B2635;
+                border: 1px solid #28596A;
+                border-radius: 4px;
+                padding: 3px 8px;
+                min-height: 34px;
+                font-family: 'DejaVu Sans Mono';
+                font-size: 16px;
+                font-weight: 700;
                 selection-background-color: #126A78;
             }
-            QDoubleSpinBox:focus { border: 1px solid #45F0F5; background-color: #103444; }
+            QDoubleSpinBox:focus {
+                border: 1px solid #45F0F5;
+                background-color: #103747;
+            }
+            QDoubleSpinBox#RollInput { border-bottom: 3px solid #FF626E; }
+            QDoubleSpinBox#PitchInput { border-bottom: 3px solid #45D98B; }
+            QDoubleSpinBox#YawInput { border-bottom: 3px solid #48BFFF; }
         """)
         layout = QHBoxLayout(panel)
-        layout.setContentsMargins(14, 5, 14, 5)
-        layout.setSpacing(10)
-        title = QLabel("ATTITUDE  /  ORIENTATION")
-        title.setObjectName("HudTitle")
-        layout.addWidget(title)
-        separator = QFrame(panel)
-        separator.setFixedWidth(1)
-        separator.setFixedHeight(25)
-        separator.setStyleSheet("background-color: #24596A; border: none;")
-        layout.addWidget(separator)
+        layout.setContentsMargins(12, 5, 12, 5)
+        layout.setSpacing(12)
+
         self.rpy_inputs = []
-        for axis_name, label in (("ROLL", "X-AXIS"), ("PITCH", "Y-AXIS"), ("YAW", "Z-AXIS")):
+        for axis_name, axis_label, object_name in (
+            ("ROLL", "X AXIS", "RollInput"),
+            ("PITCH", "Y AXIS", "PitchInput"),
+            ("YAW", "Z AXIS", "YawInput"),
+        ):
             group = QVBoxLayout()
             group.setContentsMargins(0, 0, 0, 0)
-            group.setSpacing(1)
-            caption = QLabel(f"{axis_name}  /  {label}")
+            group.setSpacing(2)
+            caption = QLabel(f"{axis_name}   /   {axis_label}")
             field = QDoubleSpinBox(panel)
+            field.setObjectName(object_name)
             field.setRange(-3600.0, 3600.0)
             field.setDecimals(2)
             field.setSingleStep(0.5)
-            field.setSuffix(" °")
-            field.setFixedWidth(150)
+            field.setSuffix("°")
+            field.setMinimumWidth(170)
             field.setAlignment(Qt.AlignmentFlag.AlignCenter)
             field.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
-            field.setToolTip(f"Set {axis_name.lower()} attitude angle.")
+            field.setToolTip(f"Set {axis_name.lower()} angle in degrees.")
             field.valueChanged.connect(self._apply_rpy_inputs)
             field.editingFinished.connect(self._apply_rpy_inputs)
             group.addWidget(caption)
             group.addWidget(field)
-            layout.addLayout(group)
+            layout.addLayout(group, 1)
             self.rpy_inputs.append(field)
-        layout.addStretch(1)
-        self.hud_status = QLabel("MANUAL ATTITUDE CONTROL  •  CAD ORIGIN PIVOT")
-        self.hud_status.setObjectName("HudUnit")
-        layout.addWidget(self.hud_status)
-        # Keep legacy controls as hidden compatibility objects; they are not
-        # inserted into the visible HUD or any other visible layout.
+
+        # Legacy controls remain available to existing workflow code but are
+        # intentionally not shown in the operator-facing attitude strip.
+        self.hud_status = QLabel("")
         self.world_position_inputs = [QDoubleSpinBox(panel) for _ in range(3)]
         self.workspace_size_inputs = [QDoubleSpinBox(panel) for _ in range(3)]
         self.apply_position_button = QPushButton(panel)
@@ -431,9 +445,16 @@ class ProductViewer(QWidget):
         self.confirm_pose_button.clicked.connect(self._confirm_reference_pose)
         self.apply_rpy_button.clicked.connect(self._apply_rpy_inputs)
         self.reset_pose_button.clicked.connect(self._reset_reference_pose)
-        for widget in (*self.world_position_inputs, *self.workspace_size_inputs, self.apply_position_button, self.apply_workspace_button, self.hook_length_input, self.pick_hook_point_button, self.pose_status_label, self.confirm_pose_button, self.apply_rpy_button, self.reset_pose_button):
+        for widget in (
+            *self.world_position_inputs, *self.workspace_size_inputs,
+            self.apply_position_button, self.apply_workspace_button,
+            self.hook_length_input, self.pick_hook_point_button,
+            self.pose_status_label, self.confirm_pose_button,
+            self.apply_rpy_button, self.reset_pose_button, self.hud_status,
+        ):
             widget.hide()
         return panel
+
     def _apply_rpy_inputs(self):
         """Set absolute World-frame ZYX Roll/Pitch/Yaw orientation."""
         if self._pose_actor is None:
@@ -598,89 +619,72 @@ class ProductViewer(QWidget):
             return False
 
     def _install_actor_interaction(self):
-        """Install high-priority VTK observers for reliable CAD picking."""
+        """Prepare VTK pickers and route mouse events through the Qt widget."""
         if self._pose_actor is None or self.display_mode != "product":
             return
         try:
             from vtkmodules.vtkRenderingCore import vtkCellPicker, vtkPropPicker
-            interactor = self.plotter.iren.interactor
+
             self._create_rotation_gizmo()
             self._rotation_pick_pickers = []
             for ring_actor in self._rotation_ring_actors:
                 picker = vtkCellPicker()
-                picker.SetTolerance(0.025)
+                picker.SetTolerance(0.015)
                 picker.PickFromListOn()
                 picker.AddPickList(ring_actor)
                 self._rotation_pick_pickers.append(picker)
+
             self._product_picker = vtkPropPicker()
             self._product_picker.PickFromListOn()
             self._product_picker.AddPickList(self._pose_actor)
-            # Remove old observers before installing exactly one set.
-            for tag in self._rotation_observer_tags:
-                try:
-                    interactor.RemoveObserver(tag)
-                except Exception:
-                    pass
-            self._rotation_observer_tags = []
+
+            # QVTKRenderWindowInteractor is the actual Qt event receiver.
+            # The previous implementation registered VTK observers but did
+            # not install this class's eventFilter on the Qt widget.
+            widget = self.plotter.interactor
+            if not self._qt_mouse_filter_installed:
+                widget.installEventFilter(self)
+                self._qt_mouse_filter_installed = True
+            widget.setMouseTracking(True)
+
             self._rotation_drag_axis = None
             self._rotation_drag_start_vector = None
             self._rotation_drag_start_matrix = None
-            self._rotation_observer_tags.append(interactor.AddObserver(
-                "LeftButtonPressEvent", self._on_vtk_left_press, 1.0
-            ))
-            self._rotation_observer_tags.append(interactor.AddObserver(
-                "MouseMoveEvent", self._on_vtk_mouse_move, 1.0
-            ))
-            self._rotation_observer_tags.append(interactor.AddObserver(
-                "LeftButtonReleaseEvent", self._on_vtk_left_release, 1.0
-            ))
             self._update_rotation_gizmo_transform()
             self._update_pose_readout()
             self.plotter.render()
         except Exception as exc:
-            self.pose_status_label.setText(f"Rotation manipulator unavailable: {exc}")
+            message = f"{type(exc).__name__}: {exc}"
+            self.pose_status_label.setText(
+                f"Rotation controls unavailable: {message}"
+            )
             if hasattr(self, "hud_status"):
-                self.hud_status.setText("MANIPULATOR ERROR  /  SEE APPLICATION LOG")
-            self.confirm_pose_button.setEnabled(False)
+                self.hud_status.setText(f"MANIPULATOR ERROR: {message[:90]}")
+                self.hud_status.show()
+            print(f"[ProductViewer] actor interaction initialization failed: {message}")
 
-    def _on_vtk_left_press(self, caller, event_name):
-        """Pick rings/product before the camera style; return 1 to consume hits."""
-        if self._pose_actor is None or self.display_mode != "product":
-            return 0
-        x, y = self.plotter.iren.interactor.GetEventPosition()
-        for axis_index, picker in enumerate(self._rotation_pick_pickers):
-            if picker.Pick(x, y, 0, self.plotter.renderer) and self._product_selected:
-                start = self._screen_vector_from_cad_origin(x, y, axis_index)
-                if start is not None:
-                    self._rotation_drag_axis = axis_index
-                    self._rotation_drag_start_vector = start
-                    self._rotation_drag_start_matrix = self._actor_matrix_array().copy()
-                    return 1
-        hit_product = bool(
-            self._product_picker is not None
-            and self._product_picker.Pick(x, y, 0, self.plotter.renderer)
+    def _qt_event_to_vtk_position(self, watched, event):
+        """Convert Qt logical mouse coordinates to VTK display coordinates."""
+        if hasattr(event, "position"):
+            position = event.position()
+            px, py = float(position.x()), float(position.y())
+        else:
+            position = event.pos()
+            px, py = float(position.x()), float(position.y())
+
+        widget_width = max(int(watched.width()), 1)
+        widget_height = max(int(watched.height()), 1)
+        render_window = self.plotter.iren.interactor.GetRenderWindow()
+        vtk_width, vtk_height = render_window.GetSize()
+        scale_x = float(vtk_width) / widget_width if vtk_width else 1.0
+        scale_y = float(vtk_height) / widget_height if vtk_height else 1.0
+        x = int(round(px * scale_x))
+        y = int(round((widget_height - py) * scale_y)) - 1
+        return (
+            max(0, min(x, max(vtk_width - 1, 0))),
+            max(0, min(y, max(vtk_height - 1, 0))),
         )
-        self._set_product_selected(hit_product)
-        return 1 if hit_product else 0
 
-    def _on_vtk_mouse_move(self, caller, event_name):
-        if self._rotation_drag_axis is None:
-            return 0
-        x, y = self.plotter.iren.interactor.GetEventPosition()
-        self._apply_rotation_drag(x, y)
-        return 1
-
-    def _on_vtk_left_release(self, caller, event_name):
-        if self._rotation_drag_axis is None:
-            return 0
-        self._rotation_drag_axis = None
-        self._rotation_drag_start_vector = None
-        self._rotation_drag_start_matrix = None
-        self._update_pose_readout()
-        self.pose_status_label.setText(
-            "ROTATION COMPLETE  |  Camera orbit and zoom are available."
-        )
-        return 1
     def _apply_rotation_drag(self, display_x, display_y):
         """Apply one mouse-move sample to the active local-axis rotation."""
         if self._rotation_drag_axis is None:
@@ -1776,18 +1780,8 @@ class ProductViewer(QWidget):
             except Exception:
                 previous_camera = None
 
-        for tag in self._rotation_observer_tags:
-            try:
-                self.plotter.iren.interactor.RemoveObserver(tag)
-            except Exception:
-                pass
         self._rotation_observer_tags = []
-        if self._selection_observer_tag is not None:
-            try:
-                self.plotter.interactor.RemoveObserver(self._selection_observer_tag)
-            except Exception:
-                pass
-            self._selection_observer_tag = None
+        self._selection_observer_tag = None
         self._rotation_drag_axis = None
         self._rotation_ring_actors = []
         self._attitude_text_actor = None
