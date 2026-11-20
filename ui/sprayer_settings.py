@@ -118,7 +118,6 @@ class SprayPatternPreview(QWidget):
         width = self.width()
         height = self.height()
         cx = width * 0.50
-        top = 58.0
         tip_y = 118.0
         bottom_y = height - 105.0
 
@@ -137,8 +136,6 @@ class SprayPatternPreview(QWidget):
 
         painter.setPen(QPen(QColor("#B7CAD5"), 2))
         painter.setBrush(QColor("#344B5A"))
-        body = painter.boundingRect
-        del body
         painter.drawRoundedRect(
             int(cx - 18), int(nozzle_top - 44), 36, int(visual_nozzle_length + 44),
             7, 7
@@ -231,6 +228,11 @@ class SprayerSettingsDialog(QDialog):
         self._loading = False
         self._build_ui()
         self._populate_profiles()
+        active_index = self.profile_selector.findText(
+            str(self.current_profile.get("name", "default sprayer"))
+        )
+        if active_index >= 0:
+            self.profile_selector.setCurrentIndex(active_index)
         self._load_profile(self.current_profile)
 
     def _build_ui(self):
@@ -384,6 +386,7 @@ class SprayerSettingsDialog(QDialog):
         self._loading = True
         data = deepcopy(DEFAULT_SPRAYER_PROFILE)
         data.update(deepcopy(profile))
+        self.current_profile = deepcopy(data)
         self.name_edit.setText(str(data.get("name", "default sprayer")))
         self.manufacturer_edit.setText(str(data.get("manufacturer", "")))
         self.model_edit.setText(str(data.get("model", "")))
@@ -470,9 +473,9 @@ class SprayerSettingsDialog(QDialog):
             self._populate_profiles()
             self.profile_selector.setCurrentText(profile["name"])
             self.name_edit.setText(profile["name"])
-            QMessageBox.information(
-                self, "Sprayer Profile", f"Saved profile: {profile['name']}"
-            )
+            self.current_profile = deepcopy(profile)
+            self.selected_profile = deepcopy(profile)
+            self.accept()
         except Exception as exc:
             QMessageBox.warning(self, "Sprayer Profile", str(exc))
 
