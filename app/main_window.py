@@ -2890,7 +2890,7 @@ class MainWindow(QMainWindow):
             data={
                 "schema_version": 1,
                 "product_file": self.current_stl_path.name,
-                "world_frame": "WORLD_NED",
+                "world_frame": "WORLD_XYZ",
                 "pose_count": len(records),
                 "poses": records,
             },
