@@ -1046,7 +1046,6 @@ def _generate_planar_raster_for_patch(
             lane_records.append({
                 "segment_id": int(segment_id),
                 "lane_index": int(lane_index),
-                "patch_id": int(np.unique(mesh_face_patch_ids_placeholder)[0]) if False else None,
                 "sample_count": int(len(segment_points)),
                 "length_coordinate_units": float(distance),
                 "spray_enabled_connector": False,
@@ -1079,6 +1078,7 @@ def _generate_planar_raster_for_patch(
 
 def _order_trajectory_with_planar_raster(
     mesh: trimesh.Trimesh,
+    face_normals: np.ndarray,
     surface_points: np.ndarray,
     surface_normals: np.ndarray,
     nozzle_points: np.ndarray,
@@ -1109,7 +1109,7 @@ def _order_trajectory_with_planar_raster(
         raster = _generate_planar_raster_for_patch(
             mesh=mesh,
             face_indices=patch_faces,
-            normals=np.asarray(mesh.face_normals, dtype=np.float64),
+            normals=np.asarray(face_normals, dtype=np.float64),
             standoff_coordinate_units=standoff_coordinate_units,
             sample_spacing_coordinate_units=sampling_spacing_coordinate_units,
             track_spacing_coordinate_units=track_spacing_coordinate_units,
@@ -1748,6 +1748,7 @@ def generate_spray_trajectory(
     if path_track_spacing_units > 0.0:
         ordered = _order_trajectory_with_planar_raster(
             mesh=mesh,
+            face_normals=normals,
             surface_points=surface_points,
             surface_normals=surface_normals,
             nozzle_points=nozzle_points,
