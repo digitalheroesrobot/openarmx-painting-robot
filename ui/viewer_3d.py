@@ -1258,9 +1258,11 @@ class ProductViewer(QWidget):
 
     def _add_world_workspace(self):
         lx, ly, lz = self.workspace_dimensions
+        # The operator stands on +Y and looks toward -Y, so the workcell
+        # extends from the conveyor-start boundary Y=0 into negative Y.
         corners = np.array([
-            [0,0,0], [lx,0,0], [lx,ly,0], [0,ly,0],
-            [0,0,lz], [lx,0,lz], [lx,ly,lz], [0,ly,lz],
+            [0,0,0], [lx,0,0], [lx,-ly,0], [0,-ly,0],
+            [0,0,lz], [lx,0,lz], [lx,-ly,lz], [0,-ly,lz],
         ], dtype=float)
         pairs = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
         cells = []
@@ -1274,8 +1276,8 @@ class ProductViewer(QWidget):
         spacing = max(min(lx, ly) / 10.0, 1.0)
         points, lines = [], []
         for x in np.arange(0.0, lx + spacing * 0.5, spacing):
-            i = len(points); points.extend([[x,0.0,lz],[x,ly,lz]]); lines.extend([2,i,i+1])
-        for y in np.arange(0.0, ly + spacing * 0.5, spacing):
+            i = len(points); points.extend([[x,0.0,lz],[x,-ly,lz]]); lines.extend([2,i,i+1])
+        for y in np.arange(-ly, spacing * 0.5, spacing):
             i = len(points); points.extend([[0.0,y,lz],[lx,y,lz]]); lines.extend([2,i,i+1])
         if points:
             grid = pv.PolyData(np.asarray(points, dtype=float))
@@ -2106,12 +2108,14 @@ class ProductViewer(QWidget):
     def _set_standard_camera(self):
         # Frame the complete World XYZ box rather than only the CAD mesh.
         # Positive World Z points downward, so camera-up is negative Z.
-        center = self.workspace_dimensions * 0.5
+        lx, ly, lz = self.workspace_dimensions
+        center = np.array([lx * 0.5, -ly * 0.5, lz * 0.5], dtype=float)
         distance = max(float(np.linalg.norm(self.workspace_dimensions)), 100.0)
-        # Operator is on the +Y side and looks toward -Y. Camera is placed
-        # on the operator side, slightly above the work area (+Z is down).
+        # Operator is on +Y and looks into the cell along -Y. Camera-up is
+        # -Z, so positive World Z is visually downward. Keeping camera X
+        # aligned with the workspace center makes screen-right equal +X.
         camera_position = center + np.array(
-            [-0.35 * distance, 2.2 * distance, -1.25 * distance]
+            [0.0, 2.2 * distance, -1.0 * distance]
         )
         self.plotter.camera_position = (
             tuple(camera_position.tolist()),
