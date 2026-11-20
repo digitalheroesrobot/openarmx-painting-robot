@@ -1544,6 +1544,9 @@ class ProductViewer(QWidget):
             return
 
         previous_camera = None
+        previous_product_pose = None
+        if not reset_camera and self._pose_actor is not None:
+            previous_product_pose = self._actor_matrix_array().copy()
 
         if not reset_camera:
             try:
@@ -1720,6 +1723,12 @@ class ProductViewer(QWidget):
             self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
             self._pose_actor.SetPosition(0.0, 0.0, 0.0)
             self._pose_actor.SetOrientation(0.0, 0.0, 0.0)
+            if previous_product_pose is not None:
+                from vtkmodules.vtkCommonTransforms import vtkTransform
+                pose_transform = vtkTransform()
+                pose_transform.SetMatrix(self._vtk_matrix_from_numpy(previous_product_pose))
+                self._pose_actor.SetOrientation(*pose_transform.GetOrientation())
+                self._pose_actor.SetPosition(*previous_product_pose[:3, 3].tolist())
 
         # -------------------------------------------------
         # COMMON VIEWER ELEMENTS
