@@ -801,7 +801,9 @@ class ProductViewer(QWidget):
         )
 
     @staticmethod
-    def _build_patch_light_beams(\n        mesh, face_mask, max_beams=48, radius_scale=0.105\n    ):
+    def _build_patch_light_beams(
+        mesh, face_mask, max_beams=48, radius_scale=0.105
+    ):
         """
         Build outward-expanding light cones from a selected patch.
 
