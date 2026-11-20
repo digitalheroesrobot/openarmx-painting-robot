@@ -2387,9 +2387,13 @@ class ProductViewer(QWidget):
         sheet_length = cache["standoff_units"]
         sheet_half_width = max(cache["footprint_width_units"] * 0.5, 1e-6)
         if cache["pattern_type"] == "round_cone":
+            # PyVista's cone direction points from its base toward its apex.
+            # The nozzle is local Z=0 and the target surface is local Z=+L:
+            # therefore the apex must point back toward -Z (at the nozzle),
+            # while the wide circular base lies at +Z (on the target surface).
             sheet_mesh = pv.Cone(
                 center=(0.0, 0.0, sheet_length * 0.5),
-                direction=(0.0, 0.0, 1.0),
+                direction=(0.0, 0.0, -1.0),
                 height=sheet_length,
                 radius=sheet_half_width,
                 resolution=48,
