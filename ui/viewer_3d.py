@@ -412,10 +412,72 @@ class ProductViewer(QWidget):
         self.confirm_pose_button.clicked.connect(self._confirm_reference_pose)
         layout.addWidget(self.confirm_pose_button)
 
+        # ROS-style local CAD rotation controls. These controls rotate the
+        # product only; the camera and World reference geometry are untouched.
+        layout.addWidget(QLabel("LOCAL CAD ROTATION Δ°:"))
+        self.local_rotation_inputs = []
+        for axis in "XYZ":
+            field = QDoubleSpinBox()
+            field.setRange(-3600.0, 3600.0)
+            field.setDecimals(2)
+            field.setSingleStep(5.0)
+            field.setSuffix(f"° {axis}")
+            field.setFixedWidth(78)
+            field.setToolTip(f"Incremental rotation about the product-local CAD {axis} axis.")
+            layout.addWidget(field)
+            self.local_rotation_inputs.append(field)
+
+        self.apply_local_rotation_button = QPushButton("APPLY ROTATION")
+        self.apply_local_rotation_button.clicked.connect(self._apply_local_rotation)
+        layout.addWidget(self.apply_local_rotation_button)
+
         self.reset_pose_button = QPushButton("RESET")
         self.reset_pose_button.clicked.connect(self._reset_reference_pose)
         layout.addWidget(self.reset_pose_button)
         return panel
+
+    def _apply_local_rotation(self):
+        """Apply incremental rotations about the STEP CAD local X/Y/Z axes."""
+        if self._pose_actor is None:
+            return
+        angles = np.radians(np.asarray(
+            [field.value() for field in self.local_rotation_inputs], dtype=float
+        ))
+        if not np.all(np.isfinite(angles)):
+            self.pose_status_label.setText("Invalid local rotation angles.")
+            return
+
+        # Intrinsic/local-axis composition: R_new = R_current * Rx * Ry * Rz.
+        rx, ry, rz = angles
+        cx, sx = math.cos(rx), math.sin(rx)
+        cy, sy = math.cos(ry), math.sin(ry)
+        cz, sz = math.cos(rz), math.sin(rz)
+        rot_x = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]], dtype=float)
+        rot_y = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]], dtype=float)
+        rot_z = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]], dtype=float)
+
+        actor_matrix = self._actor_matrix_array()
+        current_rotation = actor_matrix[:3, :3]
+        updated_rotation = current_rotation @ rot_x @ rot_y @ rot_z
+        updated_matrix = np.eye(4, dtype=float)
+        updated_matrix[:3, :3] = updated_rotation
+        updated_matrix[:3, 3] = actor_matrix[:3, 3]
+
+        from vtkmodules.vtkCommonTransforms import vtkTransform
+        transform = vtkTransform()
+        transform.SetMatrix(self._vtk_matrix_from_numpy(updated_matrix))
+        self._pose_actor.SetOrientation(*transform.GetOrientation())
+
+        for field in self.local_rotation_inputs:
+            field.setValue(0.0)
+
+        # No camera update here: the complete viewport and World frame stay fixed.
+        self.plotter.render()
+        self._update_pose_readout()
+        self.pose_status_label.setText(
+            "LOCAL CAD ROTATION APPLIED  |  Product rotated about its own X/Y/Z axes; "
+            "camera and World frame remained fixed."
+        )
 
     def _apply_world_position(self):
         if self._pose_actor is None:
@@ -739,6 +801,8 @@ class ProductViewer(QWidget):
             self._pose_actor.SetPosition(0.0, 0.0, 0.0)
             self._pose_actor.SetOrientation(0.0, 0.0, 0.0)
             self._pose_actor.SetScale(1.0, 1.0, 1.0)
+            for field in getattr(self, "local_rotation_inputs", []):
+                field.setValue(0.0)
             self.rotation_pivot = np.zeros(3, dtype=float)
             self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
             self._set_cad_origin_world_position(np.zeros(3, dtype=float))
