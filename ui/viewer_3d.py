@@ -1882,10 +1882,24 @@ class ProductViewer(QWidget):
                 self.patch_labels.astype(float)
             )
 
+            # Keep every original triangle in this actor so direct picking
+            # still maps its cell ID to the original patch_labels array.
+            # The selected patch is made transparent here and drawn once,
+            # at its exact original surface location, by the highlight actor.
+            surface_opacity = np.full(
+                len(self.patch_labels), 0.16, dtype=float
+            )
+            if self.selected_patch_id is not None:
+                surface_opacity[
+                    self.patch_labels == self.selected_patch_id
+                ] = 0.0
+            polydata.cell_data["Surface Opacity"] = surface_opacity
+
             self._pose_actor = self.plotter.add_mesh(
                 polydata,
                 scalars="Surface Patch",
                 cmap="turbo",
+                opacity="Surface Opacity",
                 show_edges=True,
                 edge_color="#182C38",
                 line_width=1,
@@ -1947,75 +1961,21 @@ class ProductViewer(QWidget):
                         ]
                     )
 
-                    # trimesh bounds are (2, 3), not a flattened
-                    # VTK (xmin, xmax, ymin, ymax, zmin, zmax) tuple.
-                    dimensions = np.ptp(
-                        np.asarray(self.current_mesh.vertices, dtype=float),
-                        axis=0,
+                    # Draw the selected triangles directly on the original
+                    # CAD surface. No offset membrane, cylinder, beam, or
+                    # secondary inner ring is generated.
+                    selected_actor = self.plotter.add_mesh(
+                        selected_polydata,
+                        color=patch_color,
+                        opacity=1.0,
+                        show_edges=False,
+                        smooth_shading=False,
+                        lighting=False,
+                        ambient=1.0,
+                        diffuse=0.0,
+                        specular=0.0,
+                        pickable=False,
                     )
-                    model_diagonal = float(np.linalg.norm(dimensions))
-                    if not np.isfinite(model_diagonal) or model_diagonal <= 0:
-                        model_diagonal = 1.0
-
-                    # Cylindrical/hole patches retain the axial white
-                    # cylinder so the opening is easy to recognize.
-                    # All other patches use one parallel white membrane.
-                    glow_actors = []
-                    hole_glow = pv.PolyData()
-                    try:
-                        hole_glow = self._build_patch_light_beams(
-                            self.current_mesh,
-                            selected_mask,
-                            max_beams=64,
-                            radius_scale=0.055,
-                        )
-                    except Exception as exc:
-                        print(
-                            "[PATCH GLOW WARNING] "
-                            "Hole cylinder skipped: "
-                            f"{type(exc).__name__}: {exc}"
-                        )
-
-                    if hole_glow.n_cells > 0:
-                        hole_actor = self.plotter.add_mesh(
-                            hole_glow,
-                            color=patch_color,
-                            opacity=0.28,
-                            show_edges=False,
-                            lighting=False,
-                            ambient=1.0,
-                            diffuse=0.0,
-                            specular=0.0,
-                            pickable=False,
-                        )
-                        glow_actors.append(hole_actor)
-                    else:
-                        try:
-                            halo_polydata = self._build_offset_patch_shell(
-                                self.current_mesh,
-                                selected_mask,
-                                model_diagonal * 0.008,
-                            )
-                            if halo_polydata.n_cells > 0:
-                                glow_actors.append(
-                                    self.plotter.add_mesh(
-                                        halo_polydata,
-                                        color=patch_color,
-                                        opacity=0.52,
-                                        show_edges=False,
-                                        lighting=False,
-                                        ambient=1.0,
-                                        diffuse=0.0,
-                                        specular=0.0,
-                                        pickable=False,
-                                    )
-                                )
-                        except Exception as exc:
-                            print(
-                                "[PATCH GLOW WARNING] "
-                                "Parallel white membrane skipped: "
-                                f"{type(exc).__name__}: {exc}"
-                            )
 
                     # The outer contour uses the patch's own color, not a
                     # universal cyan/white highlight.
@@ -2032,7 +1992,7 @@ class ProductViewer(QWidget):
 
                     if previous_product_pose is not None:
                         for selected_actor in (
-                            *glow_actors,
+                            selected_actor,
                             edge_actor,
                         ):
                             selected_actor.SetOrigin(0.0, 0.0, 0.0)
