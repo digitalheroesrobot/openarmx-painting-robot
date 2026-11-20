@@ -1948,6 +1948,7 @@ def generate_spray_trajectory(
     profile_for_path = (
         dict(sprayer_profile) if isinstance(sprayer_profile, dict) else {}
     )
+    profile_for_path.setdefault("spray_cone_angle_deg", spray_angle_deg)
     spray_footprint = _calculate_spray_footprint(
         profile_for_path,
         standoff_mm,
