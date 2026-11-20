@@ -5588,7 +5588,6 @@ def run_stage3_numerical_tests() -> dict:
             split_test_mesh,
             exact_topology_trajectory,
             [{"segment_id": 0, "patch_id": 9, "path_type": "exact_topology_test"}],
-            maximum_normal_change_deg=30.0,
             source_face_ids=np.asarray([101, 102, 103], dtype=np.int64),
             source_face_adjacency={"101": [102], "102": [101], "103": []},
             maximum_normal_change_deg=180.0,
