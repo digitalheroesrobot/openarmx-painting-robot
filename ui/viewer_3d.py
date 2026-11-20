@@ -1828,7 +1828,6 @@ class ProductViewer(QWidget):
             np.linalg.norm(face_normals, axis=1, keepdims=True), 1e-12
         )
         sample_normals = np.repeat(face_normals, len(barycentric), axis=0)
-        sample_face_ids = np.repeat(target_face_ids, len(barycentric))
         face_areas = np.asarray(self.current_mesh.area_faces, dtype=float)[target_face_ids]
         sample_count_per_face = len(barycentric)
         target_area = float(np.sum(face_areas))
@@ -1884,7 +1883,6 @@ class ProductViewer(QWidget):
             ),
             "face_samples": face_samples,
             "sample_normals": sample_normals,
-            "sample_face_ids": sample_face_ids,
             "face_areas": face_areas,
             "target_face_ids": target_face_ids,
             "target_display_indices": target_display_indices,
