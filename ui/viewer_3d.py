@@ -589,6 +589,23 @@ class ProductViewer(QWidget):
         self._render_product(reset_camera=False)
         self.pose_status_label.setText("World display box updated; extents are configurable visualization bounds.")
 
+    @staticmethod
+    def _same_vtk_object(left, right):
+        """Compare VTK objects by their underlying C++ address, not wrapper identity."""
+        if left is None or right is None:
+            return False
+        try:
+            left_address = left.GetAddressAsString("")
+            right_address = right.GetAddressAsString("")
+            if left_address and right_address:
+                return left_address == right_address
+        except Exception:
+            pass
+        try:
+            return bool(left == right)
+        except Exception:
+            return False
+
     def _install_actor_interaction(self):
         """Install a selectable local-CAD X/Y/Z rotation-ring manipulator."""
         if self._pose_actor is None:
@@ -615,9 +632,15 @@ class ProductViewer(QWidget):
             def on_press(caller, event):
                 x, y = interactor.GetEventPosition()
                 hit_ring = ring_picker.Pick(x, y, 0, self.plotter.renderer)
-                ring_actor = ring_picker.GetActor() if hit_ring else None
-                if ring_actor in self._rotation_ring_actors and self._product_selected:
-                    axis_index = self._rotation_ring_actors.index(ring_actor)
+                ring_actor = ring_picker.GetViewProp() if hit_ring else None
+                axis_index = next(
+                    (
+                        index for index, candidate in enumerate(self._rotation_ring_actors)
+                        if self._same_vtk_object(ring_actor, candidate)
+                    ),
+                    None,
+                )
+                if axis_index is not None and self._product_selected:
                     start_vector = self._screen_vector_from_cad_origin(x, y, axis_index)
                     if start_vector is not None:
                         self._rotation_drag_axis = axis_index
@@ -626,8 +649,10 @@ class ProductViewer(QWidget):
                         interactor.SetInteractorStyle(self._rotation_drag_style)
                         return
                 hit_product = product_picker.Pick(x, y, 0, self.plotter.renderer)
-                picked = product_picker.GetActor() if hit_product else None
-                self._set_product_selected(picked == self._pose_actor)
+                picked = product_picker.GetViewProp() if hit_product else None
+                self._set_product_selected(
+                    self._same_vtk_object(picked, self._pose_actor)
+                )
 
             def on_move(caller, event):
                 if self._rotation_drag_axis is None:
