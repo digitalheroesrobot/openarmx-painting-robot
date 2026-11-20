@@ -5,7 +5,7 @@ import math
 import numpy as np
 import pyvista as pv
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -102,6 +102,9 @@ class ProductViewer(QWidget):
         self._rotation_ring_actors = []
         self._rotation_observer_tags = []
         self._rotation_drag_axis = None
+        self._rotation_pick_pickers = []
+        self._product_picker = None
+        self._qt_mouse_filter_installed = False
         self._rotation_drag_start_vector = None
         self._rotation_drag_start_matrix = None
         self._camera_style = None
@@ -630,140 +633,170 @@ class ProductViewer(QWidget):
             return False
 
     def _install_actor_interaction(self):
-        """Install a selectable local-CAD X/Y/Z rotation-ring manipulator."""
-        if self._pose_actor is None:
+        """Install product picking and CAD-local rotation using Qt mouse events.
+
+        Qt event filtering is used instead of VTK interactor observers because
+        the QVTK camera style can consume button events before Python observers
+        reliably update the product selection state.
+        """
+        if self._pose_actor is None or self.display_mode != "product":
             return
+
         try:
-            from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera, vtkInteractorStyleUser
-            from vtkmodules.vtkRenderingCore import vtkCellPicker, vtkPropPicker
+            from vtkmodules.vtkRenderingCore import vtkCellPicker
+            from vtkmodules.vtkCommonTransforms import vtkTransform
 
-            interactor = self.plotter.interactor
-            self._camera_style = vtkInteractorStyleTrackballCamera()
-            self._camera_style.SetDefaultRenderer(self.plotter.renderer)
-            self._rotation_drag_style = vtkInteractorStyleUser()
-            self._rotation_drag_style.SetDefaultRenderer(self.plotter.renderer)
-            interactor.SetInteractorStyle(self._camera_style)
+            interactor_widget = self.plotter.interactor
 
+            # Keep the standard VTK trackball camera style. The Qt event filter
+            # consumes only product clicks and rotation-ring drags; all empty
+            # space gestures continue to the camera unchanged.
             self._create_rotation_gizmo()
 
-            # Each picker is restricted to exactly one intended prop. This
-            # avoids comparing PyVista Actor wrappers with VTK picker props
-            # and prevents the World box/axes from stealing product clicks.
-            ring_pickers = []
+            self._rotation_pick_pickers = []
             for ring_actor in self._rotation_ring_actors:
                 picker = vtkCellPicker()
-                picker.SetTolerance(0.025)
+                picker.SetTolerance(0.035)
                 picker.PickFromListOn()
                 picker.AddPickList(ring_actor)
-                ring_pickers.append(picker)
+                self._rotation_pick_pickers.append(picker)
 
-            product_picker = vtkPropPicker()
-            product_picker.PickFromListOn()
-            product_picker.AddPickList(self._pose_actor)
+            self._product_picker = vtkCellPicker()
+            self._product_picker.SetTolerance(0.0005)
+            self._product_picker.PickFromListOn()
+            self._product_picker.AddPickList(self._pose_actor)
 
-            event_observer_tags = {}
+            if not self._qt_mouse_filter_installed:
+                interactor_widget.installEventFilter(self)
+                self._qt_mouse_filter_installed = True
 
-            def abort_event(event_name):
-                # Abort the current VTK event before the active camera style
-                # can process a product click or a gizmo drag.
-                tag = event_observer_tags.get(event_name)
-                if tag is None:
-                    return
-                try:
-                    command = interactor.GetCommand(tag)
-                    if command is not None:
-                        command.SetAbortFlag(1)
-                except Exception:
-                    pass
-
-            def on_press(caller, event):
-                x, y = interactor.GetEventPosition()
-
-                axis_index = next(
-                    (
-                        index for index, picker in enumerate(ring_pickers)
-                        if picker.Pick(x, y, 0, self.plotter.renderer)
-                    ),
-                    None,
-                )
-                if axis_index is not None and self._product_selected:
-                    start_vector = self._screen_vector_from_cad_origin(x, y, axis_index)
-                    if start_vector is not None:
-                        self._rotation_drag_axis = axis_index
-                        self._rotation_drag_start_vector = start_vector
-                        self._rotation_drag_start_matrix = self._actor_matrix_array().copy()
-                        interactor.SetInteractorStyle(self._rotation_drag_style)
-                        abort_event("LeftButtonPressEvent")
-                        return
-
-                hit_product = bool(
-                    product_picker.Pick(x, y, 0, self.plotter.renderer)
-                )
-                self._set_product_selected(hit_product)
-
-                # Product clicks select the actor; empty-space clicks are
-                # intentionally left to the trackball camera.
-                if hit_product:
-                    abort_event("LeftButtonPressEvent")
-
-            def on_move(caller, event):
-                if self._rotation_drag_axis is None:
-                    return
-                x, y = interactor.GetEventPosition()
-                current = self._screen_vector_from_cad_origin(x, y, self._rotation_drag_axis)
-                if current is None:
-                    abort_event("MouseMoveEvent")
-                    return
-                start = self._rotation_drag_start_vector
-                index = self._rotation_drag_axis
-                local_axis = np.eye(3, dtype=float)[index]
-                base = self._rotation_drag_start_matrix
-                base_rotation = base[:3, :3]
-                world_axis = base_rotation @ local_axis
-                angle = math.atan2(
-                    float(np.dot(world_axis, np.cross(start, current))),
-                    float(np.clip(np.dot(start, current), -1.0, 1.0)),
-                )
-                ux, uy, uz = local_axis
-                skew = np.array([[0.0, -uz, uy], [uz, 0.0, -ux], [-uy, ux, 0.0]])
-                delta = np.eye(3) + math.sin(angle) * skew + (1.0 - math.cos(angle)) * (skew @ skew)
-                updated = base.copy()
-                updated[:3, :3] = base_rotation @ delta
-                from vtkmodules.vtkCommonTransforms import vtkTransform
-                transform = vtkTransform()
-                transform.SetMatrix(self._vtk_matrix_from_numpy(updated))
-                self._pose_actor.SetOrientation(*transform.GetOrientation())
-                self._update_rotation_gizmo_transform()
-                self._update_pose_readout()
-                self.plotter.render()
-                abort_event("MouseMoveEvent")
-
-            def on_release(caller, event):
-                if self._rotation_drag_axis is None:
-                    return
-                self._rotation_drag_axis = None
-                self._rotation_drag_start_vector = None
-                self._rotation_drag_start_matrix = None
-                interactor.SetInteractorStyle(self._camera_style)
-                self._update_pose_readout()
-                self.pose_status_label.setText("ROTATION COMPLETE  |  Camera orbit and zoom are available.")
-                abort_event("LeftButtonReleaseEvent")
-
-            press_tag = interactor.AddObserver("LeftButtonPressEvent", on_press, 1.0)
-            move_tag = interactor.AddObserver("MouseMoveEvent", on_move, 1.0)
-            release_tag = interactor.AddObserver("LeftButtonReleaseEvent", on_release, 1.0)
-            event_observer_tags.update({
-                "LeftButtonPressEvent": press_tag,
-                "MouseMoveEvent": move_tag,
-                "LeftButtonReleaseEvent": release_tag,
-            })
-            self._rotation_observer_tags = [press_tag, move_tag, release_tag]
+            self._rotation_drag_axis = None
+            self._rotation_drag_start_vector = None
+            self._rotation_drag_start_matrix = None
             self._update_rotation_gizmo_transform()
             self._update_pose_readout()
             self.plotter.render()
+
         except Exception as exc:
-            self.pose_status_label.setText(f"Rotation manipulator unavailable: {exc}")
+            self.pose_status_label.setText(
+                f"Rotation manipulator unavailable: {exc}"
+            )
             self.confirm_pose_button.setEnabled(False)
+
+    def _qt_event_to_vtk_position(self, watched, event):
+        """Convert Qt logical widget coordinates to VTK display coordinates."""
+        position = event.position()
+        widget_width = max(int(watched.width()), 1)
+        widget_height = max(int(watched.height()), 1)
+        render_width, render_height = self.plotter.render_window.GetSize()
+        x = int(round(position.x() * render_width / widget_width))
+        qt_y = int(round(position.y() * render_height / widget_height))
+        x = min(max(x, 0), max(render_width - 1, 0))
+        y = min(max(render_height - 1 - qt_y, 0), max(render_height - 1, 0))
+        return x, y
+
+    def _apply_rotation_drag(self, display_x, display_y):
+        """Apply one mouse-move sample to the active local-axis rotation."""
+        if self._rotation_drag_axis is None:
+            return
+
+        current = self._screen_vector_from_cad_origin(
+            display_x, display_y, self._rotation_drag_axis
+        )
+        if current is None:
+            return
+
+        start = self._rotation_drag_start_vector
+        index = self._rotation_drag_axis
+        local_axis = np.eye(3, dtype=float)[index]
+        base = self._rotation_drag_start_matrix
+        base_rotation = base[:3, :3]
+        world_axis = base_rotation @ local_axis
+        angle = math.atan2(
+            float(np.dot(world_axis, np.cross(start, current))),
+            float(np.clip(np.dot(start, current), -1.0, 1.0)),
+        )
+
+        ux, uy, uz = local_axis
+        skew = np.array([
+            [0.0, -uz, uy],
+            [uz, 0.0, -ux],
+            [-uy, ux, 0.0],
+        ])
+        delta = (
+            np.eye(3)
+            + math.sin(angle) * skew
+            + (1.0 - math.cos(angle)) * (skew @ skew)
+        )
+
+        updated = base.copy()
+        updated[:3, :3] = base_rotation @ delta
+        transform = vtkTransform()
+        transform.SetMatrix(self._vtk_matrix_from_numpy(updated))
+        self._pose_actor.SetOrientation(*transform.GetOrientation())
+
+        self._update_rotation_gizmo_transform()
+        self._update_pose_readout()
+        self.plotter.render()
+
+    def eventFilter(self, watched, event):
+        """Handle product selection and gizmo dragging before QVTK camera input."""
+        if (
+            watched is not self.plotter.interactor
+            or self._pose_actor is None
+            or self.display_mode != "product"
+        ):
+            return super().eventFilter(watched, event)
+
+        event_type = event.type()
+        left_button = Qt.MouseButton.LeftButton
+
+        if event_type == QEvent.Type.MouseButtonPress and event.button() == left_button:
+            x, y = self._qt_event_to_vtk_position(watched, event)
+
+            # Rotation rings take priority over the product surface.
+            axis_index = next(
+                (
+                    index for index, picker in enumerate(self._rotation_pick_pickers)
+                    if picker.Pick(x, y, 0, self.plotter.renderer)
+                ),
+                None,
+            )
+            if axis_index is not None and self._product_selected:
+                start_vector = self._screen_vector_from_cad_origin(x, y, axis_index)
+                if start_vector is not None:
+                    self._rotation_drag_axis = axis_index
+                    self._rotation_drag_start_vector = start_vector
+                    self._rotation_drag_start_matrix = self._actor_matrix_array().copy()
+                    return True
+
+            hit_product = bool(
+                self._product_picker is not None
+                and self._product_picker.Pick(x, y, 0, self.plotter.renderer)
+            )
+            self._set_product_selected(hit_product)
+
+            # Consume only a product hit. Empty-space presses remain available
+            # to vtkInteractorStyleTrackballCamera for camera orbit/pan.
+            return hit_product
+
+        if event_type == QEvent.Type.MouseMove and self._rotation_drag_axis is not None:
+            x, y = self._qt_event_to_vtk_position(watched, event)
+            self._apply_rotation_drag(x, y)
+            return True
+
+        if event_type == QEvent.Type.MouseButtonRelease and event.button() == left_button:
+            if self._rotation_drag_axis is not None:
+                self._rotation_drag_axis = None
+                self._rotation_drag_start_vector = None
+                self._rotation_drag_start_matrix = None
+                self._update_pose_readout()
+                self.pose_status_label.setText(
+                    "ROTATION COMPLETE  |  Camera orbit and zoom are available."
+                )
+                return True
+
+        return super().eventFilter(watched, event)
 
     def _create_rotation_gizmo(self):
         """Build three colored rings in CAD-local planes, centered on CAD origin."""
