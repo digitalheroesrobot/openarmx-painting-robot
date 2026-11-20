@@ -133,7 +133,7 @@ class SprayPatternPreview(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.profile = deepcopy(DEFAULT_SPRAYER_PROFILE)
-        self.setMinimumSize(300, 320)
+        self.setMinimumSize(340, 400)
 
     def set_profile(self, profile: dict):
         self.profile = deepcopy(profile)
@@ -295,8 +295,8 @@ class SprayerSettingsDialog(QDialog):
 
     def _build_ui(self):
         self.setWindowTitle("SPRAYER TECHNICAL SPECIFICATIONS")
-        self.setMinimumSize(860, 450)
-        self.resize(940, 520)
+        self.setMinimumSize(980, 560)
+        self.resize(1100, 650)
         root = QVBoxLayout(self)
 
         header = QLabel("SPRAYER PROFILE")
