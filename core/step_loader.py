@@ -360,7 +360,7 @@ def load_step(
         except (AttributeError, TypeError, ValueError):
             parameter_bounds = {"u": None, "v": None}
         surface_counts[surface_type] += 1
-        face_records.append({
+        face_record = {
             "face_id": face_id,
             "surface_type": surface_type,
             "area_mm2": area,
@@ -373,7 +373,25 @@ def load_step(
                 else "FORWARD_OR_OTHER"
             ),
             "parameter_bounds": parameter_bounds,
-        })
+        }
+        if surface_type == "CYLINDER":
+            # Preserve the exact analytic cylinder from the original STEP
+            # B-Rep. The mesh is only a display tessellation and must not be
+            # used to refit the cylinder axis or radius.
+            cylinder = adaptor.Cylinder()
+            cylinder_axis = cylinder.Axis()
+            cylinder_location = cylinder_axis.Location()
+            cylinder_direction = cylinder_axis.Direction()
+            face_record["cylinder_geometry_mm"] = {
+                "axis_location_mm": _xyz(cylinder_location),
+                "axis_direction": [
+                    float(cylinder_direction.X()),
+                    float(cylinder_direction.Y()),
+                    float(cylinder_direction.Z()),
+                ],
+                "radius_mm": float(cylinder.Radius()),
+            }
+        face_records.append(face_record)
 
 
     # Attach exact B-Rep edge lengths (mm) using the indexed global edge map.
