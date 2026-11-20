@@ -4930,6 +4930,51 @@ def run_stage3_numerical_tests() -> dict:
     assert inspection_result["orientation"]["maximum_change_deg"] < 11.0
 
     # --------------------------------------------------------
+    # Test 24D: Full nozzle-frame inspection detects roll changes even when
+    # the spray axis itself remains unchanged.
+    # --------------------------------------------------------
+    base_nozzle_frame = np.asarray([
+        [1.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0],
+        [0.0, 0.0, -1.0],
+    ], dtype=np.float64)
+    roll_angle = math.radians(40.0)
+    local_roll = np.asarray([
+        [math.cos(roll_angle), -math.sin(roll_angle), 0.0],
+        [math.sin(roll_angle), math.cos(roll_angle), 0.0],
+        [0.0, 0.0, 1.0],
+    ], dtype=np.float64)
+    roll_inspection = _inspect_generated_trajectory(
+        mesh=inspection_test_mesh,
+        source_face_indices=np.asarray([0, 1], dtype=np.int64),
+        trajectory={
+            "face_indices": np.asarray([0, 0], dtype=np.int64),
+            "nozzle_points": np.asarray([
+                [0.0, 0.0, 180.0],
+                [1.0, 0.0, 180.0],
+            ], dtype=np.float64),
+            "spray_directions": np.asarray([
+                [0.0, 0.0, -1.0],
+                [0.0, 0.0, -1.0],
+            ], dtype=np.float64),
+            "nozzle_frames": np.asarray([
+                base_nozzle_frame,
+                base_nozzle_frame @ local_roll,
+            ], dtype=np.float64),
+            "segment_ids": np.asarray([0, 0], dtype=np.int64),
+        },
+        coordinate_unit="mm",
+        sample_spacing_mm=10.0,
+        track_spacing_mm=20.0,
+    )
+    assert roll_inspection["orientation"]["spray_axis_maximum_change_deg"] < 1e-6
+    assert abs(
+        roll_inspection["orientation"]["full_nozzle_frame_maximum_change_deg"]
+        - 40.0
+    ) < 1e-6
+    assert roll_inspection["orientation"]["status"] == "WARN"
+
+    # --------------------------------------------------------
     # Test 24C: Continuity diagnostics identify exact source samples and faces.
     # --------------------------------------------------------
     continuity_outlier_test = _inspect_generated_trajectory(
@@ -5004,6 +5049,7 @@ def run_stage3_numerical_tests() -> dict:
             "exact_continuity_outlier_diagnostics": "PASS",
             "curved_raster_projection_jump_splitting": "PASS",
             "curved_normal_smoothing_with_8deg_deviation_limit": "PASS",
+            "full_nozzle_frame_roll_inspection": "PASS",
         },
         "sample_count": int(sample_count),
         "unit_standoff_tests": unit_test_results,
