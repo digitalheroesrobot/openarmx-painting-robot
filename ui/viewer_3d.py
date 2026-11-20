@@ -61,6 +61,7 @@ MAX_DIRECTION_ARROWS = 300
 class ProductViewer(QWidget):
 
     pose_confirmed = Signal(dict)
+    patch_selected = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -888,8 +889,9 @@ class ProductViewer(QWidget):
         if not np.isfinite(model_diagonal) or model_diagonal <= 0.0:
             return pv.PolyData()
 
-        # Long enough to visibly project from small holes and recesses.
-        beam_length = model_diagonal * 0.28
+        # Long, clearly visible same-color beams project away from the
+        # selected patch so recessed and hole surfaces are easier to locate.
+        beam_length = model_diagonal * 0.72
         beam_radius = beam_length * float(radius_scale)
 
         beams = []
@@ -1072,6 +1074,41 @@ class ProductViewer(QWidget):
             print("===================================\n")
 
         self._render_product(reset_camera=False)
+
+    def _on_patch_surface_picked(self, selected_mesh):
+        """
+        Resolve a 3D cell-pick result to its original Stage 1 Patch ID.
+        """
+        if self.display_mode != "patches" or self.patch_labels is None:
+            return
+
+        try:
+            patch_values = np.asarray(
+                selected_mesh.cell_data["Surface Patch"]
+            ).reshape(-1)
+            patch_values = patch_values[
+                np.isfinite(patch_values)
+            ]
+            if patch_values.size == 0:
+                return
+
+            patch_ids, counts = np.unique(
+                patch_values.astype(np.int64),
+                return_counts=True,
+            )
+            patch_id = int(patch_ids[int(np.argmax(counts))])
+
+            if not np.any(self.patch_labels == patch_id):
+                return
+
+            self.set_selected_patch(patch_id)
+            self.patch_selected.emit(patch_id)
+
+        except Exception as exc:
+            print(
+                "[PATCH PICKING WARNING] Could not resolve picked cell: "
+                f"{type(exc).__name__}: {exc}"
+            )
 
     def select_surface_patch(self, patch_id):
         """
@@ -1714,6 +1751,10 @@ class ProductViewer(QWidget):
                 pass
         self._world_orientation_widget = None
         self._world_orientation_axes = None
+        try:
+            self.plotter.disable_picking()
+        except Exception:
+            pass
         self.plotter.clear()
         self.plotter.set_background("#07111D", top="#142B40")
 
@@ -1850,14 +1891,14 @@ class ProductViewer(QWidget):
                     if not np.isfinite(model_diagonal) or model_diagonal <= 0:
                         model_diagonal = 1.0
 
-                    # Three same-color shells sit just outside the selected
-                    # surface. Their increasing spread and transparency make
-                    # the patch look luminous without changing its identity.
+                    # Stronger expanded shells plus long projected beams
+                    # make the selected patch visible at a glance, including
+                    # surfaces inside holes and recessed regions.
                     glow_actors = []
                     for offset_ratio, opacity in (
-                        (0.012, 0.12),
-                        (0.007, 0.22),
-                        (0.003, 0.38),
+                        (0.060, 0.10),
+                        (0.035, 0.20),
+                        (0.015, 0.38),
                     ):
                         try:
                             halo_polydata = self._build_offset_patch_shell(
@@ -1885,6 +1926,35 @@ class ProductViewer(QWidget):
                                 "Expanded halo layer skipped: "
                                 f"{type(exc).__name__}: {exc}"
                             )
+
+                    # Project long, patch-colored headlight beams from
+                    # selected triangle surfaces. This is a visual locator,
+                    # not a physical lighting simulation.
+                    try:
+                        beam_polydata = self._build_patch_light_beams(
+                            self.current_mesh,
+                            selected_mask,
+                            max_beams=64,
+                            radius_scale=0.075,
+                        )
+                        if beam_polydata.n_cells > 0:
+                            beam_actor = self.plotter.add_mesh(
+                                beam_polydata,
+                                color=patch_color,
+                                opacity=0.24,
+                                show_edges=False,
+                                lighting=False,
+                                ambient=1.0,
+                                diffuse=0.0,
+                                pickable=False,
+                            )
+                            glow_actors.append(beam_actor)
+                    except Exception as exc:
+                        print(
+                            "[PATCH GLOW WARNING] "
+                            "Projected beams skipped: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
 
                     # A translucent same-color wash reinforces the selected
                     # area while leaving the original patch color recognizable.
@@ -2008,6 +2078,28 @@ class ProductViewer(QWidget):
             self._set_standard_camera()
 
         self.plotter.render()
+
+        # Let the operator select a surface patch directly in the 3D view.
+        # The rendered cell scalar carries the exact Patch ID.
+        if (
+            self.display_mode == "patches"
+            and self.patch_labels is not None
+            and self._pose_actor is not None
+        ):
+            try:
+                self.plotter.enable_cell_picking(
+                    callback=self._on_patch_surface_picked,
+                    through=False,
+                    show=False,
+                    show_message=False,
+                    style="wireframe",
+                )
+            except Exception as exc:
+                print(
+                    "[PATCH PICKING WARNING] "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
         if self._pose_actor is not None:
             self._update_pose_readout()
 
