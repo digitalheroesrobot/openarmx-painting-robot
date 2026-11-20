@@ -1889,7 +1889,12 @@ def _order_trajectory_with_planar_raster(
         raise RuntimeError("No trajectory segments were generated.")
 
     result = {key: np.concatenate(values, axis=0) for key, values in collected.items()}
+    result, segment_metadata, travel_ordering = _optimize_stroke_order_for_travel(
+        trajectory=result,
+        segment_metadata=segment_metadata,
+    )
     result["segments"] = segment_metadata
+    result["travel_ordering"] = travel_ordering
     result["rasterized_planar_patch_ids"] = rasterized_patch_ids
     result["rasterized_curved_patch_ids"] = curved_rasterized_patch_ids
     result["normal_partitioned_patch_ids"] = normal_partitioned_patch_ids
@@ -1991,6 +1996,14 @@ def _order_trajectory_with_planar_raster(
     print(
         f"Curved recovery | Normal-cone partitioned patches: "
         f"{len(normal_partitioned_patch_ids)}"
+    )
+    print(
+        "TRAVEL ORDER OPTIMIZATION | "
+        f"{travel_ordering['stroke_count']} strokes | "
+        f"{travel_ordering['original_travel_distance_coordinate_units']:.3f} -> "
+        f"{travel_ordering['optimized_travel_distance_coordinate_units']:.3f} "
+        f"coordinate units | {travel_ordering['reduction_percent']:.1f}% reduction "
+        "(greedy nearest endpoint; collision check NOT performed)"
     )
     if fallback_reason_counts:
         print("Fallback rejection reasons:")
@@ -2132,6 +2145,173 @@ def _calculate_path_metrics(
             "Travel between separate patches is excluded."
         ),
     }
+
+
+def _optimize_stroke_order_for_travel(
+    trajectory: dict,
+    segment_metadata: list[dict],
+) -> tuple[dict, list[dict], dict]:
+    """Greedily order complete strokes by nearest endpoint, reversing strokes when useful.
+
+    The stroke geometry and per-sample nozzle frames are preserved. Only the
+    order of complete spray strokes changes; no spray-on connector is created.
+    The first stroke is selected near the overall path centroid because no
+    robot home pose is available at Stage 3.
+    """
+    sample_keys = (
+        "surface_points",
+        "surface_normals",
+        "nozzle_points",
+        "spray_directions",
+        "nozzle_frames",
+        "face_indices",
+        "patch_ids",
+    )
+    segments = np.asarray(trajectory["segment_ids"], dtype=np.int64)
+    if segments.ndim != 1 or len(segments) == 0:
+        return trajectory, segment_metadata, {
+            "method": "greedy_nearest_endpoint",
+            "stroke_count": 0,
+            "original_travel_distance_coordinate_units": 0.0,
+            "optimized_travel_distance_coordinate_units": 0.0,
+            "reduction_percent": 0.0,
+        }
+
+    starts = np.r_[0, np.flatnonzero(np.diff(segments) != 0) + 1]
+    ends = np.r_[starts[1:], len(segments)]
+    blocks = [
+        np.arange(int(start), int(end), dtype=np.int64)
+        for start, end in zip(starts, ends)
+    ]
+    if len(blocks) <= 1:
+        return trajectory, segment_metadata, {
+            "method": "greedy_nearest_endpoint",
+            "stroke_count": int(len(blocks)),
+            "original_travel_distance_coordinate_units": 0.0,
+            "optimized_travel_distance_coordinate_units": 0.0,
+            "reduction_percent": 0.0,
+        }
+
+    points = np.asarray(trajectory["nozzle_points"], dtype=np.float64)
+    if points.shape != (len(segments), 3) or not np.all(np.isfinite(points)):
+        raise ValueError("Stroke ordering requires finite N×3 nozzle points.")
+
+    old_distance = 0.0
+    for left, right in zip(blocks[:-1], blocks[1:]):
+        old_distance += float(np.linalg.norm(points[right[0]] - points[left[-1]]))
+
+    centers = np.asarray([
+        0.5 * (points[block[0]] + points[block[-1]])
+        for block in blocks
+    ])
+    centroid = np.mean(centers, axis=0)
+    seed = int(np.argmin(np.linalg.norm(centers - centroid, axis=1)))
+    first_block = blocks[seed]
+    if np.linalg.norm(points[first_block[-1]] - centroid) < np.linalg.norm(
+        points[first_block[0]] - centroid
+    ):
+        first_block = first_block[::-1]
+
+    remaining = set(range(len(blocks)))
+    remaining.remove(seed)
+    ordered_blocks = [first_block]
+    ordered_indices = [seed]
+    current_endpoint = points[first_block[-1]]
+
+    while remaining:
+        best_index = None
+        best_reverse = False
+        best_distance = float("inf")
+        for candidate_index in remaining:
+            candidate = blocks[candidate_index]
+            distance_start = float(np.linalg.norm(
+                points[candidate[0]] - current_endpoint
+            ))
+            distance_end = float(np.linalg.norm(
+                points[candidate[-1]] - current_endpoint
+            ))
+            if distance_start < best_distance:
+                best_index = candidate_index
+                best_reverse = False
+                best_distance = distance_start
+            if distance_end < best_distance:
+                best_index = candidate_index
+                best_reverse = True
+                best_distance = distance_end
+
+        chosen = blocks[best_index]
+        if best_reverse:
+            chosen = chosen[::-1]
+        ordered_blocks.append(chosen)
+        ordered_indices.append(best_index)
+        current_endpoint = points[chosen[-1]]
+        remaining.remove(best_index)
+
+    ordered_sample_indices = np.concatenate(ordered_blocks)
+    optimized = dict(trajectory)
+    for key in sample_keys:
+        if key in trajectory:
+            values = np.asarray(trajectory[key])
+            if len(values) != len(segments):
+                raise ValueError(f"{key} does not match trajectory sample count.")
+            optimized[key] = values[ordered_sample_indices].copy()
+
+    optimized_segment_ids = np.empty(len(segments), dtype=np.int64)
+    old_to_new = {}
+    for new_id, block in enumerate(ordered_blocks):
+        old_id = int(segments[block[0]])
+        old_to_new[old_id] = int(new_id)
+        optimized_segment_ids[
+            sum(len(item) for item in ordered_blocks[:new_id]):
+            sum(len(item) for item in ordered_blocks[:new_id + 1])
+        ] = new_id
+    optimized["segment_ids"] = optimized_segment_ids
+
+    metadata_by_id = {
+        int(item["segment_id"]): dict(item)
+        for item in segment_metadata
+        if "segment_id" in item
+    }
+    reordered_metadata = []
+    for new_id, old_index in enumerate(ordered_indices):
+        old_id = int(segments[blocks[old_index][0]])
+        item = metadata_by_id.get(old_id, {"segment_id": old_id})
+        item["original_segment_id"] = old_id
+        item["segment_id"] = int(new_id)
+        item["travel_order_index"] = int(new_id)
+        item["direction_reversed_for_travel"] = bool(
+            ordered_blocks[new_id][0] == blocks[old_index][-1]
+        )
+        reordered_metadata.append(item)
+
+    new_points = np.asarray(optimized["nozzle_points"], dtype=np.float64)
+    new_starts = np.r_[0, np.flatnonzero(np.diff(optimized_segment_ids) != 0) + 1]
+    new_ends = np.r_[new_starts[1:], len(optimized_segment_ids)]
+    new_distance = 0.0
+    for left_end, right_start in zip(new_ends[:-1], new_starts[1:]):
+        new_distance += float(np.linalg.norm(
+            new_points[int(right_start)] - new_points[int(left_end - 1)]
+        ))
+
+    reduction = (
+        100.0 * (old_distance - new_distance) / old_distance
+        if old_distance > 1e-12 else 0.0
+    )
+    metadata = {
+        "method": "greedy_nearest_endpoint_with_optional_stroke_reversal",
+        "stroke_count": int(len(blocks)),
+        "original_travel_distance_coordinate_units": float(old_distance),
+        "optimized_travel_distance_coordinate_units": float(new_distance),
+        "reduction_percent": float(reduction),
+        "start_selection": "stroke midpoint nearest overall centroid; robot home pose unavailable",
+        "collision_check": "NOT_PERFORMED",
+        "note": (
+            "Complete spray strokes are reordered and may be reversed. Stroke "
+            "geometry is unchanged. This is a geometric travel heuristic, not "
+            "collision-free or robot-joint-space motion planning."
+        ),
+    }
+    return optimized, reordered_metadata, metadata
 
 
 def _build_inter_segment_travel_plan(
@@ -2999,6 +3179,9 @@ def generate_spray_trajectory(
         segment_ids=ordered["segment_ids"],
         coordinate_unit=source_unit,
         travel_speed_mm_s=base_travel_speed,
+    )
+    inter_segment_travel_plan["ordering_optimization"] = ordered.get(
+        "travel_ordering", {}
     )
     print(
         "SPRAY-OFF TRAVEL ESTIMATE | "
@@ -4282,6 +4465,52 @@ def run_stage3_numerical_tests() -> dict:
     assert abs(travel_test["estimated_time_s"] - 0.05) < 1e-9
     assert travel_test["safety_status"] == "NOT_COLLISION_CHECKED"
 
+    # --------------------------------------------------------
+    # Test 24B: Greedy stroke ordering reduces a deliberately poor route.
+    # --------------------------------------------------------
+    ordering_test_trajectory = {
+        "surface_points": np.asarray([
+            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+            [100.0, 0.0, 0.0], [101.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0], [3.0, 0.0, 0.0],
+            [102.0, 0.0, 0.0], [103.0, 0.0, 0.0],
+        ], dtype=np.float64),
+        "surface_normals": np.tile([0.0, 0.0, 1.0], (8, 1)),
+        "nozzle_points": np.asarray([
+            [0.0, 0.0, 10.0], [1.0, 0.0, 10.0],
+            [100.0, 0.0, 10.0], [101.0, 0.0, 10.0],
+            [2.0, 0.0, 10.0], [3.0, 0.0, 10.0],
+            [102.0, 0.0, 10.0], [103.0, 0.0, 10.0],
+        ], dtype=np.float64),
+        "spray_directions": np.tile([0.0, 0.0, -1.0], (8, 1)),
+        "nozzle_frames": np.tile(np.eye(3), (8, 1, 1)),
+        "face_indices": np.arange(8, dtype=np.int64),
+        "patch_ids": np.asarray([0, 0, 1, 1, 2, 2, 3, 3]),
+        "segment_ids": np.repeat(np.arange(4, dtype=np.int64), 2),
+    }
+    ordering_test_metadata = [
+        {"segment_id": index, "patch_id": index, "path_type": "test"}
+        for index in range(4)
+    ]
+    optimized_test, optimized_metadata, ordering_test = (
+        _optimize_stroke_order_for_travel(
+            ordering_test_trajectory, ordering_test_metadata
+        )
+    )
+    assert ordering_test["stroke_count"] == 4
+    assert ordering_test["optimized_travel_distance_coordinate_units"] < (
+        ordering_test["original_travel_distance_coordinate_units"]
+    )
+    assert np.array_equal(
+        optimized_test["segment_ids"],
+        np.repeat(np.arange(4, dtype=np.int64), 2),
+    )
+    assert len(optimized_metadata) == 4
+    assert np.allclose(
+        np.sort(optimized_test["nozzle_points"][:, 0]),
+        np.sort(ordering_test_trajectory["nozzle_points"][:, 0]),
+    )
+
     inspection_test_mesh = trimesh.Trimesh(
         vertices=np.asarray([
             [0.0, 0.0, 0.0],
@@ -4352,6 +4581,7 @@ def run_stage3_numerical_tests() -> dict:
             "adaptive_speed_time_monotonicity": "PASS",
             "trajectory_coverage_continuity_orientation_and_spray_boundaries": "PASS",
             "inter_segment_spray_off_travel_estimates": "PASS",
+            "greedy_stroke_travel_ordering": "PASS",
         },
         "sample_count": int(sample_count),
         "unit_standoff_tests": unit_test_results,
