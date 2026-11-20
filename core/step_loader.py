@@ -480,6 +480,24 @@ def load_step(
         "faces": face_records,
     }
 
+    topology_summary = brep_adjacency["summary"]
+    print("\\n" + "=" * 68)
+    print("STEP B-REP TOPOLOGY VALIDATION")
+    print("=" * 68)
+    print(f"Original STEP Faces:    {len(faces):,}")
+    print(f"Original STEP Edges:    {len(brep_adjacency['edges']):,}")
+    print(f"Original STEP Vertices: {len(vertices):,}")
+    print("Surface Types:")
+    for surface_name, surface_count in sorted(surface_counts.items()):
+        print(f"  {surface_name}: {surface_count:,}")
+    print("Face Adjacency:")
+    print(f"  Shared manifold edges: {topology_summary['shared_manifold_edges']:,}")
+    print(f"  Boundary edges:        {topology_summary['boundary_edges']:,}")
+    print(f"  Seam/repeated edges:   {topology_summary['seam_or_repeated_use_edges']:,}")
+    print(f"  Non-manifold edges:    {topology_summary['non_manifold_edges']:,}")
+    print(f"  Adjacent face pairs:   {topology_summary['unique_adjacent_face_pairs']:,}")
+    print("=" * 68)
+
     mesh.metadata.update({
         "source_file": str(path),
         "source_format": "STEP",
