@@ -572,6 +572,12 @@ class MainWindow(QMainWindow):
             button.setChecked(True)
 
 
+    def _expand_summary_section(self):
+        button = self._right_section_buttons.get("stage_summary")
+        if button is not None:
+            button.setChecked(True)
+
+
     def _set_patch_inspection_readonly(self, readonly=True):
         for widgets in self.patch_row_widgets.values():
 
@@ -3466,6 +3472,7 @@ class MainWindow(QMainWindow):
             self.active_stage = STAGE_SURFACE_IDENTIFICATION
 
             self._show_analysis_summary(report)
+            self._expand_summary_section()
             self._finish_operation_ui(True)
 
             self.status_bar.showMessage(
@@ -3963,13 +3970,6 @@ class MainWindow(QMainWindow):
             "uncertain": 0,
             "invalid": 0,
         }
-        patch_ids = {
-            "planar": [],
-            "curved": [],
-            "uncertain": [],
-            "invalid": [],
-        }
-
         cylinder_counts = {
             "internal": 0,
             "external": 0,
@@ -3985,12 +3985,6 @@ class MainWindow(QMainWindow):
                 classification = "invalid"
 
             counts[classification] += 1
-            try:
-                patch_ids[classification].append(
-                    int(patch.get("patch_id", -1))
-                )
-            except (TypeError, ValueError):
-                pass
 
             if classification == "curved":
                 cylinder = patch.get("cylindrical_fit", {})
@@ -4014,18 +4008,6 @@ class MainWindow(QMainWindow):
             0,
             counts["curved"] - sum(cylinder_counts.values()),
         )
-
-        def compact_patch_ids(category):
-            ids = [
-                value for value in patch_ids[category]
-                if value >= 0
-            ]
-            if not ids:
-                return "—"
-            preview = ", ".join(str(value) for value in ids[:6])
-            if len(ids) > 6:
-                preview += f", … (+{len(ids) - 6})"
-            return preview
 
         def percentage(value):
             return (
@@ -4055,11 +4037,6 @@ class MainWindow(QMainWindow):
             f"<br><br><b>CLASSIFIED:</b> <span style='color:#00E676'>{classified:,}</span> "
             f"<span style='color:#8195A3'>|</span> "
             f"<b>UNRESOLVED:</b> <span style='color:#FFD740'>{unresolved:,}</span>"
-            f"<br><br><span style='color:#8195A3'>"
-            f"Planar patch IDs: {compact_patch_ids('planar')}<br>"
-            f"Curved patch IDs: {compact_patch_ids('curved')}<br>"
-            f"Uncertain patch IDs: {compact_patch_ids('uncertain')}<br>"
-            f"Invalid patch IDs: {compact_patch_ids('invalid')}</span>"
         )
 
     # ========================================================
