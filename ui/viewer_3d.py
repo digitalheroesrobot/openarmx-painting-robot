@@ -582,6 +582,19 @@ class ProductViewer(QWidget):
             *patch_lines,
             str(stats.get("note", "")),
         ]
+        travel_plan = getattr(self, "trajectory_data", {}).get(
+            "inter_segment_travel_plan", {}
+        ) if isinstance(getattr(self, "trajectory_data", None), dict) else {}
+        if travel_plan:
+            tooltip_lines.extend([
+                "",
+                "SPRAY-OFF INTER-STROKE TRAVEL (straight-line estimate only):",
+                f"Transitions: {int(travel_plan.get('transition_count', 0))}",
+                f"Total travel distance: {float(travel_plan.get('total_distance_mm', 0.0)):.1f} mm",
+                f"Estimated travel time: {float(travel_plan.get('estimated_time_s', 0.0)):.2f} s",
+                f"Safety: {travel_plan.get('safety_status', 'NOT_CHECKED')}",
+                str(travel_plan.get("note", "")),
+            ])
         self.trajectory_path_stats_label.setToolTip("\n".join(tooltip_lines))
 
     # =========================================================
@@ -1600,6 +1613,10 @@ class ProductViewer(QWidget):
         ):
             raise ValueError("Trajectory product transform must contain a rigid rotation.")
         data["parameters"] = parameters
+        travel_plan = trajectory_data.get("inter_segment_travel_plan", {})
+        data["inter_segment_travel_plan"] = (
+            travel_plan if isinstance(travel_plan, dict) else {}
+        )
         self.trajectory_path_statistics = trajectory_data.get(
             "path_statistics", {}
         )
@@ -1856,6 +1873,49 @@ class ProductViewer(QWidget):
                     line_width=3,
                     lighting=False,
                 )
+
+            # Direct links between consecutive strokes are shown separately
+            # in amber. They are spray-OFF visualization estimates only.
+            travel_plan = data.get("inter_segment_travel_plan", {})
+            transitions = travel_plan.get("transitions", [])
+            if transitions:
+                travel_points = []
+                travel_cells = []
+                for transition in transitions:
+                    start = np.asarray(
+                        transition.get("start_point_coordinate_units", []),
+                        dtype=float,
+                    )
+                    end = np.asarray(
+                        transition.get("end_point_coordinate_units", []),
+                        dtype=float,
+                    )
+                    if (
+                        start.shape != (3,) or end.shape != (3,)
+                        or not np.all(np.isfinite(start))
+                        or not np.all(np.isfinite(end))
+                    ):
+                        continue
+                    start_world = start @ rotation.T + translation
+                    end_world = end @ rotation.T + translation
+                    point_index = len(travel_points)
+                    travel_points.extend((start_world.tolist(), end_world.tolist()))
+                    travel_cells.extend((2, point_index, point_index + 1))
+                if travel_points:
+                    travel_polydata = pv.PolyData(
+                        np.asarray(travel_points, dtype=float)
+                    )
+                    travel_polydata.lines = np.asarray(
+                        travel_cells, dtype=np.int64
+                    )
+                    self.plotter.add_mesh(
+                        travel_polydata,
+                        color="#FFB454",
+                        line_width=2,
+                        opacity=0.9,
+                        lighting=False,
+                        pickable=False,
+                    )
 
         # Keep the 3D viewport free of diagnostic text. Stage 3 metrics
         # belong in the Summary panel, not over the product geometry.
