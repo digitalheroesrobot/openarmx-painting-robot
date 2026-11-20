@@ -700,6 +700,8 @@ class ProductViewer(QWidget):
         if self._rotation_drag_axis is None:
             return
 
+        from vtkmodules.vtkCommonTransforms import vtkTransform
+
         current = self._screen_vector_from_cad_origin(
             display_x, display_y, self._rotation_drag_axis
         )
