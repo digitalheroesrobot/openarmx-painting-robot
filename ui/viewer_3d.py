@@ -514,8 +514,10 @@ class ProductViewer(QWidget):
         # Make the selected engagement point the rotation pivot. Subsequent
         # manual orientation changes then keep the hook point fixed in World.
         cad_origin_world = self._actor_matrix_array()[:3, 3].copy()
-        self.rotation_pivot = cad_point.copy()
-        self._pose_actor.SetOrigin(*self.rotation_pivot.tolist())
+        # Keep the STEP CAD origin as the rotation pivot even when a
+        # separate hook engagement point has been selected.
+        self.rotation_pivot = np.zeros(3, dtype=float)
+        self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
         self._set_cad_origin_world_position(cad_origin_world)
         self._hook_pick_active = False
         try:
@@ -691,8 +693,8 @@ class ProductViewer(QWidget):
             "selected_hook_point_cad": None if self.selected_hook_point_cad is None else self.selected_hook_point_cad.tolist(),
             "hook_engagement_point_world_xyz": None if self.hook_world_position is None else self.hook_world_position.tolist(),
             "product_frame": "PRODUCT_CAD",
-            "rotation_pivot": "HOOK_ENGAGEMENT_POINT" if self.selected_hook_point_cad is not None else "PRODUCT_BOUNDING_BOX_CENTER",
-            "rotation_pivot_cad": self.rotation_pivot.tolist(),
+            "rotation_pivot": "STEP_CAD_ORIGIN",
+            "rotation_pivot_cad": [0.0, 0.0, 0.0],
             "position_world_xyz_source_units": matrix[:3, 3].tolist(),
             "roll_pitch_yaw_world_xyz_deg": self._rotation_to_rpy(rotation).tolist(),
             "rotation_matrix_3x3": rotation.tolist(),
@@ -737,8 +739,10 @@ class ProductViewer(QWidget):
             self._pose_actor.SetPosition(0.0, 0.0, 0.0)
             self._pose_actor.SetOrientation(0.0, 0.0, 180.0)
             self._pose_actor.SetScale(1.0, 1.0, 1.0)
-            self.rotation_pivot = self.product_center_pivot.copy()
-            self._pose_actor.SetOrigin(*self.rotation_pivot.tolist())
+            self.rotation_pivot = np.zeros(3, dtype=float)
+            self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
+            self._pose_actor.SetPosition(0.0, 0.0, 0.0)
+            self._pose_actor.SetOrientation(0.0, 0.0, 0.0)
             self._set_cad_origin_world_position(np.zeros(3, dtype=float))
             self.selected_hook_point_cad = None
             self.hook_world_position = None
