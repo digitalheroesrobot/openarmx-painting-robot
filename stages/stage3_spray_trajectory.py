@@ -2947,6 +2947,30 @@ def run_stage3_numerical_tests() -> dict:
     assert np.all((test_speeds >= 40.0) & (test_speeds <= 150.0))
     assert test_speeds[2] < 150.0
     assert np.all(np.diff(test_times) >= 0.0)
+
+    curve_test_normals = np.asarray([
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0],
+        [0.0, math.sin(math.radians(45.0)), math.cos(math.radians(45.0))],
+        [0.0, math.sin(math.radians(45.0)), math.cos(math.radians(45.0))],
+        [0.0, math.sin(math.radians(45.0)), math.cos(math.radians(45.0))],
+    ], dtype=np.float64)
+    curve_speeds, _, _ = _calculate_adaptive_travel_speed_profile(
+        np.asarray([
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [30.0, 0.0, 0.0],
+            [40.0, 0.0, 0.0],
+        ], dtype=np.float64),
+        curve_test_normals,
+        np.zeros(5, dtype=np.int64),
+        "mm",
+        base_speed_mm_s=150.0,
+        minimum_speed_mm_s=40.0,
+        maximum_acceleration_mm_s2=500.0,
+    )
+    assert curve_speeds[2] < 150.0
     assert speed_metadata["method"].startswith("normal_curvature_and_path_turning")
 
     return {
@@ -2975,6 +2999,7 @@ def run_stage3_numerical_tests() -> dict:
             "planar_raster_spacing_and_clipping": "PASS",
             "planar_raster_standoff_preserved": "PASS",
             "adaptive_speed_turn_reduction": "PASS",
+            "adaptive_speed_curvature_reduction": "PASS",
             "adaptive_speed_time_monotonicity": "PASS",
         },
         "sample_count": int(sample_count),
