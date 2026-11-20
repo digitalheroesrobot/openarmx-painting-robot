@@ -1482,8 +1482,12 @@ def _generate_surface_following_raster_for_patch(
                 2.0 * float(track_spacing_coordinate_units),
                 1e-9,
             )
+            lane_nozzle_points_for_split = (
+                lane_points
+                + float(standoff_coordinate_units) * lane_normals
+            )
             lane_chunks = _split_raster_lane_at_discontinuities(
-                lane_points,
+                lane_nozzle_points_for_split,
                 maximum_step_coordinate_units,
             )
             for chunk_index, (chunk_start, chunk_end) in enumerate(lane_chunks):
@@ -1535,6 +1539,13 @@ def _generate_surface_following_raster_for_patch(
                         len(lane_chunks) > 1
                     ),
                     "split_chunk_index": int(chunk_index),
+                    "split_trigger_distance_coordinate_units": (
+                        float(np.linalg.norm(
+                            lane_nozzle_points_for_split[chunk_start]
+                            - lane_nozzle_points_for_split[chunk_start - 1]
+                        ))
+                        if chunk_index > 0 else None
+                    ),
                     "maximum_allowed_step_coordinate_units": float(
                         maximum_step_coordinate_units
                     ),
