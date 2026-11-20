@@ -2124,12 +2124,38 @@ def _order_trajectory_with_planar_raster(
         raise RuntimeError("No trajectory segments were generated.")
 
     result = {key: np.concatenate(values, axis=0) for key, values in collected.items()}
+    step_geometry_report = mesh.metadata.get("step_geometry_report", {})
+    step_topology = (
+        step_geometry_report.get("topology", {})
+        if isinstance(step_geometry_report, dict) else {}
+    )
+    step_brep = (
+        step_topology.get("face_edge_adjacency", {})
+        if isinstance(step_topology, dict) else {}
+    )
+    step_face_adjacency = (
+        step_brep.get("face_adjacency")
+        if isinstance(step_brep, dict) else None
+    )
+    triangle_step_face_ids = mesh.metadata.get("triangle_face_ids")
+    has_exact_step_topology = (
+        isinstance(triangle_step_face_ids, (list, tuple, np.ndarray))
+        and isinstance(step_face_adjacency, dict)
+        and bool(step_face_adjacency)
+    )
     result, segment_metadata, surface_boundary_splits = (
         _split_strokes_at_surface_discontinuities(
             mesh=mesh,
             trajectory=result,
             segment_metadata=segment_metadata,
             maximum_normal_change_deg=30.0,
+            source_face_ids=(
+                np.asarray(triangle_step_face_ids, dtype=np.int64)
+                if has_exact_step_topology else None
+            ),
+            source_face_adjacency=(
+                step_face_adjacency if has_exact_step_topology else None
+            ),
         )
     )
     result, segment_metadata, travel_ordering = _optimize_stroke_order_for_travel(
@@ -2415,12 +2441,14 @@ def _split_strokes_at_surface_discontinuities(
     trajectory: dict,
     segment_metadata: list[dict],
     maximum_normal_change_deg: float = 30.0,
+    source_face_ids: np.ndarray | None = None,
+    source_face_adjacency: dict | None = None,
 ) -> tuple[dict, list[dict], dict]:
-    """End spray strokes at non-adjacent source faces or sharp mesh creases.
+    """Split strokes using exact STEP face topology when it is available.
 
-    No samples, positions, or normals are changed. Only segment boundaries are
-    inserted, so the gun is OFF during transitions that should not be painted
-    as one continuous stroke.
+    Trajectory face indices refer to display-mesh triangles. source_face_ids
+    maps those triangles to original STEP Face IDs. Exact B-Rep adjacency is
+    authoritative; triangle vertex sharing is only a fallback.
     """
     face_indices = np.asarray(trajectory["face_indices"], dtype=np.int64)
     old_segments = np.asarray(trajectory["segment_ids"], dtype=np.int64)
@@ -2431,6 +2459,38 @@ def _split_strokes_at_surface_discontinuities(
         raise ValueError("Maximum normal change must be in (0, 180] degrees.")
 
     face_normals = np.asarray(mesh.face_normals, dtype=np.float64)
+    use_exact_brep = source_face_ids is not None and isinstance(source_face_adjacency, dict)
+    cad_face_ids = None
+    brep_adjacency_pairs: set[tuple[int, int]] = set()
+    cad_face_normals: dict[int, np.ndarray] = {}
+    if use_exact_brep:
+        cad_face_ids = np.asarray(source_face_ids, dtype=np.int64)
+        if cad_face_ids.ndim != 1 or len(cad_face_ids) != len(mesh.faces):
+            raise ValueError("source_face_ids must map every display triangle to one STEP Face ID.")
+        for face_key, neighbors in source_face_adjacency.items():
+            try:
+                face_id = int(face_key)
+                for neighbor in neighbors:
+                    neighbor_id = int(neighbor)
+                    if face_id != neighbor_id:
+                        brep_adjacency_pairs.add(tuple(sorted((face_id, neighbor_id))))
+            except (TypeError, ValueError):
+                continue
+        if not brep_adjacency_pairs:
+            raise ValueError("Exact STEP adjacency was supplied but contains no adjacent face pairs.")
+        # Area-weighted normals per original STEP face prevent tessellation
+        # facets within one curved CAD face from being treated as CAD creases.
+        triangle_areas = np.asarray(mesh.area_faces, dtype=np.float64)
+        for cad_id in np.unique(cad_face_ids):
+            triangle_indices = np.flatnonzero(cad_face_ids == cad_id)
+            weighted = np.sum(
+                face_normals[triangle_indices] * triangle_areas[triangle_indices, None],
+                axis=0,
+            )
+            magnitude = float(np.linalg.norm(weighted))
+            if magnitude > NORMAL_EPSILON:
+                cad_face_normals[int(cad_id)] = weighted / magnitude
+
     metadata_by_id = {
         int(item["segment_id"]): dict(item)
         for item in segment_metadata
@@ -2454,17 +2514,32 @@ def _split_strokes_at_surface_discontinuities(
                 and 0 <= face_b < len(face_normals)
             ):
                 continue
-            if face_a == face_b:
-                continue
-            shared_vertices = int(
-                len(np.intersect1d(mesh.faces[face_a], mesh.faces[face_b]))
-            )
-            if shared_vertices == 0:
-                split_after.append(index + 1)
-                split_reasons["non_adjacent_source_faces"] += 1
-                continue
-            normal_a = face_normals[face_a]
-            normal_b = face_normals[face_b]
+
+            if use_exact_brep:
+                cad_face_a = int(cad_face_ids[face_a])
+                cad_face_b = int(cad_face_ids[face_b])
+                if cad_face_a == cad_face_b:
+                    continue
+                if tuple(sorted((cad_face_a, cad_face_b))) not in brep_adjacency_pairs:
+                    split_after.append(index + 1)
+                    split_reasons["non_adjacent_source_faces"] += 1
+                    continue
+                normal_a = cad_face_normals.get(cad_face_a)
+                normal_b = cad_face_normals.get(cad_face_b)
+                if normal_a is None or normal_b is None:
+                    continue
+            else:
+                if face_a == face_b:
+                    continue
+                shared_vertices = int(
+                    len(np.intersect1d(mesh.faces[face_a], mesh.faces[face_b]))
+                )
+                if shared_vertices == 0:
+                    split_after.append(index + 1)
+                    split_reasons["non_adjacent_source_faces"] += 1
+                    continue
+                normal_a = face_normals[face_a]
+                normal_b = face_normals[face_b]
             length_a = float(np.linalg.norm(normal_a))
             length_b = float(np.linalg.norm(normal_b))
             if length_a <= NORMAL_EPSILON or length_b <= NORMAL_EPSILON:
@@ -2522,7 +2597,15 @@ def _split_strokes_at_surface_discontinuities(
             raise ValueError(f"{key} does not match trajectory sample count.")
 
     stats = {
-        "method": "split_at_non_adjacent_faces_and_sharp_mesh_creases",
+        "method": (
+            "split_at_exact_step_brep_boundaries_and_sharp_face_creases"
+            if use_exact_brep else
+            "split_at_non_adjacent_mesh_faces_and_sharp_mesh_creases"
+        ),
+        "adjacency_authority": (
+            "EXACT_STEP_BREP_SHARED_EDGES"
+            if use_exact_brep else "DISPLAY_MESH_SHARED_EDGES_FALLBACK"
+        ),
         "maximum_source_face_normal_change_deg": threshold,
         "original_stroke_count": int(len(starts)),
         "resulting_stroke_count": int(len(blocks)),
@@ -5510,6 +5593,27 @@ def run_stage3_numerical_tests() -> dict:
         split_test_trajectory["surface_points"],
     )
     assert len(split_test_metadata) == 3
+
+    # Test 24B: exact STEP adjacency overrides display-triangle vertex sharing.
+    exact_topology_trajectory = dict(split_test_trajectory)
+    exact_topology_result, exact_topology_metadata, exact_topology_stats = (
+        _split_strokes_at_surface_discontinuities(
+            split_test_mesh,
+            exact_topology_trajectory,
+            [{"segment_id": 0, "patch_id": 9, "path_type": "exact_topology_test"}],
+            maximum_normal_change_deg=30.0,
+            source_face_ids=np.asarray([101, 102, 103], dtype=np.int64),
+            source_face_adjacency={"101": [102], "102": [101], "103": []},
+        )
+    )
+    assert exact_topology_stats["adjacency_authority"] == "EXACT_STEP_BREP_SHARED_EDGES"
+    assert exact_topology_stats["split_transition_counts"]["non_adjacent_source_faces"] == 1
+    assert exact_topology_stats["added_stroke_count"] == 1
+    assert np.array_equal(
+        exact_topology_result["surface_points"],
+        exact_topology_trajectory["surface_points"],
+    )
+    assert len(exact_topology_metadata) == 2
 
     # --------------------------------------------------------
     # Test 24C: Continuity diagnostics identify exact source samples and faces.
