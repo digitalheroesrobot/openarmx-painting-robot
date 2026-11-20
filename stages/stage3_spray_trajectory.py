@@ -1575,6 +1575,20 @@ def generate_spray_trajectory(
             "sampling_spacing_mm": sampling_spacing_mm,
             "spray_angle_deg": spray_angle_deg,
             "sprayer_profile": profile_data,
+            "product_transform_4x4": product_transform_matrix.tolist(),
+            "product_coordinate_frame": "PRODUCT_CAD",
+            "world_coordinate_frame": "WORLD_XYZ",
+            "nozzle_frame_convention": {
+                "matrix_columns": ["X", "Y", "Z"],
+                "Z_axis": "spray direction from nozzle toward surface",
+                "X_axis": "PRODUCT_CAD +X projected onto plane normal to Z; +Y fallback",
+                "status": (
+                    "PROVISIONAL_GEOMETRIC_FRAME"
+                    if orientation_info["orientation_reliable"]
+                    else "REVIEW_REQUIRED_OUTWARD_NORMAL_UNCERTAIN"
+                ),
+                "tcp_calibration": "NOT_APPLIED",
+            },
             "spray_width_at_standoff_mm": spray_width_at_standoff_mm,
             "nominal_track_spacing_from_overlap_mm": nominal_track_spacing_mm,
             "coordinate_unit": source_unit,
@@ -1594,6 +1608,12 @@ def generate_spray_trajectory(
         "surface_normals": ordered["surface_normals"],
         "nozzle_points": ordered["nozzle_points"],
         "spray_directions": ordered["spray_directions"],
+        "nozzle_frames": ordered["nozzle_frames"],
+        "surface_points_world": world_surface_points,
+        "surface_normals_world": world_surface_normals,
+        "nozzle_points_world": world_nozzle_points,
+        "spray_directions_world": world_spray_directions,
+        "nozzle_frames_world": world_nozzle_frames,
         "face_indices": ordered["face_indices"],
         "patch_ids": ordered["patch_ids"],
         "segment_ids": ordered["segment_ids"],
@@ -1707,6 +1727,15 @@ def _build_saved_report(
                 "sample_index",
             ],
             "array_file": "trajectory_points.npy",
+            "world_array_file": "trajectory_points_world.npy",
+            "nozzle_frames_file": "trajectory_nozzle_frames.npy",
+            "world_nozzle_frames_file": "trajectory_nozzle_frames_world.npy",
+            "nozzle_frame_columns": [
+                "x_axis_x", "x_axis_y", "x_axis_z",
+                "y_axis_x", "y_axis_y", "y_axis_z",
+                "z_axis_x", "z_axis_y", "z_axis_z",
+            ],
+            "world_coordinate_frame": "WORLD_XYZ",
             "column_compatibility": (
                 "The 16-column order is unchanged from the previous "
                 "Stage 3 format. Coordinate columns now explicitly "
@@ -1719,8 +1748,10 @@ def _build_saved_report(
             "Fixture and hook clearance are not checked.",
             "Spray coverage is not verified.",
             "Coating thickness is not calculated.",
-            "No actual spray-gun CAD or TCP offset is applied.",
-            "No robot-base coordinate transformation is applied.",
+            "No actual spray-gun CAD or calibrated TCP offset is applied.",
+            "The nozzle roll axis is a provisional geometric reference, not a manufacturer-defined tool frame.",
+            "Open or non-watertight mesh normals may have uncertain outward direction and require review.",
+            "The product CAD-to-World rigid transform is recorded and world-coordinate arrays are exported.",
             "Fan width and overlap are recorded as planning inputs; raster spray lanes are not yet generated.",
             "Travel movements between separate patches are not generated.",
             "Bend and cylinder estimates do not yet modify nozzle orientation.",
@@ -1745,6 +1776,7 @@ def execute_stage3(
     stage1_report: dict | None = None,
     coordinate_unit: str | None = None,
     sprayer_profile: dict | None = None,
+    product_transform: np.ndarray | list | None = None,
 ) -> dict:
 
     if stage2_result is not None:
@@ -1777,6 +1809,7 @@ def execute_stage3(
         stage1_report=stage1_report,
         coordinate_unit=coordinate_unit,
         sprayer_profile=sprayer_profile,
+        product_transform=product_transform,
     )
 
     stage_directory = result_manager.stage_dir(
@@ -1807,6 +1840,30 @@ def execute_stage3(
     array_path = stage_directory / "trajectory_points.npy"
     np.save(array_path, trajectory_array)
 
+    world_trajectory_array = np.column_stack([
+        trajectory["surface_points_world"],
+        trajectory["surface_normals_world"],
+        trajectory["nozzle_points_world"],
+        trajectory["spray_directions_world"],
+        trajectory["face_indices"].astype(np.float64),
+        trajectory["patch_ids"].astype(np.float64),
+        trajectory["segment_ids"].astype(np.float64),
+        sample_indices,
+    ])
+    if world_trajectory_array.shape != (sample_count, 16):
+        raise RuntimeError("World trajectory NPY array must contain exactly 16 columns.")
+    world_array_path = stage_directory / "trajectory_points_world.npy"
+    np.save(world_array_path, world_trajectory_array)
+
+    nozzle_frames_path = stage_directory / "trajectory_nozzle_frames.npy"
+    np.save(nozzle_frames_path, trajectory["nozzle_frames"].reshape(sample_count, 9))
+
+    world_nozzle_frames_path = stage_directory / "trajectory_nozzle_frames_world.npy"
+    np.save(
+        world_nozzle_frames_path,
+        trajectory["nozzle_frames_world"].reshape(sample_count, 9),
+    )
+
     report = _build_saved_report(
         trajectory=trajectory,
         stl_path=stl_path,
@@ -1827,6 +1884,9 @@ def execute_stage3(
         "report": report,
         "json_path": json_path,
         "array_path": array_path,
+        "world_array_path": world_array_path,
+        "nozzle_frames_path": nozzle_frames_path,
+        "world_nozzle_frames_path": world_nozzle_frames_path,
         "sample_count": sample_count,
         "stage_directory": stage_directory,
     }
