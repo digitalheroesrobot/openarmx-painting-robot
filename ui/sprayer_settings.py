@@ -147,118 +147,130 @@ class SprayPatternPreview(QWidget):
         width = self.width()
         height = self.height()
         cx = width * 0.50
-        tip_y = 82.0
-        bottom_y = max(tip_y + 50.0, height - 112.0)
+        tip_y = 76.0
+        surface_y = max(tip_y + 70.0, height - 132.0)
 
         profile = self.profile
         standoff = max(1.0, float(profile.get("standoff_mm", 180.0)))
-        nozzle_length = max(0.0, float(profile.get("nozzle_length_mm", 25.0)))
-        nozzle_orifice = max(0.0, float(profile.get("nozzle_orifice_mm", 0.0)))
-        angle = max(1.0, min(150.0, float(profile.get("spray_cone_angle_deg", 74.0))))
-        reference_distance = max(1.0, float(profile.get("fan_reference_distance_mm", 200.0)))
+        angle = max(
+            1.0,
+            min(150.0, float(profile.get("spray_cone_angle_deg", 74.0))),
+        )
+        overlap = max(
+            0.0, min(90.0, float(profile.get("overlap_percent", 50.0)))
+        )
+        sample_spacing = max(
+            0.1, float(profile.get("sampling_spacing_mm", 20.0))
+        )
         pattern_type = str(profile.get("pattern_type", "flat_fan"))
 
-        half_width_mm = standoff * math.tan(math.radians(angle * 0.5))
-        spray_width_mm = 2.0 * half_width_mm
-        visual_half_width = min(width * 0.40, max(12.0, spray_width_mm * 0.34))
-        body_length = max(
-            nozzle_length,
-            float(profile.get("gun_body_length_mm", 0.0) or 0.0),
+        spray_width_mm = (
+            2.0 * standoff * math.tan(math.radians(angle * 0.5))
         )
-        visual_nozzle_length = min(42.0, max(8.0, body_length * 0.35))
-        body_diameter = float(profile.get("gun_body_diameter_mm", 0.0) or 0.0)
-        visual_body_width = (
-            min(52.0, max(26.0, body_diameter * 0.45))
-            if body_diameter > 0.0 else 36.0
-        )
-        visual_orifice_width = min(18.0, max(4.0, nozzle_orifice * 8.0))
-        nozzle_top = tip_y - visual_nozzle_length
+        track_pitch_mm = spray_width_mm * (1.0 - overlap / 100.0)
 
-        painter.setPen(QPen(QColor("#B7CAD5"), 2))
-        painter.setBrush(QColor("#344B5A"))
-        painter.drawRoundedRect(
-            int(cx - visual_body_width * 0.5),
-            int(nozzle_top - 32),
-            int(visual_body_width),
-            int(visual_nozzle_length + 32),
-            7,
-            7,
-        )
-        painter.setPen(QPen(QColor("#DCEAF1"), 2))
-        painter.drawLine(int(cx), int(nozzle_top - 22), int(cx), int(nozzle_top - 2))
-        painter.setPen(QPen(QColor("#00E5FF"), 3))
-        painter.drawLine(
-            int(cx - visual_orifice_width * 0.5),
-            int(nozzle_top),
-            int(cx + visual_orifice_width * 0.5),
-            int(nozzle_top),
-        )
-        painter.drawLine(int(cx), int(nozzle_top), int(cx), int(tip_y))
+        # Schematic scale: retain enough room to show the center pass and
+        # its two neighboring passes without clipping the spray envelopes.
+        max_half_width_px = max(20.0, min(width * 0.18, 78.0))
+        visual_half_width = max_half_width_px
+        pitch_px = visual_half_width * 2.0 * (1.0 - overlap / 100.0)
+        visual_depth = surface_y - tip_y
 
-        painter.setPen(QPen(QColor("#00E5FF"), 1.5))
-        painter.setBrush(QColor(0, 190, 220, 55))
-        if pattern_type == "round_cone":
-            polygon = QPolygon([
-                self._point(cx, tip_y),
-                self._point(cx - visual_half_width, bottom_y),
-                self._point(cx + visual_half_width, bottom_y),
+        def envelope_polygon(center_x):
+            if pattern_type == "round_cone":
+                return QPolygon([
+                    self._point(center_x, tip_y),
+                    self._point(center_x - visual_half_width, surface_y),
+                    self._point(center_x + visual_half_width, surface_y),
+                ])
+            return QPolygon([
+                self._point(center_x - 5, tip_y),
+                self._point(center_x + 5, tip_y),
+                self._point(center_x + visual_half_width, surface_y),
+                self._point(center_x - visual_half_width, surface_y),
             ])
-            painter.drawPolygon(polygon)
-            painter.setPen(QPen(QColor("#61EFFF"), 1.5, Qt.DashLine))
-            painter.drawEllipse(
-                int(cx - visual_half_width),
-                int(bottom_y - 12),
-                int(visual_half_width * 2),
-                24,
-            )
-        else:
-            painter.drawPolygon(QPolygon([
-                self._point(cx - 7, tip_y),
-                self._point(cx + 7, tip_y),
-                self._point(cx + visual_half_width, bottom_y),
-                self._point(cx - visual_half_width, bottom_y),
-            ]))
-            painter.setPen(QPen(QColor("#61EFFF"), 1.5, Qt.DashLine))
-            painter.drawLine(
-                int(cx - visual_half_width), int(bottom_y),
-                int(cx + visual_half_width), int(bottom_y)
-            )
 
+        # Neighboring passes are outlines; the center pass is emphasized.
+        for offset in (-pitch_px, pitch_px):
+            painter.setPen(QPen(QColor("#4C9EAE"), 1.4, Qt.DashLine))
+            painter.setBrush(QColor(0, 150, 180, 18))
+            painter.drawPolygon(envelope_polygon(cx + offset))
+
+        painter.setPen(QPen(QColor("#00E5FF"), 2))
+        painter.setBrush(QColor(0, 190, 220, 62))
+        painter.drawPolygon(envelope_polygon(cx))
+
+        # Nozzle tip and spray centerline are references only; mechanical
+        # nozzle dimensions do not affect the trajectory envelope.
+        painter.setPen(QPen(QColor("#DCEAF1"), 2))
+        painter.drawLine(int(cx), int(tip_y - 18), int(cx), int(tip_y - 2))
+        painter.setBrush(QColor("#00E5FF"))
+        painter.drawEllipse(int(cx - 5), int(tip_y - 5), 10, 10)
         painter.setPen(QPen(QColor("#A9C2D0"), 1, Qt.DashLine))
-        painter.drawLine(int(cx), int(tip_y), int(cx), int(bottom_y))
+        painter.drawLine(int(cx), int(tip_y + 4), int(cx), int(surface_y))
+
+        # Surface reference and sample-spacing markers.
+        painter.setPen(QPen(QColor("#DCEAF1"), 2))
+        painter.drawLine(12, int(surface_y), width - 12, int(surface_y))
+        painter.setPen(QPen(QColor("#00F5A0"), 1.5))
+        painter.setBrush(QColor("#00F5A0"))
+        sample_count = max(
+            2, min(14, int(round(spray_width_mm / sample_spacing)) + 1)
+        )
+        for index in range(sample_count):
+            ratio = index / max(1, sample_count - 1)
+            x = cx - visual_half_width + ratio * 2.0 * visual_half_width
+            painter.drawEllipse(int(x - 2), int(surface_y - 3), 4, 6)
+
+        # Dimension arrows for spray width and adjacent-track spacing.
+        painter.setPen(QPen(QColor("#00E5FF"), 1.5))
+        painter.drawLine(
+            int(cx - visual_half_width), int(surface_y + 10),
+            int(cx + visual_half_width), int(surface_y + 10),
+        )
+        painter.drawLine(
+            int(cx - visual_half_width), int(surface_y + 5),
+            int(cx - visual_half_width), int(surface_y + 15),
+        )
+        painter.drawLine(
+            int(cx + visual_half_width), int(surface_y + 5),
+            int(cx + visual_half_width), int(surface_y + 15),
+        )
+
+        pitch_start = cx + visual_half_width
+        pitch_end = pitch_start + pitch_px
+        painter.setPen(QPen(QColor("#FFB000"), 1.5))
+        painter.drawLine(
+            int(pitch_start), int(surface_y + 25),
+            int(pitch_end), int(surface_y + 25),
+        )
+        painter.drawLine(
+            int(pitch_start), int(surface_y + 20),
+            int(pitch_start), int(surface_y + 30),
+        )
+        painter.drawLine(
+            int(pitch_end), int(surface_y + 20),
+            int(pitch_end), int(surface_y + 30),
+        )
 
         painter.setPen(QColor("#EAF7FC"))
-        painter.drawText(14, 24, "SPRAY ENVELOPE PREVIEW")
+        painter.drawText(14, 24, "TRAJECTORY SPRAY ENVELOPE")
         painter.setPen(QColor("#00E5FF"))
-        painter.drawText(14, 45, str(profile.get("technology", "Sprayer")))
-
+        painter.drawText(14, 45, f"WORKING DISTANCE: {standoff:.1f} mm")
         painter.setPen(QColor("#EAF7FC"))
-        width_label = (
-            "SPRAY DIAMETER"
-            if pattern_type == "round_cone"
-            else "FAN WIDTH"
-        )
         painter.drawText(
-            14, int(bottom_y + 24),
-            f"{width_label} @ {standoff:.0f} mm: {spray_width_mm:.1f} mm"
+            14, int(surface_y + 48),
+            f"SPRAY WIDTH: {spray_width_mm:.1f} mm  |  ANGLE: {angle:.1f} deg"
         )
+        painter.setPen(QColor("#FFB000"))
         painter.drawText(
-            14, int(bottom_y + 44),
-            f"FULL INCLUDED ANGLE: {angle:.1f} deg"
+            14, int(surface_y + 68),
+            f"TRACK PITCH: {track_pitch_mm:.1f} mm  |  OVERLAP: {overlap:.1f}%"
         )
+        painter.setPen(QColor("#00F5A0"))
         painter.drawText(
-            14, int(bottom_y + 64),
-            f"NOZZLE LENGTH: {nozzle_length:.1f} mm"
-        )
-        painter.drawText(
-            14, int(bottom_y + 84),
-            f"NOZZLE ORIFICE: {nozzle_orifice:.2f} mm"
-        )
-        painter.setPen(QColor("#8FA8B7"))
-        painter.drawText(
-            14, height - 14,
-            f"Reference fan width @ {reference_distance:.0f} mm: "
-            f"{2.0 * reference_distance * math.tan(math.radians(angle * 0.5)):.1f} mm"
+            14, int(surface_y + 88),
+            f"SURFACE SAMPLE SPACING: {sample_spacing:.1f} mm"
         )
         painter.end()
 
@@ -270,6 +282,12 @@ class SprayPatternPreview(QWidget):
 
 class SprayerSettingsDialog(QDialog):
     """Profile editor with immediate spray-envelope preview and JSON import/export."""
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def __init__(
         self,
@@ -459,6 +477,13 @@ class SprayerSettingsDialog(QDialog):
         self.import_button.clicked.connect(self._import_profile)
         self.export_button.clicked.connect(self._export_profile)
         cancel_button.clicked.connect(self.reject)
+        # Enter must never trigger QDialog's implicit accept behavior.
+        for button in (
+            self.save_button, self.save_as_button, self.import_button,
+            self.export_button, cancel_button,
+        ):
+            button.setAutoDefault(False)
+            button.setDefault(False)
         root.addLayout(actions)
 
         self.setStyleSheet("""
@@ -586,7 +611,9 @@ class SprayerSettingsDialog(QDialog):
             profile = self._collect_profile()
             self._save_current_to_config(profile)
             self.selected_profile = deepcopy(profile)
-            self.accept()
+            self._populate_profiles()
+            self.profile_selector.setCurrentText(profile["name"])
+            self._refresh_preview()
         except Exception as exc:
             QMessageBox.warning(self, "Sprayer Profile", str(exc))
 
@@ -619,7 +646,7 @@ class SprayerSettingsDialog(QDialog):
             self.name_edit.setText(profile["name"])
             self.current_profile = deepcopy(profile)
             self.selected_profile = deepcopy(profile)
-            self.accept()
+            self._refresh_preview()
         except Exception as exc:
             QMessageBox.warning(self, "Sprayer Profile", str(exc))
 
