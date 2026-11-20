@@ -136,6 +136,7 @@ class ProductViewer(QWidget):
             "frames": True,
         }
         self.trajectory_product_transform = np.eye(4, dtype=float)
+        self._last_product_transform = np.eye(4, dtype=float)
 
         self.plotter = QtInteractor(self)
 
@@ -669,9 +670,14 @@ class ProductViewer(QWidget):
 
     def _actor_matrix_array(self):
         if self._pose_actor is None:
-            return np.eye(4, dtype=float)
+            return self._last_product_transform.copy()
         matrix = self._pose_actor.GetMatrix()
-        return np.array([[matrix.GetElement(row, col) for col in range(4)] for row in range(4)], dtype=float)
+        values = np.array(
+            [[matrix.GetElement(row, col) for col in range(4)] for row in range(4)],
+            dtype=float,
+        )
+        self._last_product_transform = values.copy()
+        return values
 
     def get_product_transform(self):
         """Return the current CAD-to-World actor transform as a detached 4x4 array."""
@@ -1014,6 +1020,8 @@ class ProductViewer(QWidget):
     # =========================================================
 
     def show_product(self, mesh):
+        self._last_product_transform = np.eye(4, dtype=float)
+        self.trajectory_product_transform = np.eye(4, dtype=float)
         self.current_mesh = self._prepare_product_mesh(mesh)
 
         self.patch_labels = None
@@ -1385,6 +1393,7 @@ class ProductViewer(QWidget):
             raise ValueError("Trajectory product transform must contain a rigid rotation.")
         data["parameters"] = parameters
         self.trajectory_product_transform = transform.copy()
+        self._last_product_transform = transform.copy()
 
         if "sample_indices" in trajectory_data:
             sample_indices = np.asarray(
@@ -1953,7 +1962,7 @@ class ProductViewer(QWidget):
                 self.face_status_labels.astype(np.int32)
             )
 
-            self.plotter.add_mesh(
+            self._pose_actor = self.plotter.add_mesh(
                 polydata,
                 scalars="Surface Status",
                 cmap=CLASSIFICATION_COLORS,
@@ -1972,6 +1981,10 @@ class ProductViewer(QWidget):
                     "n_labels": 4,
                     "fmt": "%.0f",
                 },
+            )
+            self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
+            self._pose_actor.SetUserMatrix(
+                self._vtk_matrix_from_numpy(self._last_product_transform)
             )
 
             self._add_classification_legend()
