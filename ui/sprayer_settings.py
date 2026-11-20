@@ -391,6 +391,15 @@ class SprayerSettingsDialog(QDialog):
             "The choice controls trajectory spacing, surface footprint preview "
             "and geometric coverage estimation."
         )
+        self.round_cone_preset = QComboBox()
+        self.round_cone_preset.addItem("Custom angle", None)
+        self.round_cone_preset.addItem("Narrow test — 30°", 30.0)
+        self.round_cone_preset.addItem("Medium test — 45° (recommended start)", 45.0)
+        self.round_cone_preset.addItem("Wide test — 60°", 60.0)
+        self.round_cone_preset.setToolTip(
+            "Engineering test presets only, not universal nozzle standards. "
+            "Select the actual manufacturer's full included angle when known."
+        )
 
         # Put the parameters most often adjusted for trajectory generation
         # at the top of the left-hand form for quick access.
@@ -510,6 +519,14 @@ class SprayerSettingsDialog(QDialog):
         for key, label, minimum, maximum, decimals in field_specs:
             if key in trajectory_keys:
                 add_profile_field(key, label, minimum, maximum, decimals)
+
+        form.addRow("Round-cone test preset", self.round_cone_preset)
+        self.round_cone_preset.currentIndexChanged.connect(
+            self._on_round_cone_preset_changed
+        )
+        self.fields["spray_cone_angle_deg"].valueChanged.connect(
+            self._on_spray_angle_edited
+        )
 
         sprayer_header = QLabel("SPRAYER PROFILE / TECHNICAL SPECIFICATIONS")
         sprayer_header.setStyleSheet(
@@ -634,11 +651,57 @@ class SprayerSettingsDialog(QDialog):
             spin.setValue(float(data.get(key, 0.0) or 0.0))
         self.profile_notes.setText(str(data.get("profile_notes", "")))
         self._loading = False
+        if data.get("pattern_type", "flat_fan") == "round_cone":
+            self._set_round_cone_angle(
+                float(data.get("spray_cone_angle_deg", 45.0))
+            )
         self._update_pattern_controls()
         self._refresh_preview()
 
     def _on_pattern_changed(self, *_):
+        if self._loading:
+            return
+        if self.pattern_combo.currentData() == "round_cone":
+            # The old 74-degree value was an estimated flat-fan equivalent,
+            # not a measured round-cone nozzle angle. Start round-cone tests
+            # at the explicit 45-degree medium preset instead.
+            self._set_round_cone_angle(45.0)
         self._update_pattern_controls()
+        self._refresh_preview()
+
+    def _set_round_cone_angle(self, angle):
+        spin = self.fields["spray_cone_angle_deg"]
+        spin.blockSignals(True)
+        spin.setValue(float(angle))
+        spin.blockSignals(False)
+        preset_index = self.round_cone_preset.findData(float(angle))
+        self.round_cone_preset.blockSignals(True)
+        self.round_cone_preset.setCurrentIndex(
+            preset_index if preset_index >= 0 else 0
+        )
+        self.round_cone_preset.blockSignals(False)
+
+    def _on_round_cone_preset_changed(self, index):
+        if self._loading:
+            return
+        angle = self.round_cone_preset.currentData()
+        if angle is not None:
+            self._set_round_cone_angle(float(angle))
+            self._update_pattern_controls()
+            self._refresh_preview()
+
+    def _on_spray_angle_edited(self, *_):
+        if self._loading:
+            return
+        if self.pattern_combo.currentData() == "round_cone":
+            angle = float(self.fields["spray_cone_angle_deg"].value())
+            preset_index = self.round_cone_preset.findData(angle)
+            self.round_cone_preset.blockSignals(True)
+            self.round_cone_preset.setCurrentIndex(
+                preset_index if preset_index >= 0 else 0
+            )
+            self.round_cone_preset.blockSignals(False)
+            self._update_pattern_controls()
         self._refresh_preview()
 
     def _update_pattern_controls(self):
@@ -646,6 +709,7 @@ class SprayerSettingsDialog(QDialog):
         is_flat_fan = pattern == "flat_fan"
         self.fields["fan_reference_distance_mm"].setEnabled(is_flat_fan)
         self.fields["fan_thickness_at_reference_mm"].setEnabled(is_flat_fan)
+        self.round_cone_preset.setEnabled(not is_flat_fan)
         if is_flat_fan:
             self.pattern_description.setText(
                 "Flat fan: produces a narrow rectangular / fan-shaped footprint. "
