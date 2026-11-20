@@ -1779,7 +1779,12 @@ class ProductViewer(QWidget):
         current = nozzle_points[index]
         if self._playback_nozzle_actor is None:
             radius = max(self._trajectory_arrow_length() * 0.12, 1.0)
-            marker = pv.Sphere(radius=radius, center=current, theta_resolution=16, phi_resolution=12)
+            marker = pv.Sphere(
+                radius=radius,
+                center=(0.0, 0.0, 0.0),
+                theta_resolution=16,
+                phi_resolution=12,
+            )
             self._playback_nozzle_actor = self.plotter.add_mesh(
                 marker,
                 color="#42D9F5",
@@ -1787,6 +1792,7 @@ class ProductViewer(QWidget):
                 lighting=False,
                 pickable=False,
             )
+            self._playback_nozzle_actor.SetPosition(*current.tolist())
         else:
             self._playback_nozzle_actor.SetPosition(*current.tolist())
 
@@ -1816,6 +1822,8 @@ class ProductViewer(QWidget):
             return
         if self._playback_index >= total - 1:
             self._update_trajectory_playback_visuals(0)
+        elif self._playback_path_actor is None and self._playback_nozzle_actor is None:
+            self._update_trajectory_playback_visuals(self._playback_index)
         self.trajectory_play_button.setText("Pause")
         self._playback_timer.start()
 
