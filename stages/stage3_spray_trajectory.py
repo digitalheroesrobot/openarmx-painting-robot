@@ -1465,6 +1465,139 @@ def _generate_surface_following_raster_for_patch(
     }
 
 
+
+def _generate_partitioned_surface_raster_for_patch(
+    mesh: trimesh.Trimesh,
+    face_indices: np.ndarray,
+    normals: np.ndarray,
+    standoff_coordinate_units: float,
+    sample_spacing_coordinate_units: float,
+    track_spacing_coordinate_units: float,
+    max_normal_cone_angle_deg: float = 45.0,
+    diagnostics: dict | None = None,
+) -> dict | None:
+    """
+    Split a broad curved patch into directionally coherent normal cones, then
+    rasterize each cone independently in its own local PCA projection.
+
+    Normals are never flipped or averaged across opposing directions. This is
+    intentionally conservative: if any sub-patch cannot be rasterized, the
+    caller retains the original nearest-neighbor fallback for the whole patch.
+    """
+    face_indices = np.unique(np.asarray(face_indices, dtype=np.int64))
+    if len(face_indices) < 2:
+        if diagnostics is not None:
+            diagnostics["reason"] = "normal_partition_too_few_faces"
+        return None
+
+    patch_normals = np.asarray(normals[face_indices], dtype=np.float64)
+    lengths = np.linalg.norm(patch_normals, axis=1)
+    valid = (
+        np.all(np.isfinite(patch_normals), axis=1)
+        & np.isfinite(lengths)
+        & (lengths > NORMAL_EPSILON)
+    )
+    if not np.all(valid):
+        if diagnostics is not None:
+            diagnostics["reason"] = "normal_partition_invalid_normals"
+        return None
+    unit_normals = patch_normals / lengths[:, None]
+
+    angle = float(max_normal_cone_angle_deg)
+    if not math.isfinite(angle) or not 5.0 <= angle <= 80.0:
+        if diagnostics is not None:
+            diagnostics["reason"] = "normal_partition_invalid_angle"
+        return None
+    cosine_threshold = math.cos(math.radians(angle))
+
+    # Greedy deterministic spherical grouping. Every face is assigned once,
+    # and each group stays within the configured angle of its seed normal.
+    unassigned = np.ones(len(face_indices), dtype=bool)
+    groups = []
+    while np.any(unassigned):
+        seed_local = int(np.flatnonzero(unassigned)[0])
+        seed_normal = unit_normals[seed_local]
+        remaining_local = np.flatnonzero(unassigned)
+        alignment = unit_normals[remaining_local] @ seed_normal
+        members = remaining_local[alignment >= cosine_threshold]
+        if len(members) == 0:
+            members = np.asarray([seed_local], dtype=np.int64)
+        groups.append(face_indices[members])
+        unassigned[members] = False
+
+    if len(groups) <= 1:
+        if diagnostics is not None:
+            diagnostics["reason"] = "normal_partition_did_not_split_patch"
+        return None
+
+    parts = []
+    for group_index, group_faces in enumerate(groups):
+        if len(group_faces) < 2:
+            if diagnostics is not None:
+                diagnostics["reason"] = (
+                    f"normal_partition_subpatch_too_small:{group_index}"
+                )
+            return None
+        part_diagnostics = {}
+        part = _generate_surface_following_raster_for_patch(
+            mesh=mesh,
+            face_indices=group_faces,
+            normals=normals,
+            standoff_coordinate_units=standoff_coordinate_units,
+            sample_spacing_coordinate_units=sample_spacing_coordinate_units,
+            track_spacing_coordinate_units=track_spacing_coordinate_units,
+            diagnostics=part_diagnostics,
+        )
+        if part is None:
+            if diagnostics is not None:
+                diagnostics["reason"] = (
+                    "normal_partition_subpatch_failed:"
+                    + str(part_diagnostics.get("reason", "unknown"))
+                )
+                diagnostics["failed_normal_cluster"] = int(group_index)
+                diagnostics["normal_cluster_count"] = int(len(groups))
+            return None
+        parts.append(part)
+
+    array_keys = (
+        "surface_points",
+        "surface_normals",
+        "nozzle_points",
+        "spray_directions",
+        "nozzle_frames",
+        "face_indices",
+    )
+    combined = {
+        key: np.concatenate([part[key] for part in parts], axis=0)
+        for key in array_keys
+    }
+    segment_ids = []
+    segment_records = []
+    next_segment_id = 0
+    for cluster_index, part in enumerate(parts):
+        local_ids = np.asarray(part["segment_ids"], dtype=np.int64)
+        segment_ids.append(local_ids + next_segment_id)
+        for segment in part["segments"]:
+            segment_records.append({
+                **segment,
+                "segment_id": int(segment["segment_id"] + next_segment_id),
+                "normal_cluster_id": int(cluster_index),
+            })
+        next_segment_id = int(np.max(local_ids)) + next_segment_id + 1
+
+    combined["segment_ids"] = np.concatenate(segment_ids)
+    combined["segments"] = segment_records
+    combined["lane_count"] = int(len(segment_records))
+    combined["normal_cluster_count"] = int(len(parts))
+    combined["normal_cluster_max_angle_deg"] = angle
+    combined["projection_method"] = "normal_cone_partitioned_pca_triangle_barycentric"
+    combined["projection_is_approximate"] = True
+    if diagnostics is not None:
+        diagnostics["normal_cluster_count"] = int(len(parts))
+        diagnostics["reason"] = "recovered_by_normal_cone_partition"
+    return combined
+
+
 def _order_trajectory_with_planar_raster(
     mesh: trimesh.Trimesh,
     face_normals: np.ndarray,
@@ -1528,6 +1661,29 @@ def _order_trajectory_with_planar_raster(
                 track_spacing_coordinate_units=track_spacing_coordinate_units,
                 diagnostics=curved_diagnostics,
             )
+            if curved is None and curved_diagnostics.get("reason") in {
+                "inconsistent_or_cancelling_normals",
+                "folded_patch_opposing_normals",
+            }:
+                partition_diagnostics = {}
+                partitioned = _generate_partitioned_surface_raster_for_patch(
+                    mesh=mesh,
+                    face_indices=patch_faces,
+                    normals=np.asarray(face_normals, dtype=np.float64),
+                    standoff_coordinate_units=standoff_coordinate_units,
+                    sample_spacing_coordinate_units=sampling_spacing_coordinate_units,
+                    track_spacing_coordinate_units=track_spacing_coordinate_units,
+                    max_normal_cone_angle_deg=45.0,
+                    diagnostics=partition_diagnostics,
+                )
+                if partitioned is not None:
+                    curved = partitioned
+                    curved_diagnostics.update(partition_diagnostics)
+                else:
+                    curved_diagnostics["partition_attempt_reason"] = (
+                        partition_diagnostics.get("reason", "unknown")
+                    )
+
             if curved is not None:
                 patch_result = curved
                 curved_rasterized_patch_ids.append(int(patch_id))
@@ -1536,12 +1692,14 @@ def _order_trajectory_with_planar_raster(
                         **segment,
                         "segment_id": int(segment["segment_id"] + next_segment_id),
                         "patch_id": int(patch_id),
+                        "path_type": "curved_surface_raster",
                     })
                 local_segments = curved["segment_ids"] + next_segment_id
             else:
                 fallback_patch_ids.append(int(patch_id))
                 fallback_reason = curved_diagnostics.get(
-                    "reason", "unspecified_rejection"
+                    "partition_attempt_reason",
+                    curved_diagnostics.get("reason", "unspecified_rejection"),
                 )
                 fallback_reason_counts[fallback_reason] = (
                     fallback_reason_counts.get(fallback_reason, 0) + 1
@@ -3542,6 +3700,40 @@ def run_stage3_numerical_tests() -> dict:
     assert np.allclose(
         np.linalg.norm(curved_raster["surface_normals"], axis=1),
         1.0,
+        atol=1e-6,
+    )
+
+
+    # --------------------------------------------------------
+    # Test 22B: Full cylindrical patch is split into coherent normal cones.
+    # --------------------------------------------------------
+    full_cylinder_faces = np.flatnonzero(
+        np.abs(curved_test_normals[:, 2]) < 0.1
+    )
+    partition_diagnostics = {}
+    partitioned_cylinder = _generate_partitioned_surface_raster_for_patch(
+        mesh=curved_test_mesh,
+        face_indices=full_cylinder_faces,
+        normals=curved_test_normals,
+        standoff_coordinate_units=25.0,
+        sample_spacing_coordinate_units=5.0,
+        track_spacing_coordinate_units=8.0,
+        max_normal_cone_angle_deg=45.0,
+        diagnostics=partition_diagnostics,
+    )
+    assert partitioned_cylinder is not None, (
+        "A full cylindrical side patch should rasterize after normal-cone "
+        f"partitioning: {partition_diagnostics}"
+    )
+    assert partitioned_cylinder["normal_cluster_count"] > 1
+    assert len(partitioned_cylinder["surface_points"]) > 10
+    assert np.allclose(
+        np.linalg.norm(
+            partitioned_cylinder["nozzle_points"]
+            - partitioned_cylinder["surface_points"],
+            axis=1,
+        ),
+        25.0,
         atol=1e-6,
     )
 
