@@ -319,19 +319,19 @@ def _calculate_spray_footprint(
     reference_thickness = _safe_float(
         profile.get("fan_thickness_at_reference_mm")
     )
-    if reference_thickness is None or reference_thickness < 0.0:
+    if reference_thickness is not None and reference_thickness < 0.0:
         raise ValueError("Fan thickness cannot be negative.")
 
     reference_distance = _safe_float(
         profile.get("fan_reference_distance_mm")
     )
     if reference_distance is None or reference_distance <= 0.0:
-        if reference_thickness > 0.0:
+        if reference_thickness is not None and reference_thickness > 0.0:
             raise ValueError(
                 "A positive fan reference distance is required when "
                 "measured fan thickness is supplied."
             )
-        # Width-only cone geometry does not use a measured thickness.
+        # Width-only geometry does not require a measured fan thickness.
         reference_distance = float(standoff_mm)
 
     width = (
@@ -358,7 +358,10 @@ def _calculate_spray_footprint(
         "included_angle_deg": float(angle),
         "working_distance_mm": float(standoff_mm),
         "reference_distance_mm": float(reference_distance),
-        "reference_thickness_mm": float(reference_thickness),
+        "reference_thickness_mm": (
+            float(reference_thickness)
+            if reference_thickness is not None else None
+        ),
         "width_mm": float(width),
         "thickness_mm": (
             float(thickness) if thickness is not None else None
@@ -4972,6 +4975,23 @@ def run_stage3_numerical_tests() -> dict:
         rel_tol=1e-10,
     )
     assert flat_fan["thickness_status"] == "scaled_from_measured_reference"
+
+    # --------------------------------------------------------
+    # Test 20B: Missing flat-fan thickness remains explicitly unknown.
+    # --------------------------------------------------------
+    unknown_flat_fan = _calculate_spray_footprint({
+        "pattern_type": "flat_fan",
+        "spray_cone_angle_deg": 60.0,
+        "overlap_percent": 50.0,
+    }, 200.0)
+    assert unknown_flat_fan["reference_thickness_mm"] is None
+    assert unknown_flat_fan["thickness_mm"] is None
+    assert unknown_flat_fan["thickness_status"] == "unknown_conical_approximation_only"
+    assert math.isclose(
+        unknown_flat_fan["width_mm"],
+        2.0 * 200.0 * math.tan(math.radians(30.0)),
+        rel_tol=1e-10,
+    )
 
     # --------------------------------------------------------
     # Test 21: Round-cone footprint is circular.
