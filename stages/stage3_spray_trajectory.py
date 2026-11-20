@@ -2993,6 +2993,13 @@ def generate_spray_trajectory(
         coordinate_unit=source_unit,
         travel_speed_mm_s=base_travel_speed,
     )
+    print(
+        "SPRAY-OFF TRAVEL ESTIMATE | "
+        f"{inter_segment_travel_plan['transition_count']} transitions | "
+        f"{inter_segment_travel_plan['total_distance_mm']:.1f} mm | "
+        f"{inter_segment_travel_plan['estimated_time_s']:.2f} s "
+        "(straight-line estimate; collision check NOT performed)"
+    )
 
     # 9. Calculate path metrics in both coordinate units and mm.
     path_metrics = _calculate_path_metrics(
@@ -3260,6 +3267,7 @@ def _build_saved_report(
         "normal_analysis": trajectory["normal_analysis"],
         "orientation_analysis": trajectory["orientation_analysis"],
         "path_metrics": trajectory["path_metrics"],
+        "inter_segment_travel_plan": trajectory.get("inter_segment_travel_plan", {}),
         "segments": trajectory["segments"],
         "path_statistics": trajectory.get("path_statistics", {}),
         "trajectory_validation": trajectory.get("trajectory_validation", {}),
