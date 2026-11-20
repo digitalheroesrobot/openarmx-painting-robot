@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QPushButton,
     QSlider,
+    QProgressBar,
 )
 from pyvistaqt import QtInteractor
 from vtkmodules.vtkRenderingCore import vtkCellPicker
@@ -146,7 +147,11 @@ class ProductViewer(QWidget):
         self._playback_index = 0
         self._playback_path_actor = None
         self._playback_nozzle_actor = None
+        self._playback_gun_actors = []
         self._playback_cache = None
+        self._trajectory_surface_polydata = None
+        self._trajectory_surface_face_mask = None
+        self._trajectory_surface_base_rgb = None
         self._playback_timer = QTimer(self)
         self._playback_timer.setInterval(100)
         self._playback_timer.timeout.connect(self._advance_trajectory_playback)
@@ -403,6 +408,36 @@ class ProductViewer(QWidget):
         self.trajectory_playback_label.setMinimumWidth(76)
         self.trajectory_playback_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         playback_row.addWidget(self.trajectory_playback_label)
+
+        playback_row.addWidget(QLabel("PAINTED"))
+        self.trajectory_coverage_bar = QProgressBar()
+        self.trajectory_coverage_bar.setRange(0, 1000)
+        self.trajectory_coverage_bar.setValue(0)
+        self.trajectory_coverage_bar.setFormat("%p%")
+        self.trajectory_coverage_bar.setFixedWidth(112)
+        self.trajectory_coverage_bar.setFixedHeight(17)
+        self.trajectory_coverage_bar.setStyleSheet("""
+            QProgressBar {
+                background: #172A35;
+                color: #EAF7FC;
+                border: 1px solid #3B5968;
+                border-radius: 4px;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                background: #D95B43;
+                border-radius: 3px;
+            }
+        """)
+        playback_row.addWidget(self.trajectory_coverage_bar)
+
+        self.trajectory_coverage_label = QLabel("0.0% | 0.000 / 0.000 m²")
+        self.trajectory_coverage_label.setMinimumWidth(190)
+        self.trajectory_coverage_label.setToolTip(
+            "Estimated geometric area reached by the spray envelope. "
+            "This is not a measured coating-thickness or paint-mass result."
+        )
+        playback_row.addWidget(self.trajectory_coverage_label)
 
         playback_row.addWidget(QLabel("Speed"))
         self.trajectory_playback_speed = QDoubleSpinBox()
@@ -1702,16 +1737,27 @@ class ProductViewer(QWidget):
         if hasattr(self, "trajectory_play_button"):
             self.trajectory_play_button.setText("Play")
         if reset:
-            for actor in (self._playback_path_actor, self._playback_nozzle_actor):
-                if actor is not None:
-                    try:
-                        self.plotter.remove_actor(actor, render=False)
-                    except Exception:
-                        pass
+            actors = list(self._playback_gun_actors)
+            actors.extend((self._playback_path_actor, self._playback_nozzle_actor))
+            seen = set()
+            for actor in actors:
+                if actor is None or id(actor) in seen:
+                    continue
+                seen.add(id(actor))
+                try:
+                    self.plotter.remove_actor(actor, render=False)
+                except Exception:
+                    pass
             self._playback_path_actor = None
             self._playback_nozzle_actor = None
+            self._playback_gun_actors = []
             self._playback_index = 0
             self._playback_cache = None
+            if hasattr(self, "trajectory_coverage_bar"):
+                self.trajectory_coverage_bar.setValue(0)
+            if hasattr(self, "trajectory_coverage_label"):
+                self.trajectory_coverage_label.setText("0.0% | 0.000 / 0.000 m²")
+            self._restore_trajectory_surface_base_colors()
             if hasattr(self, "trajectory_playback_slider"):
                 self.trajectory_playback_slider.blockSignals(True)
                 self.trajectory_playback_slider.setValue(0)
@@ -1730,11 +1776,328 @@ class ProductViewer(QWidget):
         transform = self.trajectory_product_transform
         rotation = transform[:3, :3]
         translation = transform[:3, 3]
+        parameters = data.get("parameters", {})
+        profile = parameters.get("sprayer_profile", {})
+        if not isinstance(profile, dict):
+            profile = {}
+
+        nozzle_points = data["nozzle_points"] @ rotation.T + translation
+        spray_directions = data["spray_directions"] @ rotation.T
+        direction_lengths = np.linalg.norm(spray_directions, axis=1)
+        valid_directions = direction_lengths > 1e-12
+        spray_directions[valid_directions] /= direction_lengths[valid_directions, None]
+
+        if "nozzle_frames" in data:
+            nozzle_frames = np.einsum(
+                "ij,njk->nik", rotation, data["nozzle_frames"]
+            )
+        else:
+            nozzle_frames = np.repeat(np.eye(3)[None, :, :], len(nozzle_points), axis=0)
+            for index, direction in enumerate(spray_directions):
+                z_axis = direction / max(float(np.linalg.norm(direction)), 1e-12)
+                reference = np.array([1.0, 0.0, 0.0])
+                x_axis = reference - np.dot(reference, z_axis) * z_axis
+                if np.linalg.norm(x_axis) < 1e-8:
+                    reference = np.array([0.0, 1.0, 0.0])
+                    x_axis = reference - np.dot(reference, z_axis) * z_axis
+                x_axis /= max(float(np.linalg.norm(x_axis)), 1e-12)
+                y_axis = np.cross(z_axis, x_axis)
+                y_axis /= max(float(np.linalg.norm(y_axis)), 1e-12)
+                nozzle_frames[index] = np.column_stack((x_axis, y_axis, z_axis))
+
+        target_face_ids = np.unique(np.asarray(data["face_indices"], dtype=np.int64))
+        faces = np.asarray(self.current_mesh.faces, dtype=np.int64)
+        vertices = np.asarray(self.current_mesh.vertices, dtype=float)
+        triangles = vertices[faces[target_face_ids]]
+        barycentric = np.asarray([
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.5, 0.5, 0.0],
+            [0.5, 0.0, 0.5],
+            [0.0, 0.5, 0.5],
+            [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
+        ], dtype=float)
+        face_samples = np.einsum("sv,fvc->fsc", barycentric, triangles).reshape(-1, 3)
+        face_samples = face_samples @ rotation.T + translation
+
+        face_normals = np.asarray(self.current_mesh.face_normals, dtype=float)[target_face_ids]
+        face_normals = face_normals @ rotation.T
+        face_normals /= np.maximum(
+            np.linalg.norm(face_normals, axis=1, keepdims=True), 1e-12
+        )
+        sample_normals = np.repeat(face_normals, len(barycentric), axis=0)
+        sample_face_ids = np.repeat(target_face_ids, len(barycentric))
+        face_areas = np.asarray(self.current_mesh.area_faces, dtype=float)[target_face_ids]
+        sample_count_per_face = len(barycentric)
+        target_area = float(np.sum(face_areas))
+
+        try:
+            from scipy.spatial import cKDTree
+            surface_tree = cKDTree(face_samples)
+        except Exception:
+            surface_tree = None
+
+        source_unit = self.source_unit
+        mm_per_unit = MM_PER_UNIT.get(source_unit, 1.0)
+        standoff_units = float(parameters.get(
+            "standoff_coordinate_units",
+            float(profile.get("standoff_mm", parameters.get("standoff_mm", 180.0))) / mm_per_unit,
+        ))
+        cone_angle = float(profile.get("spray_cone_angle_deg", 0.0) or 0.0)
+        cone_angle = float(np.clip(cone_angle, 0.0, 150.0))
+        half_angle = math.radians(cone_angle * 0.5)
+        cone_tangent = math.tan(half_angle)
+        cone_cosine = max(math.cos(half_angle), 0.2)
+
+        paint_color_text = str(profile.get("paint_color", "#D95B43")).strip()
+        try:
+            paint_rgb = np.asarray([
+                int(paint_color_text.lstrip("#")[offset:offset + 2], 16)
+                for offset in (0, 2, 4)
+            ], dtype=float)
+        except (ValueError, IndexError):
+            paint_rgb = np.asarray([217.0, 91.0, 67.0], dtype=float)
+
         self._playback_cache = {
-            "nozzle_points": data["nozzle_points"] @ rotation.T + translation,
+            "nozzle_points": nozzle_points,
+            "spray_directions": spray_directions,
+            "nozzle_frames": nozzle_frames,
             "segment_ids": np.asarray(data["segment_ids"], dtype=np.int64),
+            "face_samples": face_samples,
+            "sample_normals": sample_normals,
+            "sample_face_ids": sample_face_ids,
+            "face_areas": face_areas,
+            "target_face_ids": target_face_ids,
+            "target_area": target_area,
+            "target_area_m2": target_area * (mm_per_unit ** 2) / 1_000_000.0,
+            "surface_tree": surface_tree,
+            "coverage_sample_hits": np.zeros(len(face_samples), dtype=bool),
+            "coverage_processed_index": -1,
+            "sample_count_per_face": sample_count_per_face,
+            "cone_tangent": cone_tangent,
+            "cone_cosine": cone_cosine,
+            "standoff_units": max(standoff_units, 1e-9),
+            "paint_rgb": paint_rgb,
+            "profile": dict(profile),
+            "mm_per_unit": mm_per_unit,
         }
         return self._playback_cache
+
+    def _restore_trajectory_surface_base_colors(self):
+        polydata = self._trajectory_surface_polydata
+        base_rgb = self._trajectory_surface_base_rgb
+        if polydata is None or base_rgb is None:
+            return
+        try:
+            polydata.cell_data["Paint Preview RGB"] = base_rgb.copy()
+            array = polydata.GetCellData().GetArray("Paint Preview RGB")
+            if array is not None:
+                array.Modified()
+            polydata.Modified()
+            if self._pose_actor is not None:
+                self._pose_actor.GetMapper().SetInputData(polydata)
+                self._pose_actor.GetMapper().Update()
+        except Exception:
+            pass
+
+    def _mark_surface_samples_from_spray(self, path_index):
+        cache = self._prepare_trajectory_playback_cache()
+        if cache is None or cache["cone_tangent"] <= 0.0:
+            return
+        nozzle = cache["nozzle_points"][path_index]
+        direction = cache["spray_directions"][path_index]
+        if not np.all(np.isfinite(nozzle)) or np.linalg.norm(direction) <= 1e-12:
+            return
+
+        max_axial = cache["standoff_units"] / cache["cone_cosine"] * 1.15
+        search_radius = max_axial / cache["cone_cosine"] * 1.02
+        tree = cache["surface_tree"]
+        if tree is not None:
+            candidates = np.asarray(
+                tree.query_ball_point(nozzle, search_radius), dtype=np.int64
+            )
+        else:
+            delta_all = cache["face_samples"] - nozzle
+            candidates = np.flatnonzero(
+                np.einsum("ij,ij->i", delta_all, delta_all)
+                <= search_radius * search_radius
+            )
+        if len(candidates) == 0:
+            return
+
+        delta = cache["face_samples"][candidates] - nozzle
+        axial = delta @ direction
+        radial_vectors = delta - axial[:, None] * direction
+        radial = np.linalg.norm(radial_vectors, axis=1)
+        facing = np.einsum(
+            "ij,j->i", cache["sample_normals"][candidates], -direction
+        ) > 0.02
+        inside_envelope = (
+            (axial > 0.0)
+            & (axial <= max_axial)
+            & (radial <= axial * cache["cone_tangent"])
+            & facing
+        )
+        cache["coverage_sample_hits"][candidates[inside_envelope]] = True
+
+    def _update_paint_coverage_visualization(self, index):
+        cache = self._prepare_trajectory_playback_cache()
+        if cache is None:
+            return
+
+        if index < cache["coverage_processed_index"]:
+            cache["coverage_sample_hits"].fill(False)
+            cache["coverage_processed_index"] = -1
+
+        for path_index in range(
+            cache["coverage_processed_index"] + 1, index + 1
+        ):
+            self._mark_surface_samples_from_spray(path_index)
+        cache["coverage_processed_index"] = max(
+            cache["coverage_processed_index"], index
+        )
+
+        face_hit_counts = np.bincount(
+            cache["sample_face_ids"],
+            weights=cache["coverage_sample_hits"].astype(float),
+            minlength=len(self.current_mesh.faces),
+        )
+        face_coverage = face_hit_counts / float(cache["sample_count_per_face"])
+        face_coverage = np.clip(face_coverage, 0.0, 1.0)
+        painted_area = float(np.sum(
+            cache["face_areas"] * face_coverage[cache["target_face_ids"]]
+        ))
+        coverage_percent = (
+            100.0 * painted_area / cache["target_area"]
+            if cache["target_area"] > 1e-12 else 0.0
+        )
+
+        if (
+            self._trajectory_surface_polydata is not None
+            and self._trajectory_surface_face_mask is not None
+            and self._trajectory_surface_base_rgb is not None
+        ):
+            base = self._trajectory_surface_base_rgb.astype(float)
+            face_fraction = face_coverage[self._trajectory_surface_face_mask]
+            painted = (
+                base * (1.0 - face_fraction[:, None])
+                + cache["paint_rgb"][None, :] * face_fraction[:, None]
+            )
+            colors = np.clip(np.rint(painted), 0, 255).astype(np.uint8)
+            polydata = self._trajectory_surface_polydata
+            polydata.cell_data["Paint Preview RGB"] = colors
+            array = polydata.GetCellData().GetArray("Paint Preview RGB")
+            if array is not None:
+                array.Modified()
+            polydata.Modified()
+            if self._pose_actor is not None:
+                self._pose_actor.GetMapper().SetInputData(polydata)
+                self._pose_actor.GetMapper().Update()
+
+        if hasattr(self, "trajectory_coverage_bar"):
+            self.trajectory_coverage_bar.setValue(
+                int(round(np.clip(coverage_percent, 0.0, 100.0) * 10.0))
+            )
+        if hasattr(self, "trajectory_coverage_label"):
+            self.trajectory_coverage_label.setText(
+                f"{coverage_percent:.1f}% | "
+                f"{painted_area * cache['mm_per_unit'] ** 2 / 1_000_000.0:.3f} / "
+                f"{cache['target_area_m2']:.3f} m²"
+            )
+
+    def _create_spray_gun_actors(self):
+        cache = self._prepare_trajectory_playback_cache()
+        if cache is None:
+            return None
+
+        profile = cache["profile"]
+        mm_per_unit = cache["mm_per_unit"]
+        nozzle_length = max(
+            float(profile.get("nozzle_length_mm", 25.0) or 25.0) / mm_per_unit,
+            2.0,
+        )
+        body_length_value = float(profile.get("gun_body_length_mm", 0.0) or 0.0)
+        body_diameter_value = float(profile.get("gun_body_diameter_mm", 0.0) or 0.0)
+        standoff = cache["standoff_units"]
+        body_length = (
+            body_length_value / mm_per_unit
+            if body_length_value > 0.0 else max(nozzle_length * 2.8, standoff * 0.34)
+        )
+        body_diameter = (
+            body_diameter_value / mm_per_unit
+            if body_diameter_value > 0.0 else max(nozzle_length * 0.55, standoff * 0.065)
+        )
+        orifice = max(
+            float(profile.get("nozzle_orifice_mm", 1.4) or 1.4) / mm_per_unit,
+            body_diameter * 0.06,
+        )
+
+        nozzle_mesh = pv.Cylinder(
+            center=(0.0, 0.0, -nozzle_length * 0.5),
+            direction=(0.0, 0.0, 1.0),
+            radius=max(orifice * 0.9, 0.5),
+            height=nozzle_length,
+            resolution=20,
+        )
+        body_mesh = pv.Cylinder(
+            center=(0.0, 0.0, -(nozzle_length + body_length * 0.5)),
+            direction=(0.0, 0.0, 1.0),
+            radius=body_diameter * 0.5,
+            height=body_length,
+            resolution=24,
+        )
+        grip_mesh = pv.Cylinder(
+            center=(0.0, -body_diameter * 0.62, -(nozzle_length + body_length * 0.48)),
+            direction=(0.0, 1.0, 0.0),
+            radius=body_diameter * 0.25,
+            height=body_diameter * 1.35,
+            resolution=20,
+        )
+        trigger_mesh = pv.Cylinder(
+            center=(0.0, body_diameter * 0.48, -(nozzle_length + body_length * 0.28)),
+            direction=(0.0, 1.0, 0.0),
+            radius=max(body_diameter * 0.045, 0.5),
+            height=body_diameter * 0.72,
+            resolution=12,
+        )
+
+        self._playback_gun_actors = [
+            self.plotter.add_mesh(
+                body_mesh, color="#C9D4DC", smooth_shading=True,
+                specular=0.55, specular_power=30, pickable=False,
+            ),
+            self.plotter.add_mesh(
+                grip_mesh, color="#25333D", smooth_shading=True,
+                pickable=False,
+            ),
+            self.plotter.add_mesh(
+                nozzle_mesh, color="#E8EEF2", smooth_shading=True,
+                pickable=False,
+            ),
+            self.plotter.add_mesh(
+                trigger_mesh, color="#D9A441", smooth_shading=True,
+                pickable=False,
+            ),
+        ]
+        self._playback_nozzle_actor = self._playback_gun_actors[0]
+        return self._playback_gun_actors
+
+    def _position_spray_gun(self, index):
+        cache = self._prepare_trajectory_playback_cache()
+        if cache is None:
+            return
+        if not self._playback_gun_actors:
+            self._create_spray_gun_actors()
+        frame = cache["nozzle_frames"][index]
+        position = cache["nozzle_points"][index]
+        matrix = np.eye(4, dtype=float)
+        matrix[:3, :3] = frame
+        matrix[:3, 3] = position
+        vtk_matrix = self._vtk_matrix_from_numpy(matrix)
+        for actor in self._playback_gun_actors:
+            actor.SetOrigin(0.0, 0.0, 0.0)
+            actor.SetUserMatrix(vtk_matrix)
 
     def _make_playback_path_polydata(self, last_index):
         cache = self._prepare_trajectory_playback_cache()
@@ -1783,30 +2146,8 @@ class ProductViewer(QWidget):
             mapper.SetInputData(path)
             mapper.Update()
 
-        current = nozzle_points[index]
-        if self._playback_nozzle_actor is None:
-            # Make the active nozzle/TCP sample visually dominant over
-            # the low-opacity trail. Radius is scaled to the working standoff.
-            radius = max(self._trajectory_arrow_length() * 0.22, 2.0)
-            marker = pv.Sphere(
-                radius=radius,
-                center=(0.0, 0.0, 0.0),
-                theta_resolution=24,
-                phi_resolution=18,
-            )
-            self._playback_nozzle_actor = self.plotter.add_mesh(
-                marker,
-                color="#FF5A36",
-                smooth_shading=True,
-                lighting=False,
-                show_edges=True,
-                edge_color="#FFF4E8",
-                line_width=1.5,
-                pickable=False,
-            )
-            self._playback_nozzle_actor.SetPosition(*current.tolist())
-        else:
-            self._playback_nozzle_actor.SetPosition(*current.tolist())
+        self._position_spray_gun(index)
+        self._update_paint_coverage_visualization(index)
 
         total = len(nozzle_points)
         self.trajectory_playback_label.setText(f"{index + 1} / {total}")
@@ -2348,36 +2689,43 @@ class ProductViewer(QWidget):
                         "curved": (198, 154, 98),    # #C69A62
                         "unknown": (167, 139, 250),
                     }
-                    face_rgb = np.asarray([
+                    base_face_rgb = np.asarray([
                         type_colors.get(str(kind).lower(), type_colors["unknown"])
                         for kind in self.face_surface_types
                     ], dtype=np.uint8)
-                    polydata.cell_data["Surface Type RGB"] = face_rgb[face_mask]
-                    self._pose_actor = self.plotter.add_mesh(
-                        polydata,
-                        scalars="Surface Type RGB",
-                        rgb=True,
-                        preference="cell",
-                        opacity=0.96,
-                        show_edges=False,
-                        smooth_shading=True,
-                        pickable=False,
-                    )
                 else:
-                    self._pose_actor = self.plotter.add_mesh(
-                        polydata,
-                        color="#9FB7C7",
-                        opacity=0.96,
-                        show_edges=False,
-                        smooth_shading=True,
-                        pickable=False,
+                    base_face_rgb = np.tile(
+                        np.asarray([159, 183, 199], dtype=np.uint8),
+                        (len(self.current_mesh.faces), 1),
                     )
+
+                # Keep a reference to the rendered surface data so playback
+                # can progressively blend covered faces toward the coating color.
+                self._trajectory_surface_face_mask = face_mask.copy()
+                self._trajectory_surface_base_rgb = base_face_rgb[face_mask].copy()
+                self._trajectory_surface_polydata = polydata
+                polydata.cell_data["Paint Preview RGB"] = (
+                    self._trajectory_surface_base_rgb.copy()
+                )
+                self._pose_actor = self.plotter.add_mesh(
+                    polydata,
+                    scalars="Paint Preview RGB",
+                    rgb=True,
+                    preference="cell",
+                    opacity=0.96,
+                    show_edges=False,
+                    smooth_shading=True,
+                    pickable=False,
+                )
                 self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
                 self._pose_actor.SetUserMatrix(
                     self._vtk_matrix_from_numpy(self.trajectory_product_transform)
                 )
             else:
                 self._pose_actor = None
+                self._trajectory_surface_polydata = None
+                self._trajectory_surface_face_mask = None
+                self._trajectory_surface_base_rgb = None
 
             self._add_trajectory_visualization()
 
