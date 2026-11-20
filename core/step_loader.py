@@ -32,7 +32,8 @@ def _ocp_imports():
             TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID,
             TopAbs_VERTEX, TopAbs_REVERSED,
         )
-        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopExp import TopExp, TopExp_Explorer
+        from OCP.TopTools import TopTools_IndexedMapOfShape
         from OCP.TopoDS import TopoDS
         from OCP.TopLoc import TopLoc_Location
         from OCP.GeomAbs import (
@@ -90,16 +91,23 @@ def _surface_name(adaptor, ocp):
     return "OTHER"
 
 
-def _build_brep_face_edge_adjacency(faces, explorer_type, edge_type):
+def _build_brep_face_edge_adjacency(
+    shape, faces, top_exp_type, explorer_type, indexed_map_type, edge_type
+):
     """Build exact face/edge incidence from the original STEP B-Rep.
 
     IsSame compares underlying TopoDS edge identity independent of edge
     orientation. A seam may occur more than once on one face; it is reported
     separately rather than incorrectly classified as an open boundary.
     """
-    edge_shapes = []
-    edge_face_ids = []
-    edge_occurrences = []
+    edge_map = indexed_map_type()
+    _static_call(top_exp_type, "MapShapes", shape, edge_type, edge_map)
+    edge_shapes = [
+        edge_map.FindKey(index)
+        for index in range(1, int(edge_map.Extent()) + 1)
+    ]
+    edge_face_ids = [set() for _ in edge_shapes]
+    edge_occurrences = [{} for _ in edge_shapes]
     face_edge_ids = []
 
     for face_id, face in enumerate(faces, start=1):
@@ -107,16 +115,11 @@ def _build_brep_face_edge_adjacency(faces, explorer_type, edge_type):
         local_edge_ids = []
         while explorer.More():
             edge = explorer.Current()
-            edge_id = None
-            for index, known_edge in enumerate(edge_shapes):
-                if edge.IsSame(known_edge):
-                    edge_id = index + 1
-                    break
-            if edge_id is None:
-                edge_shapes.append(edge)
-                edge_face_ids.append(set())
-                edge_occurrences.append({})
-                edge_id = len(edge_shapes)
+            edge_id = int(edge_map.FindIndex(edge))
+            if edge_id <= 0:
+                raise RuntimeError(
+                    "A STEP face edge was not found in the global B-Rep edge map."
+                )
             edge_face_ids[edge_id - 1].add(face_id)
             edge_occurrences[edge_id - 1][face_id] = (
                 edge_occurrences[edge_id - 1].get(face_id, 0) + 1
@@ -184,7 +187,7 @@ def _build_brep_face_edge_adjacency(faces, explorer_type, edge_type):
         },
         "adjacent_face_pairs": face_pairs,
         "summary": counts,
-    }
+    }, edge_shapes
 
 
 def _xyz(point):
@@ -333,8 +336,9 @@ def load_step(
         float(bounds_max[i] - bounds_min[i]) for i in range(3)
     ]
 
-    brep_adjacency = _build_brep_face_edge_adjacency(
-        faces, TopExp_Explorer, ocp["TopAbs_EDGE"]
+    brep_adjacency, unique_edge_shapes = _build_brep_face_edge_adjacency(
+        shape, faces, ocp["TopExp"], TopExp_Explorer,
+        ocp["TopTools_IndexedMapOfShape"], ocp["TopAbs_EDGE"]
     )
     face_records = []
     surface_counts = Counter()
@@ -371,20 +375,7 @@ def load_step(
         })
 
 
-    # Attach exact B-Rep edge lengths (mm). Rebuild the unique edge list
-    # once in the same first-seen order used by the adjacency extractor.
-    unique_edge_shapes = []
-    for face in faces:
-        explorer = TopExp_Explorer(face, ocp["TopAbs_EDGE"])
-        while explorer.More():
-            candidate = explorer.Current()
-            if not any(candidate.IsSame(item) for item in unique_edge_shapes):
-                unique_edge_shapes.append(candidate)
-            explorer.Next()
-    if len(unique_edge_shapes) != len(brep_adjacency["edges"]):
-        raise RuntimeError(
-            "STEP B-Rep edge inventory changed between topology passes."
-        )
+    # Attach exact B-Rep edge lengths (mm) using the indexed global edge map.
     for edge_record, edge_shape in zip(
         brep_adjacency["edges"], unique_edge_shapes
     ):
@@ -588,6 +579,29 @@ def run_step_loader_tests():
         def __init__(self, edges):
             self.edges = edges
 
+    class _FakeIndexedMap:
+        def __init__(self):
+            self.items = []
+        def Add(self, edge):
+            if not any(edge.IsSame(item) for item in self.items):
+                self.items.append(edge)
+        def FindKey(self, index):
+            return self.items[index - 1]
+        def FindIndex(self, edge):
+            for index, item in enumerate(self.items, start=1):
+                if edge.IsSame(item):
+                    return index
+            return 0
+        def Extent(self):
+            return len(self.items)
+
+    class _FakeTopExp:
+        @staticmethod
+        def MapShapes(shape, _edge_type, edge_map):
+            for face in shape:
+                for edge in face.edges:
+                    edge_map.Add(edge)
+
     class _FakeExplorer:
         def __init__(self, face, _edge_type):
             self.items = list(face.edges)
@@ -604,8 +618,8 @@ def run_step_loader_tests():
         _FakeFace([_FakeEdge("shared"), _FakeEdge("boundary-b")]),
         _FakeFace([_FakeEdge("seam"), _FakeEdge("seam")]),
     ]
-    topology = _build_brep_face_edge_adjacency(
-        fake_faces, _FakeExplorer, object()
+    topology, _ = _build_brep_face_edge_adjacency(
+        object(), fake_faces, object(), _FakeExplorer, _FakeIndexedMap, object()
     )
     assert topology["face_adjacency"]["1"] == [2]
     assert topology["face_adjacency"]["2"] == [1]
