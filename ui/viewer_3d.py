@@ -603,12 +603,11 @@ class ProductViewer(QWidget):
         self.pose_status_label.setText("World display box updated; extents are configurable visualization bounds.")
 
     def _install_actor_interaction(self):
-        """Install camera navigation and a selectable local-axis rotation gizmo."""
+        """Keep camera navigation separate from explicit local-CAD rotation controls."""
         if self._pose_actor is None:
             return
         try:
             from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
-            from vtkmodules.vtkInteractionWidgets import vtkOrientationWidget, vtkOrientationRepresentation
             from vtkmodules.vtkRenderingCore import vtkPropPicker
 
             interactor = self.plotter.interactor
@@ -616,72 +615,24 @@ class ProductViewer(QWidget):
             self._actor_style.SetDefaultRenderer(self.plotter.renderer)
             interactor.SetInteractorStyle(self._actor_style)
 
-            # A CAD-origin-centered, three-ring gizmo is shown only after
-            # the product itself has been selected. It controls rotation only.
-            self._rotation_representation = vtkOrientationRepresentation()
-            self._rotation_representation.SetShowArrows(True)
-            self._rotation_representation.SetArrowLength(0.18)
-            self._rotation_representation.SetArrowTipLength(0.30)
-            self._rotation_representation.SetArrowTipRadius(0.055)
-            self._rotation_representation.SetArrowShaftRadius(0.012)
-            self._rotation_representation.SetOrientation(self._pose_actor.GetOrientation())
-
-            bounds = np.asarray(self.current_mesh.bounds, dtype=float)
-            radius = max(float(np.max(np.abs(bounds))), float(np.max(self.current_mesh.extents)) * 0.35, 1.0)
-            gizmo_bounds = np.array([-radius, radius, -radius, radius, -radius, radius], dtype=float)
-            self._rotation_representation.PlaceWidget(gizmo_bounds)
-
-            self._rotation_widget = vtkOrientationWidget()
-            self._rotation_widget.SetInteractor(interactor)
-            self._rotation_widget.SetDefaultRenderer(self.plotter.renderer)
-            self._rotation_widget.SetRepresentation(self._rotation_representation)
-            self._rotation_widget.SetPriority(0.8)
-            self._rotation_widget.SetEnabled(0)
-
-            def on_rotation_start(caller, event):
-                self._rotation_last_matrix = self._vtk_transform_matrix(
-                    self._rotation_representation.GetTransform()
-                )
-
-            def on_rotation(caller, event):
-                current = self._vtk_transform_matrix(self._rotation_representation.GetTransform())
-                if self._rotation_last_matrix is None:
-                    self._rotation_last_matrix = current
-                    return
-                delta_local = current[:3, :3] @ self._rotation_last_matrix[:3, :3].T
-                actor_matrix = self._actor_matrix_array()
-                updated = actor_matrix[:3, :3] @ delta_local
-                transform = self._vtk_matrix_from_numpy(np.block([
-                    [updated, actor_matrix[:3, 3:4]],
-                    [np.zeros((1, 3)), np.ones((1, 1))],
-                ]))
-                from vtkmodules.vtkCommonTransforms import vtkTransform
-                vtk_transform = vtkTransform()
-                vtk_transform.SetMatrix(transform)
-                self._pose_actor.SetOrientation(*vtk_transform.GetOrientation())
-                self._rotation_last_matrix = current
-                self._sync_world_position_inputs()
-                self._update_pose_readout()
-
-            self._rotation_widget.AddObserver("StartInteractionEvent", on_rotation_start)
-            self._rotation_widget.AddObserver("InteractionEvent", on_rotation)
-
+            # Selection is informational only. Product rotation is performed
+            # by the dedicated X/Y/Z controls, never by dragging the camera
+            # or by the old OrientationWidget (which controls camera orientation).
             picker = vtkPropPicker()
 
             def select_product(caller, event):
-                if self._pose_actor is None or self._rotation_widget is None:
+                if self._pose_actor is None:
                     return
                 x, y = interactor.GetEventPosition()
                 picked = picker.Pick(x, y, 0, self.plotter.renderer)
                 selected_actor = picker.GetActor() if picked else None
-                selected = selected_actor == self._pose_actor
-                self._set_product_selected(selected)
+                self._set_product_selected(selected_actor == self._pose_actor)
 
             self._selection_observer_tag = interactor.AddObserver(
                 "LeftButtonPressEvent", select_product, 0.1
             )
         except Exception as exc:
-            self.pose_status_label.setText(f"3D product rotation tool unavailable: {exc}")
+            self.pose_status_label.setText(f"3D interaction setup unavailable: {exc}")
             self.confirm_pose_button.setEnabled(False)
 
     @staticmethod
@@ -694,18 +645,15 @@ class ProductViewer(QWidget):
 
     def _set_product_selected(self, selected):
         self._product_selected = bool(selected)
-        if self._rotation_widget is None:
-            return
-        self._rotation_widget.SetEnabled(1 if self._product_selected else 0)
         if self._product_selected:
-            self._rotation_representation.SetOrientation(self._pose_actor.GetOrientation())
             self.pose_status_label.setText(
-                "PRODUCT SELECTED  |  Drag the X / Y / Z rotation rings. "
-                "Rotation is about the STEP CAD origin in the product's local frame."
+                "PRODUCT SELECTED  |  Enter local CAD X/Y/Z rotation increments, "
+                "then APPLY ROTATION. Camera view remains unchanged."
             )
         else:
-            self.pose_status_label.setText("PRODUCT DESELECTED  |  World box and coordinate frame remain fixed.")
-        self.plotter.render()
+            self.pose_status_label.setText(
+                "PRODUCT DESELECTED  |  Use the camera mouse controls to inspect the scene."
+            )
 
     def _sync_world_position_inputs(self):
         if self._pose_actor is None:
