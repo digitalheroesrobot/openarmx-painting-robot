@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QVBoxLayout,
+    QScrollArea,
     QWidget,
     QInputDialog,
 )
@@ -132,7 +133,7 @@ class SprayPatternPreview(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.profile = deepcopy(DEFAULT_SPRAYER_PROFILE)
-        self.setMinimumSize(350, 460)
+        self.setMinimumSize(300, 260)
 
     def set_profile(self, profile: dict):
         self.profile = deepcopy(profile)
@@ -146,8 +147,8 @@ class SprayPatternPreview(QWidget):
         width = self.width()
         height = self.height()
         cx = width * 0.50
-        tip_y = 118.0
-        bottom_y = height - 130.0
+        tip_y = 82.0
+        bottom_y = max(tip_y + 50.0, height - 112.0)
 
         profile = self.profile
         standoff = max(1.0, float(profile.get("standoff_mm", 180.0)))
@@ -164,7 +165,7 @@ class SprayPatternPreview(QWidget):
             nozzle_length,
             float(profile.get("gun_body_length_mm", 0.0) or 0.0),
         )
-        visual_nozzle_length = min(58.0, max(8.0, body_length * 0.45))
+        visual_nozzle_length = min(42.0, max(8.0, body_length * 0.35))
         body_diameter = float(profile.get("gun_body_diameter_mm", 0.0) or 0.0)
         visual_body_width = (
             min(52.0, max(26.0, body_diameter * 0.45))
@@ -177,14 +178,14 @@ class SprayPatternPreview(QWidget):
         painter.setBrush(QColor("#344B5A"))
         painter.drawRoundedRect(
             int(cx - visual_body_width * 0.5),
-            int(nozzle_top - 44),
+            int(nozzle_top - 32),
             int(visual_body_width),
-            int(visual_nozzle_length + 44),
+            int(visual_nozzle_length + 32),
             7,
             7,
         )
         painter.setPen(QPen(QColor("#DCEAF1"), 2))
-        painter.drawLine(int(cx), int(nozzle_top - 30), int(cx), int(nozzle_top - 2))
+        painter.drawLine(int(cx), int(nozzle_top - 22), int(cx), int(nozzle_top - 2))
         painter.setPen(QPen(QColor("#00E5FF"), 3))
         painter.drawLine(
             int(cx - visual_orifice_width * 0.5),
@@ -294,7 +295,8 @@ class SprayerSettingsDialog(QDialog):
 
     def _build_ui(self):
         self.setWindowTitle("SPRAYER TECHNICAL SPECIFICATIONS")
-        self.resize(940, 690)
+        self.setMinimumSize(860, 360)
+        self.resize(940, 410)
         root = QVBoxLayout(self)
 
         header = QLabel("SPRAYER PROFILE")
@@ -388,7 +390,15 @@ class SprayerSettingsDialog(QDialog):
         form.addRow("Notes", self.profile_notes)
 
         form_host.setMinimumWidth(470)
-        body.addWidget(form_host, 3)
+
+        # Keep the preview and action buttons visible while the technical
+        # specification form scrolls independently in the shorter dialog.
+        form_scroll = QScrollArea()
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        form_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        form_scroll.setWidget(form_host)
+        body.addWidget(form_scroll, 3)
 
         self.preview = SprayPatternPreview()
         body.addWidget(self.preview, 2)
