@@ -1178,20 +1178,40 @@ class MainWindow(QMainWindow):
         patch_layout.addWidget(self.patch_progress_bar)
 
         # ----------------------------------------------------
-        # INSTRUCTIONS
+        # FULL PRODUCT VIEW
+        # Restore full opacity after the operator finishes
+        # inspecting individual patches.
         # ----------------------------------------------------
-        self.patch_instruction_label = QLabel(
-            "All patches are selected for painting by default. "
-            "Uncheck a patch to exclude it from painting. "
-            "SPRAY TRAJECTORY becomes available when all "
-            "patches are selected."
+        self.show_full_product_button = QPushButton(
+            "SHOW FULL PRODUCT"
         )
-        self.patch_instruction_label.setWordWrap(True)
-        self.patch_instruction_label.setObjectName("Muted")
-
-        patch_layout.addWidget(
-            self.patch_instruction_label
+        self.show_full_product_button.setObjectName(
+            "PatchViewButton"
         )
+        self.show_full_product_button.setToolTip(
+            "Restore the complete product view and full surface opacity."
+        )
+        self.show_full_product_button.setStyleSheet("""
+            QPushButton#PatchViewButton {
+                background-color: #17465A;
+                color: #EAFBFF;
+                border: 1px solid #00B8D9;
+                border-radius: 4px;
+                padding: 7px 10px;
+                font-weight: bold;
+            }
+            QPushButton#PatchViewButton:hover {
+                background-color: #21627A;
+                border-color: #4DFFE1;
+            }
+            QPushButton#PatchViewButton:pressed {
+                background-color: #103546;
+            }
+        """)
+        self.show_full_product_button.clicked.connect(
+            self._show_full_product_view
+        )
+        patch_layout.addWidget(self.show_full_product_button)
 
         # ----------------------------------------------------
         # PATCH LIST
@@ -1597,6 +1617,46 @@ class MainWindow(QMainWindow):
                 0,
                 24,
             )
+
+    def _show_full_product_view(self):
+        """
+        Clear the active patch highlight and restore full product opacity.
+
+        Patch inspection decisions and Inspected checkboxes are preserved.
+        The operator can select another Patch at any time to resume
+        individual-surface inspection.
+        """
+        if (
+            self.viewer.display_mode != "patches"
+            or self.viewer.patch_labels is None
+        ):
+            return
+
+        try:
+            self.viewer.set_selected_patch(None)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Full Product View",
+                "The complete product view could not be restored.\\n\\n"
+                f"{exc}",
+            )
+            return
+
+        self.selected_patch_id = None
+
+        # Remove the active row highlight without changing inspection data.
+        for widgets in self.patch_row_widgets.values():
+            row = widgets.get("row")
+            select_button = widgets.get("select_button")
+            if row is not None:
+                row.setStyleSheet("")
+            if select_button is not None:
+                select_button.setStyleSheet("")
+
+        self.status_bar.showMessage(
+            "FULL PRODUCT VIEW  |  ALL PATCHES AT ORIGINAL OPACITY"
+        )
 
     def _on_viewer_patch_selected(self, patch_id):
         """Synchronize a 3D surface click with the right-side Patch list."""
