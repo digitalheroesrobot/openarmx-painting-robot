@@ -371,23 +371,26 @@ def load_step(
         })
 
 
-    # Attach exact B-Rep edge lengths (mm) to the topology records.
-    for edge_record in brep_adjacency["edges"]:
-        edge_id = int(edge_record["edge_id"])
-        edge_shape = None
-        # Recover the unique edge by the same stable first-seen traversal.
-        seen = []
-        for face in faces:
-            explorer = TopExp_Explorer(face, ocp["TopAbs_EDGE"])
-            while explorer.More():
-                candidate = explorer.Current()
-                if not any(candidate.IsSame(item) for item in seen):
-                    seen.append(candidate)
-                explorer.Next()
-        if 1 <= edge_id <= len(seen):
-            edge_props = GProp_GProps()
-            _static_call(BRepGProp, "LinearProperties", seen[edge_id - 1], edge_props)
-            edge_record["length_mm"] = float(edge_props.Mass())
+    # Attach exact B-Rep edge lengths (mm). Rebuild the unique edge list
+    # once in the same first-seen order used by the adjacency extractor.
+    unique_edge_shapes = []
+    for face in faces:
+        explorer = TopExp_Explorer(face, ocp["TopAbs_EDGE"])
+        while explorer.More():
+            candidate = explorer.Current()
+            if not any(candidate.IsSame(item) for item in unique_edge_shapes):
+                unique_edge_shapes.append(candidate)
+            explorer.Next()
+    if len(unique_edge_shapes) != len(brep_adjacency["edges"]):
+        raise RuntimeError(
+            "STEP B-Rep edge inventory changed between topology passes."
+        )
+    for edge_record, edge_shape in zip(
+        brep_adjacency["edges"], unique_edge_shapes
+    ):
+        edge_props = GProp_GProps()
+        _static_call(BRepGProp, "LinearProperties", edge_shape, edge_props)
+        edge_record["length_mm"] = float(edge_props.Mass())
 
     # Tessellate each original CAD face separately and retain Face IDs.
     mesher = ocp["BRepMesh_IncrementalMesh"](
