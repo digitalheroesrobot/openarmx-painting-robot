@@ -1656,7 +1656,7 @@ def _order_trajectory_with_planar_raster(
     }
     result["path_statistics"] = path_statistics
 
-    print("\\n" + "=" * 68)
+    print("\n" + "=" * 68)
     print("STAGE 3 PATH GENERATION DIAGNOSTICS")
     print("=" * 68)
     print(
@@ -1688,7 +1688,7 @@ def _order_trajectory_with_planar_raster(
                 f"faces={item['source_face_count']} | "
                 f"samples={item['source_sample_count']}"
             )
-    print("=" * 68 + "\\n")
+    print("=" * 68 + "\n")
     return result
 
 
