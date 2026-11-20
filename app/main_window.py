@@ -5,6 +5,7 @@ import traceback
 
 import numpy as np
 
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtCore import QThread, Signal, Qt, QSize
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -242,6 +243,80 @@ class OperationWorker(QThread):
         except Exception as exc:
             traceback.print_exc()
             self.failed.emit(str(exc))
+
+
+class PatchDistributionChart(QWidget):
+    """Dependency-free Qt pie chart for Stage 1 patch classification."""
+
+    COLORS = {
+        "planar": "#00E676",
+        "curved": "#00B8D9",
+        "uncertain": "#FFD740",
+        "invalid": "#FF5252",
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.values = {
+            "planar": 0,
+            "curved": 0,
+            "uncertain": 0,
+            "invalid": 0,
+        }
+        self.setFixedSize(126, 126)
+        self.setToolTip(
+            "Stage 1 patch classification: planar, curved, uncertain, invalid"
+        )
+
+    def set_values(self, values):
+        self.values = {
+            key: max(0, int(values.get(key, 0)))
+            for key in self.COLORS
+        }
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        margin = 7
+        diameter = min(self.width(), self.height()) - margin * 2
+        rect = self.rect().adjusted(
+            margin, margin, -margin, -margin
+        )
+        total = sum(self.values.values())
+
+        if total <= 0:
+            painter.setPen(QPen(QColor("#29404D"), 1))
+            painter.setBrush(QColor("#132431"))
+            painter.drawEllipse(rect)
+            painter.end()
+            return
+
+        start_angle = 90 * 16
+        remaining_angle = 360 * 16
+        nonzero = [
+            key for key in self.COLORS
+            if self.values[key] > 0
+        ]
+
+        for index, key in enumerate(nonzero):
+            if index == len(nonzero) - 1:
+                span_angle = remaining_angle
+            else:
+                span_angle = int(
+                    round(360 * 16 * self.values[key] / total)
+                )
+                span_angle = min(span_angle, remaining_angle)
+
+            painter.setPen(QPen(QColor("#071018"), 1.5))
+            painter.setBrush(QColor(self.COLORS[key]))
+            painter.drawPie(rect, start_angle, span_angle)
+
+            start_angle += span_angle
+            remaining_angle -= span_angle
+
+        painter.end()
 
 
 # ============================================================
@@ -950,10 +1025,25 @@ class MainWindow(QMainWindow):
         summary_layout.setContentsMargins(5, 2, 5, 4)
         summary_layout.setSpacing(4)
 
+        summary_row = QHBoxLayout()
+        summary_row.setContentsMargins(0, 0, 0, 0)
+        summary_row.setSpacing(8)
+
+        self.summary_chart = PatchDistributionChart()
+        self.summary_chart.hide()
+        summary_row.addWidget(
+            self.summary_chart,
+            0,
+            Qt.AlignVCenter,
+        )
+
         self.analysis_summary = QLabel("AWAITING PRODUCT")
         self.analysis_summary.setWordWrap(True)
+        self.analysis_summary.setTextFormat(Qt.RichText)
         self.analysis_summary.setObjectName("Muted")
-        summary_layout.addWidget(self.analysis_summary)
+        summary_row.addWidget(self.analysis_summary, 1)
+
+        summary_layout.addLayout(summary_row)
 
         # The collapsible section title is the single SUMMARY heading.
         # Keep the legacy inner label hidden for compatibility with
@@ -3786,6 +3876,7 @@ class MainWindow(QMainWindow):
         return str(value).replace("_", " ").upper()
 
     def _show_stage3_ready_summary(self):
+        self.summary_chart.hide()
         self.summary_section.setText("STAGE 3 - READY")
         self.analysis_summary.setStyleSheet("color: #D8E5ED;")
 
@@ -3794,6 +3885,7 @@ class MainWindow(QMainWindow):
         )
 
     def _show_stage3_outdated_summary(self):
+        self.summary_chart.hide()
         if self.current_stage3_result is None:
             self._show_stage3_ready_summary()
             return
@@ -3808,6 +3900,7 @@ class MainWindow(QMainWindow):
         )
 
     def _show_spray_trajectory_summary(self):
+        self.summary_chart.hide()
         if self.current_stage3_result is None:
             self._show_stage3_ready_summary()
             return
@@ -3858,12 +3951,97 @@ class MainWindow(QMainWindow):
     # ========================================================
 
     def _show_analysis_summary(self, report):
-        segmentation = report["surface_segmentation"]
-        patch_count = int(segmentation["patch_count"])
+        segmentation = report.get("surface_segmentation", {})
+        patches = segmentation.get("patches", [])
 
-        self.analysis_summary.setStyleSheet("")
+        patch_count = int(
+            segmentation.get("patch_count", len(patches))
+        )
+
+        counts = {
+            "planar": 0,
+            "curved": 0,
+            "uncertain": 0,
+            "invalid": 0,
+        }
+
+        cylinder_counts = {
+            "internal": 0,
+            "external": 0,
+            "orientation_uncertain": 0,
+        }
+
+        for patch in patches:
+            classification = str(
+                patch.get("classification", "invalid")
+            ).lower()
+
+            if classification not in counts:
+                classification = "invalid"
+
+            counts[classification] += 1
+
+            if classification == "curved":
+                cylinder = patch.get("cylindrical_fit", {})
+                if cylinder.get("status") == "candidate":
+                    surface_type = cylinder.get("surface_type")
+                    if surface_type == "internal_cylindrical_surface":
+                        cylinder_counts["internal"] += 1
+                    elif surface_type == "external_cylindrical_surface":
+                        cylinder_counts["external"] += 1
+                    elif surface_type == "cylindrical_surface_orientation_uncertain":
+                        cylinder_counts["orientation_uncertain"] += 1
+
+        # Keep report totals authoritative while safely handling older reports.
+        classified_patch_records = sum(counts.values())
+        if classified_patch_records < patch_count:
+            counts["invalid"] += patch_count - classified_patch_records
+
+        classified = counts["planar"] + counts["curved"]
+        unresolved = counts["uncertain"] + counts["invalid"]
+        curved_other = max(
+            0,
+            counts["curved"] - sum(cylinder_counts.values()),
+        )
+
+        mesh_info = report.get("mesh", {})
+        valid_triangles = int(mesh_info.get("valid_faces", 0))
+        invalid_triangles = int(mesh_info.get("invalid_faces", 0))
+        degenerate_triangles = int(mesh_info.get("degenerate_faces", 0))
+        zero_normal_triangles = int(mesh_info.get("zero_normal_faces", 0))
+
+        self.summary_chart.set_values(counts)
+        self.summary_chart.show()
+
+        self.analysis_summary.setStyleSheet(
+            "QLabel { color: #D8E5ED; font-size: 9pt; }"
+        )
         self.analysis_summary.setText(
-            f"{patch_count:,} SURFACE PATCHES"
+            f"<b style='color:#00E5FF'>{patch_count:,} TOTAL PATCHES</b><br>"
+            f"<span style='color:#00E676'>● PLANAR: {counts['planar']:,}</span><br>"
+            f"<span style='color:#00B8D9'>● CURVED: {counts['curved']:,}</span><br>"
+            f"<span style='color:#FFD740'>● UNCERTAIN: {counts['uncertain']:,}</span><br>"
+            f"<span style='color:#FF5252'>● INVALID: {counts['invalid']:,}</span>"
+            f"<br><br><b>CLASSIFIED:</b> {classified:,} "
+            f"<span style='color:#8195A3'>|</span> "
+            f"<b>UNRESOLVED:</b> <span style='color:#FFD740'>{unresolved:,}</span>"
+            f"<br><br><b>CURVED SHAPES</b><br>"
+            f"Internal cylinders: {cylinder_counts['internal']:,}<br>"
+            f"External cylinders: {cylinder_counts['external']:,}<br>"
+            f"Cylinder direction unclear: {cylinder_counts['orientation_uncertain']:,}<br>"
+            f"Other / complex curves: {curved_other:,}"
+            f"<br><br><b>MESH TRIANGLES</b><br>"
+            f"Valid: {valid_triangles:,} "
+            f"<span style='color:#8195A3'>|</span> "
+            f"Invalid: <span style='color:#FF5252'>{invalid_triangles:,}</span>"
+            f"<br><span style='color:#8195A3'>"
+            f"Degenerate: {degenerate_triangles:,} · "
+            f"Zero normals: {zero_normal_triangles:,}</span>"
+            f"<br><br><b>WHY UNRESOLVED?</b><br>"
+            f"<span style='color:#FF5252'>Invalid:</span> "
+            f"no valid triangle geometry in the patch.<br>"
+            f"<span style='color:#FFD740'>Uncertain:</span> "
+            f"plane-fit calculation could not determine the shape."
         )
 
     # ========================================================
@@ -3871,6 +4049,7 @@ class MainWindow(QMainWindow):
     # ========================================================
 
     def _show_surface_identification_summary(self):
+        self.summary_chart.hide()
         if self.current_stage2_result is None:
             if self.current_stage1_result is not None:
                 self.summary_section.setText("STAGE 2 - READY")
