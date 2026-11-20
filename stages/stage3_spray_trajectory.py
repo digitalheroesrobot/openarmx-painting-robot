@@ -2301,6 +2301,67 @@ def run_stage3_numerical_tests() -> dict:
         == "test sprayer"
     )
 
+    # --------------------------------------------------------
+    # Test 18: Product CAD pose and provisional nozzle frames.
+    # --------------------------------------------------------
+
+    angle = math.radians(90.0)
+    test_transform = np.array([
+        [math.cos(angle), -math.sin(angle), 0.0, 10.0],
+        [math.sin(angle),  math.cos(angle), 0.0, 20.0],
+        [0.0,              0.0,             1.0, 30.0],
+        [0.0,              0.0,             0.0, 1.0],
+    ])
+    posed_result = generate_spray_trajectory(
+        mesh=test_mesh,
+        face_status_labels=labels,
+        patch_labels=patches,
+        standoff_mm=200.0,
+        sampling_spacing_mm=50.0,
+        coordinate_unit="mm",
+        product_transform=test_transform,
+    )
+    expected_world_surface = (
+        posed_result["surface_points"] @ test_transform[:3, :3].T
+        + test_transform[:3, 3]
+    )
+    expected_world_nozzle = (
+        posed_result["nozzle_points"] @ test_transform[:3, :3].T
+        + test_transform[:3, 3]
+    )
+    assert np.allclose(posed_result["surface_points_world"], expected_world_surface)
+    assert np.allclose(posed_result["nozzle_points_world"], expected_world_nozzle)
+    assert np.allclose(
+        posed_result["nozzle_frames_world"],
+        np.einsum("ij,njk->nik", test_transform[:3, :3], posed_result["nozzle_frames"]),
+    )
+    frame_gram = np.einsum(
+        "nji,njk->nik",
+        posed_result["nozzle_frames"],
+        posed_result["nozzle_frames"],
+    )
+    assert np.allclose(
+        frame_gram,
+        np.repeat(np.eye(3)[None, :, :], len(frame_gram), axis=0),
+        atol=1e-6,
+    )
+    assert np.allclose(np.linalg.det(posed_result["nozzle_frames"]), 1.0, atol=1e-6)
+
+    invalid_transform_rejected = False
+    invalid_transform = test_transform.copy()
+    invalid_transform[0, 0] = 2.0
+    try:
+        generate_spray_trajectory(
+            mesh=test_mesh,
+            face_status_labels=labels,
+            patch_labels=patches,
+            coordinate_unit="mm",
+            product_transform=invalid_transform,
+        )
+    except ValueError:
+        invalid_transform_rejected = True
+    assert invalid_transform_rejected
+
     return {
         "status": "PASS",
         "tests": {
@@ -2321,10 +2382,16 @@ def run_stage3_numerical_tests() -> dict:
             "source_mesh_unchanged": "PASS",
             "npy_16_column_compatibility": "PASS",
             "sprayer_spray_envelope_and_overlap": "PASS",
+            "product_pose_world_transform": "PASS",
+            "nozzle_frame_orthonormality": "PASS",
+            "invalid_product_transform_rejected": "PASS",
         },
         "sample_count": int(sample_count),
         "unit_standoff_tests": unit_test_results,
         "unit_sampling_tests": sampling_test_results,
+        "product_pose_world_frame": "PASS",
+        "nozzle_frame_convention": "PROVISIONAL",
+        "invalid_product_transform_rejected": invalid_transform_rejected,
         "advanced_geometry": advanced["summary"],
         "engineering_assessment": {
             "geometric_calculation": "PASS",
