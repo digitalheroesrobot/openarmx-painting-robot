@@ -121,7 +121,7 @@ WORKFLOW_STAGES = [
             "Inspect mesh integrity, dimensions, connected "
             "components, and geometric surface patches."
         ),
-        "action": "ANALYZE PRODUCT GEOMETRY",
+        "action": "ANALYZE GEOMETRY",
     },
     {
         "name": "SURFACE IDENTIFICATION",
@@ -2337,7 +2337,7 @@ class MainWindow(QMainWindow):
             else:
 
                 self.start_analysis_button.setText(
-                    "ANALYZE PRODUCT GEOMETRY"
+                    "ANALYZE GEOMETRY"
                 )
 
                 self.start_analysis_button.setEnabled(
