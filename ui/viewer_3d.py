@@ -822,26 +822,45 @@ class ProductViewer(QWidget):
 
     def _build_offset_patch_shell(self, mesh, face_mask, offset_distance):
         """
-        Create a slightly expanded copy of a selected patch.
+        Build exactly one offset copy of the selected patch.
 
-        Vertex-normal displacement creates a real 3D halo just outside
-        the surface. On a correctly oriented closed mesh, cavity walls
-        expand toward the cavity, making holes and recesses easier to see.
+        Normals are accumulated only from triangles belonging to this patch.
+        This prevents neighboring faces elsewhere on the product from bending
+        the membrane inward and creating unwanted circular/ring-like layers.
         """
         vertices = np.asarray(mesh.vertices, dtype=float)
-        vertex_normals = np.asarray(mesh.vertex_normals, dtype=float)
+        faces = np.asarray(mesh.faces, dtype=np.int64)
+        face_mask = np.asarray(face_mask, dtype=bool)
 
-        if (
-            vertex_normals.shape != vertices.shape
-            or not np.all(np.isfinite(vertex_normals))
-        ):
-            raise ValueError(
-                "Mesh vertex normals are unavailable for patch glow."
+        if len(face_mask) != len(faces):
+            raise ValueError("Face mask does not match mesh faces.")
+
+        selected_faces = faces[face_mask]
+        if len(selected_faces) == 0:
+            return pv.PolyData()
+
+        selected_triangles = vertices[selected_faces]
+        edge_a = selected_triangles[:, 1] - selected_triangles[:, 0]
+        edge_b = selected_triangles[:, 2] - selected_triangles[:, 0]
+        weighted_normals = np.cross(edge_a, edge_b)
+
+        vertex_normals = np.zeros_like(vertices, dtype=float)
+        for corner in range(3):
+            np.add.at(
+                vertex_normals,
+                selected_faces[:, corner],
+                weighted_normals,
             )
 
         lengths = np.linalg.norm(vertex_normals, axis=1)
-        valid = lengths > 1e-12
+        used_vertices = np.unique(selected_faces)
+        if np.any(lengths[used_vertices] <= 1e-12):
+            raise ValueError(
+                "Selected patch contains vertices with undefined local normals."
+            )
+
         normalized = np.zeros_like(vertex_normals)
+        valid = lengths > 1e-12
         normalized[valid] = (
             vertex_normals[valid] / lengths[valid, None]
         )
@@ -1975,34 +1994,9 @@ class ProductViewer(QWidget):
                             f"{type(exc).__name__}: {exc}"
                         )
 
-                    # Cylindrical/hole patches use the separate short,
-                    # one-way axial locator. Ordinary patches do not produce
-                    # an additional beam.
-                    try:
-                        beam_polydata = self._build_patch_light_beams(
-                            self.current_mesh,
-                            selected_mask,
-                            max_beams=64,
-                            radius_scale=0.055,
-                        )
-                        if beam_polydata.n_cells > 0:
-                            beam_actor = self.plotter.add_mesh(
-                                beam_polydata,
-                                color="#FFFFFF",
-                                opacity=0.075,
-                                show_edges=False,
-                                lighting=False,
-                                ambient=1.0,
-                                diffuse=0.0,
-                                pickable=False,
-                            )
-                            glow_actors.append(beam_actor)
-                    except Exception as exc:
-                        print(
-                            "[PATCH GLOW WARNING] "
-                            "Projected beams skipped: "
-                            f"{type(exc).__name__}: {exc}"
-                        )
+                    # Do not add projected cylinders or secondary rings.
+                    # The selected patch is represented by its single parallel
+                    # membrane only; its original patch contour remains below.
 
                     # A translucent white wash gives the selected surface a
                     # soft luminous appearance; the contour retains patch color.
