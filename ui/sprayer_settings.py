@@ -375,8 +375,22 @@ class SprayerSettingsDialog(QDialog):
             "Other / unspecified",
         ])
         self.pattern_combo = QComboBox()
-        self.pattern_combo.addItem("Flat fan", "flat_fan")
-        self.pattern_combo.addItem("Round cone", "round_cone")
+        self.pattern_combo.addItem(
+            "Round cone — circular footprint", "round_cone"
+        )
+        self.pattern_combo.addItem(
+            "Flat fan — narrow rectangular footprint", "flat_fan"
+        )
+        self.pattern_description = QLabel()
+        self.pattern_description.setWordWrap(True)
+        self.pattern_description.setStyleSheet(
+            "color: #AFC5D1; padding: 3px 5px 7px 5px;"
+        )
+        self.pattern_description.setToolTip(
+            "Select the actual spray pattern produced by the installed nozzle. "
+            "The choice controls trajectory spacing, surface footprint preview "
+            "and geometric coverage estimation."
+        )
 
         # Put the parameters most often adjusted for trajectory generation
         # at the top of the left-hand form for quick access.
@@ -478,8 +492,8 @@ class SprayerSettingsDialog(QDialog):
             elif key == "fan_thickness_at_reference_mm":
                 spin.setToolTip(
                     "Measured narrow dimension of the flat-fan footprint at the "
-                    "reference distance. Leave at 0 only when this measurement "
-                    "is unavailable; coverage then uses a conical approximation."
+                    "reference distance. Required for flat-fan footprint and "
+                    "coverage visualization. No circular-cone substitute is used."
                 )
             spin.valueChanged.connect(self._refresh_preview)
             self.fields[key] = spin
@@ -490,6 +504,8 @@ class SprayerSettingsDialog(QDialog):
             "color: #00E5FF; font-weight: bold; padding-top: 5px;"
         )
         form.addRow(trajectory_header)
+        form.addRow("Spray pattern", self.pattern_combo)
+        form.addRow(self.pattern_description)
 
         for key, label, minimum, maximum, decimals in field_specs:
             if key in trajectory_keys:
@@ -504,7 +520,6 @@ class SprayerSettingsDialog(QDialog):
         form.addRow("Manufacturer", self.manufacturer_edit)
         form.addRow("Model / part number", self.model_edit)
         form.addRow("Atomization technology", self.technology_combo)
-        form.addRow("Spray pattern", self.pattern_combo)
 
         for key, label, minimum, maximum, decimals in field_specs:
             if key not in trajectory_keys:
@@ -579,7 +594,7 @@ class SprayerSettingsDialog(QDialog):
         for widget in (self.name_edit, self.manufacturer_edit, self.model_edit):
             widget.textChanged.connect(self._refresh_preview)
         self.technology_combo.currentTextChanged.connect(self._refresh_preview)
-        self.pattern_combo.currentIndexChanged.connect(self._refresh_preview)
+        self.pattern_combo.currentIndexChanged.connect(self._on_pattern_changed)
 
     def _populate_profiles(self):
         self._loading = True
@@ -617,7 +632,31 @@ class SprayerSettingsDialog(QDialog):
             spin.setValue(float(data.get(key, 0.0) or 0.0))
         self.profile_notes.setText(str(data.get("profile_notes", "")))
         self._loading = False
+        self._update_pattern_controls()
         self._refresh_preview()
+
+    def _on_pattern_changed(self, *_):
+        self._update_pattern_controls()
+        self._refresh_preview()
+
+    def _update_pattern_controls(self):
+        pattern = str(self.pattern_combo.currentData() or "flat_fan")
+        is_flat_fan = pattern == "flat_fan"
+        self.fields["fan_reference_distance_mm"].setEnabled(is_flat_fan)
+        self.fields["fan_thickness_at_reference_mm"].setEnabled(is_flat_fan)
+        if is_flat_fan:
+            self.pattern_description.setText(
+                "Flat fan: produces a narrow rectangular / fan-shaped footprint. "
+                "Enter the measured fan thickness at the reference distance; "
+                "without it, the footprint cannot be estimated reliably."
+            )
+        else:
+            self.pattern_description.setText(
+                "Round cone: produces a circular footprint on a surface "
+                "perpendicular to the spray axis. The footprint diameter is "
+                "calculated from working distance and full spray angle. "
+                "Flat-fan thickness settings are not used."
+            )
 
     def _collect_profile(self):
         profile = {
