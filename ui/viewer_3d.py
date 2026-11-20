@@ -126,14 +126,17 @@ class ProductViewer(QWidget):
         self.grid_spacing_mm = 10.0
         self.grid_spacing_coordinate_units = 10.0
 
+        # Stage 3 starts with the product surface only.
+        # Surface filters stay enabled so the complete product remains visible;
+        # all trajectory overlays are opt-in and can be enabled one at a time.
         self.trajectory_visibility = {
             "planar": True,
             "curved": True,
-            "nozzle": True,
-            "arrows": True,
-            "paths": True,
-            "samples": True,
-            "frames": True,
+            "nozzle": False,
+            "arrows": False,
+            "paths": False,
+            "samples": False,
+            "frames": False,
         }
         self.trajectory_product_transform = np.eye(4, dtype=float)
         self._last_product_transform = np.eye(4, dtype=float)
@@ -349,7 +352,7 @@ class ProductViewer(QWidget):
 
         for key, label_text in checkbox_items:
             checkbox = QCheckBox(label_text)
-            checkbox.setChecked(True)
+            checkbox.setChecked(self.trajectory_visibility[key])
 
             checkbox.toggled.connect(
                 lambda checked, item=key:
@@ -1635,45 +1638,8 @@ class ProductViewer(QWidget):
                     lighting=False,
                 )
 
-        visible_layers = []
-
-        for key, label in [
-            ("planar", "PLANAR SURFACES"),
-            ("curved", "CURVED SURFACES"),
-            ("nozzle", "NOZZLE POSITIONS"),
-            ("arrows", "DIRECTION ARROWS"),
-            ("paths", "TRAJECTORY PATHS"),
-            ("samples", "SURFACE SAMPLES"),
-            ("frames", "NOZZLE ORIENTATION FRAMES"),
-        ]:
-            state = "ON" if self.trajectory_visibility[key] else "OFF"
-            visible_layers.append(f"{label}: {state}")
-
-        legend = (
-            "STAGE 3 - SPRAY TRAJECTORY\n"
-            "GREEN   - SURFACE SAMPLES / PATH\n"
-            "CYAN    - NOZZLE REFERENCE POINT\n"
-            "YELLOW  - SPRAY DIRECTION\n"
-            "RED/GREEN/BLUE - NOZZLE FRAME X/Y/Z\n\n"
-            + "\n".join(visible_layers)
-            + "\n\n"
-            + f"TRAJECTORY SEGMENTS: {len(np.unique(segment_ids))}\n"
-            + f"SAMPLE POINTS: {count}\n"
-            + f"STL UNIT: {self._source_unit_label()}\n"
-            + f"DISPLAY UNIT: {self._display_unit_label()}\n\n"
-            + "ROBOT REACHABILITY: NOT CHECKED\n"
-            + "COLLISION: NOT CHECKED\n"
-            + "SPRAY COVERAGE: NOT VERIFIED\n"
-            + "TCP CALIBRATION: NOT VERIFIED"
-        )
-
-        self.plotter.add_text(
-            legend,
-            position="upper_right",
-            font_size=9,
-            color="#E1EAF0",
-            shadow=True,
-        )
+        # Keep the 3D viewport free of diagnostic text. Stage 3 metrics
+        # belong in the Summary panel, not over the product geometry.
 
     def _trajectory_arrow_length(self):
         if self.trajectory_data is None:
@@ -2147,12 +2113,10 @@ class ProductViewer(QWidget):
             if polydata.n_cells > 0:
                 self._pose_actor = self.plotter.add_mesh(
                     polydata,
-                    color="#4C8DAD",
-                    opacity=0.38,
-                    show_edges=True,
-                    edge_color="#29404D",
-                    line_width=1,
-                    smooth_shading=False,
+                    color="#9FB7C7",
+                    opacity=0.92,
+                    show_edges=False,
+                    smooth_shading=True,
                     pickable=False,
                 )
                 self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
