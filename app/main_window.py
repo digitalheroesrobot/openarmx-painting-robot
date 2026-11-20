@@ -628,6 +628,9 @@ class MainWindow(QMainWindow):
         # 3D Viewer
         self.viewer = ProductViewer()
         self.viewer.pose_confirmed.connect(self._save_reference_pose)
+        self.viewer.patch_selected.connect(
+            self._on_viewer_patch_selected
+        )
 
         # Left sidebar
         self.left_panel = self._build_left_panel()
@@ -1560,6 +1563,53 @@ class MainWindow(QMainWindow):
         self.patch_rows_layout.addStretch()
 
 
+    def _highlight_patch_row(self, patch_id, scroll=True):
+        """Highlight and reveal the row matching a selected 3D Patch ID."""
+        patch_id = int(patch_id)
+        widgets = self.patch_row_widgets.get(patch_id)
+        if widgets is None:
+            return
+
+        for current_id, row_widgets in self.patch_row_widgets.items():
+            selected = int(current_id) == patch_id
+            row = row_widgets["row"]
+            row.setStyleSheet(
+                "QFrame#PatchRow {"
+                " background-color: #18394A;"
+                " border: 2px solid #00E5FF;"
+                " border-radius: 5px;"
+                "}"
+                if selected
+                else ""
+            )
+            row_widgets["select_button"].setStyleSheet(
+                "background-color: #D6A500; color: #101820; "
+                "font-weight: bold; border: 2px solid #FFF0A6;"
+                if selected
+                else ""
+            )
+
+        if scroll:
+            self._expand_patch_inspection_section()
+            self.patch_inspection_panel.show()
+            self.patch_scroll.ensureWidgetVisible(
+                widgets["row"],
+                0,
+                24,
+            )
+
+    def _on_viewer_patch_selected(self, patch_id):
+        """Synchronize a 3D surface click with the right-side Patch list."""
+        if int(patch_id) not in self.patch_inspection:
+            return
+
+        self.selected_patch_id = int(patch_id)
+        self._highlight_patch_row(self.selected_patch_id, scroll=True)
+        self.status_bar.showMessage(
+            f"SELECTED PATCH {self.selected_patch_id}  |  "
+            "3D SURFACE AND PATCH LIST SYNCHRONIZED"
+        )
+
     def _select_patch_in_viewer(self, patch_id):
         if patch_id not in self.patch_inspection:
             return
@@ -1579,14 +1629,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        for current_id, widgets in self.patch_row_widgets.items():
-            selected = current_id == self.selected_patch_id
-
-            widgets["select_button"].setStyleSheet(
-                "background-color: #D6A500; color: #101820;"
-                if selected
-                else ""
-            )
+        self._highlight_patch_row(self.selected_patch_id, scroll=True)
 
         self.status_bar.showMessage(
             f"SELECTED PATCH {patch_id}  |  "
