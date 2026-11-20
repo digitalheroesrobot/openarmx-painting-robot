@@ -277,13 +277,101 @@ def _validate_parameters(
             f"{MAX_SAMPLING_SPACING_MM:.1f} mm."
         )
 
-    if abs(angle - SUPPORTED_SPRAY_ANGLE_DEG) > 1e-9:
-        raise ValueError(
-            "Only a 0-degree spray angle is currently supported. "
-            "Nonzero angles require a defined tangent-plane azimuth."
-        )
+    if not 0.0 <= angle <= 150.0:
+        raise ValueError("Spray angle must be between 0 and 150 degrees.")
 
     return standoff, spacing, angle
+
+
+def _calculate_spray_footprint(
+    sprayer_profile: dict | None,
+    standoff_mm: float,
+) -> dict:
+    """
+    Calculate a nominal spray footprint at the requested working distance.
+
+    Flat-fan width is estimated from the included angle. Its narrow dimension
+    is scaled from a measured reference-distance thickness when available.
+    Round-cone footprints are circular. Missing flat-fan thickness is reported
+    as unknown rather than fabricated.
+    """
+    profile = sprayer_profile if isinstance(sprayer_profile, dict) else {}
+
+    pattern = str(profile.get("pattern_type", "flat_fan")).strip().lower()
+    if pattern not in {"flat_fan", "round_cone"}:
+        raise ValueError(
+            f"Unsupported spray pattern type: {pattern!r}. "
+            "Use 'flat_fan' or 'round_cone'."
+        )
+
+    angle = _safe_float(profile.get("spray_cone_angle_deg"))
+    if angle is None:
+        angle = 0.0
+    if not 0.0 <= angle <= 150.0:
+        raise ValueError("Spray angle must be between 0 and 150 degrees.")
+
+    overlap = _safe_float(profile.get("overlap_percent"))
+    if overlap is None:
+        overlap = 0.0
+    if not 0.0 <= overlap < 100.0:
+        raise ValueError("Track overlap must be in the range [0, 100).")
+
+    reference_distance = _safe_float(
+        profile.get("fan_reference_distance_mm")
+    )
+    if reference_distance is None or reference_distance <= 0.0:
+        raise ValueError(
+            "Fan reference distance must be a positive finite value."
+        )
+
+    reference_thickness = _safe_float(
+        profile.get("fan_thickness_at_reference_mm")
+    )
+    if reference_thickness is None or reference_thickness < 0.0:
+        raise ValueError("Fan thickness cannot be negative.")
+
+    width = (
+        2.0 * float(standoff_mm) * math.tan(math.radians(angle * 0.5))
+        if angle > 0.0 else 0.0
+    )
+
+    if pattern == "round_cone":
+        thickness = width
+        thickness_status = "circular_cone_geometry"
+    elif reference_thickness > 0.0:
+        thickness = (
+            reference_thickness * float(standoff_mm) / reference_distance
+        )
+        thickness_status = "scaled_from_measured_reference"
+    else:
+        thickness = None
+        thickness_status = "unknown_conical_approximation_only"
+
+    track_spacing = width * (1.0 - overlap / 100.0)
+
+    return {
+        "pattern_type": pattern,
+        "included_angle_deg": float(angle),
+        "working_distance_mm": float(standoff_mm),
+        "reference_distance_mm": float(reference_distance),
+        "reference_thickness_mm": float(reference_thickness),
+        "width_mm": float(width),
+        "thickness_mm": (
+            float(thickness) if thickness is not None else None
+        ),
+        "thickness_status": thickness_status,
+        "overlap_percent": float(overlap),
+        "nominal_track_spacing_mm": float(track_spacing),
+        "track_spacing_status": (
+            "calculated_from_width_and_overlap"
+            if width > 0.0 else "not_available_angle_is_zero"
+        ),
+        "model_limitations": [
+            "Nominal geometric footprint; not a calibrated droplet deposition model.",
+            "Flat-fan width assumes the included-angle geometry is valid.",
+            "Actual footprint depends on sprayer, pressure, fluid, distance and coating conditions.",
+        ],
+    }
 
 
 # ------------------------------------------------------------
@@ -1853,16 +1941,15 @@ def generate_spray_trajectory(
     nozzle_frames = _build_nozzle_frames(spray_directions)
 
     # 7. Generate planar raster lanes from the configured fan width/overlap.
-    profile_for_path = dict(sprayer_profile) if isinstance(sprayer_profile, dict) else {}
-    path_cone_angle = _safe_float(profile_for_path.get("spray_cone_angle_deg", 0.0)) or 0.0
-    path_cone_angle = max(0.0, min(150.0, path_cone_angle))
-    path_overlap = _safe_float(profile_for_path.get("overlap_percent", 0.0)) or 0.0
-    path_overlap = max(0.0, min(90.0, path_overlap))
-    path_spray_width_mm = (
-        2.0 * standoff_mm * math.tan(math.radians(path_cone_angle * 0.5))
-        if path_cone_angle > 0.0 else 0.0
+    profile_for_path = (
+        dict(sprayer_profile) if isinstance(sprayer_profile, dict) else {}
     )
-    path_track_spacing_mm = path_spray_width_mm * (1.0 - path_overlap / 100.0)
+    spray_footprint = _calculate_spray_footprint(
+        profile_for_path,
+        standoff_mm,
+    )
+    path_spray_width_mm = spray_footprint["width_mm"]
+    path_track_spacing_mm = spray_footprint["nominal_track_spacing_mm"]
     path_track_spacing_units = _mm_to_coordinate_units(
         path_track_spacing_mm, source_unit
     ) if path_track_spacing_mm > 0.0 else 0.0
@@ -2036,21 +2123,8 @@ def generate_spray_trajectory(
         if isinstance(sprayer_profile, dict)
         else {}
     )
-    cone_angle = _safe_float(
-        profile_data.get("spray_cone_angle_deg", 0.0)
-    ) or 0.0
-    cone_angle = max(0.0, min(150.0, cone_angle))
-    overlap_percent = _safe_float(
-        profile_data.get("overlap_percent", 0.0)
-    ) or 0.0
-    overlap_percent = max(0.0, min(90.0, overlap_percent))
-    spray_width_at_standoff_mm = (
-        2.0 * standoff_mm * math.tan(math.radians(cone_angle * 0.5))
-        if cone_angle > 0.0 else 0.0
-    )
-    nominal_track_spacing_mm = (
-        spray_width_at_standoff_mm * (1.0 - overlap_percent / 100.0)
-    )
+    spray_width_at_standoff_mm = spray_footprint["width_mm"]
+    nominal_track_spacing_mm = spray_footprint["nominal_track_spacing_mm"]
 
     return {
         "parameters": {
@@ -2075,6 +2149,7 @@ def generate_spray_trajectory(
             },
             "spray_width_at_standoff_mm": spray_width_at_standoff_mm,
             "nominal_track_spacing_from_overlap_mm": nominal_track_spacing_mm,
+            "spray_footprint": spray_footprint,
             "coordinate_unit": source_unit,
             "internal_coordinate_unit": source_unit,
             "standoff_coordinate_units": standoff_coordinate_units,
