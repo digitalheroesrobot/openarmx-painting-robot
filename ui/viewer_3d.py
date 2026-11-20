@@ -1771,8 +1771,9 @@ class ProductViewer(QWidget):
             if path.n_lines > 0:
                 self._playback_path_actor = self.plotter.add_mesh(
                     path,
-                    color="#F2C879",
-                    line_width=4,
+                    color="#A9BAC5",
+                    line_width=3,
+                    opacity=0.28,
                     render_lines_as_tubes=True,
                     lighting=False,
                     pickable=False,
@@ -1784,18 +1785,23 @@ class ProductViewer(QWidget):
 
         current = nozzle_points[index]
         if self._playback_nozzle_actor is None:
-            radius = max(self._trajectory_arrow_length() * 0.12, 1.0)
+            # Make the active nozzle/TCP sample visually dominant over
+            # the low-opacity trail. Radius is scaled to the working standoff.
+            radius = max(self._trajectory_arrow_length() * 0.22, 2.0)
             marker = pv.Sphere(
                 radius=radius,
                 center=(0.0, 0.0, 0.0),
-                theta_resolution=16,
-                phi_resolution=12,
+                theta_resolution=24,
+                phi_resolution=18,
             )
             self._playback_nozzle_actor = self.plotter.add_mesh(
                 marker,
-                color="#42D9F5",
+                color="#FF5A36",
                 smooth_shading=True,
                 lighting=False,
+                show_edges=True,
+                edge_color="#FFF4E8",
+                line_width=1.5,
                 pickable=False,
             )
             self._playback_nozzle_actor.SetPosition(*current.tolist())
