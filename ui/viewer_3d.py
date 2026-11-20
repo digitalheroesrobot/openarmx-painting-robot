@@ -2381,22 +2381,38 @@ class ProductViewer(QWidget):
         )
         self._playback_spray_actor.SetVisibility(0)
 
-        # Visible spray-state cue. A flat fan is represented by a thin,
-        # width-calibrated sheet (not an invented 3-D paint volume) when its
-        # measured fan thickness is unavailable.
+        # Visible spray-state cue. Round-cone geometry is explicitly built
+        # from nozzle apex to the configured target-plane radius. Flat fan is
+        # shown as a thin sheet; its thickness is not invented if unmeasured.
         sheet_length = cache["standoff_units"]
         sheet_half_width = max(cache["footprint_width_units"] * 0.5, 1e-6)
         if cache["pattern_type"] == "round_cone":
-            # PyVista's cone direction points from its base toward its apex.
-            # The nozzle is local Z=0 and the target surface is local Z=+L:
-            # therefore the apex must point back toward -Z (at the nozzle),
-            # while the wide circular base lies at +Z (on the target surface).
-            sheet_mesh = pv.Cone(
-                center=(0.0, 0.0, sheet_length * 0.5),
-                direction=(0.0, 0.0, -1.0),
-                height=sheet_length,
-                radius=sheet_half_width,
-                resolution=48,
+            # Build the spray volume explicitly to avoid cone-orientation
+            # ambiguity: apex is exactly at the nozzle (z=0), and the circular
+            # footprint is exactly at the target plane (z=standoff).
+            # For a full included spray angle theta:
+            # target radius = standoff * tan(theta / 2).
+            cone_resolution = 64
+            cone_angles = np.linspace(
+                0.0, 2.0 * math.pi, cone_resolution, endpoint=False
+            )
+            cone_ring = np.column_stack((
+                sheet_half_width * np.cos(cone_angles),
+                sheet_half_width * np.sin(cone_angles),
+                np.full(cone_resolution, sheet_length, dtype=float),
+            ))
+            cone_points = np.vstack((
+                np.zeros((1, 3), dtype=float),
+                cone_ring,
+            ))
+            cone_faces = []
+            for cone_index in range(cone_resolution):
+                next_index = (cone_index + 1) % cone_resolution
+                cone_faces.extend((
+                    3, 0, 1 + cone_index, 1 + next_index
+                ))
+            sheet_mesh = pv.PolyData(
+                cone_points, np.asarray(cone_faces, dtype=np.int64)
             )
         else:
             sheet_points = np.asarray([
