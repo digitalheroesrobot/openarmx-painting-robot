@@ -96,6 +96,7 @@ class ProductViewer(QWidget):
         self.trajectory_path_statistics = {}
         self.trajectory_validation = {}
         self._playback_spray_actor = None
+        self._playback_spray_polydata = None
         self.face_surface_types = None
 
         # Currently selected Stage 2 surface patch.
@@ -392,8 +393,10 @@ class ProductViewer(QWidget):
             "color: #8FA3B2; font-weight: 700; padding: 2px 6px;"
         )
         self.trajectory_spray_state_label.setToolTip(
-            "The translucent amber cone is visible only while the simulated spray is ON. "
-            "At a segment boundary the spray is OFF; a robot travel path is not yet planned."
+            "Amber highlights the actual target-mesh triangles inside the configured "
+            "spray footprint for the current playback sample. Flat-fan visualization "
+            "requires measured fan thickness. At segment boundaries spray is OFF; "
+            "a robot travel path is not yet planned."
         )
         playback_row.addWidget(self.trajectory_spray_state_label)
 
@@ -1877,6 +1880,7 @@ class ProductViewer(QWidget):
             self._playback_nozzle_actor = None
             self._playback_gun_actors = []
             self._playback_spray_actor = None
+            self._playback_spray_polydata = None
             self._playback_index = 0
             self._playback_elapsed_s = 0.0
             self._playback_last_path_render_index = -1
@@ -1947,6 +1951,7 @@ class ProductViewer(QWidget):
             [0.0, 0.5, 0.5],
             [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
         ], dtype=float)
+        triangles_world = triangles @ rotation.T + translation
         face_samples = np.einsum("sv,fvc->fsc", barycentric, triangles).reshape(-1, 3)
         face_samples = face_samples @ rotation.T + translation
 
@@ -1977,6 +1982,21 @@ class ProductViewer(QWidget):
         half_angle = math.radians(cone_angle * 0.5)
         cone_tangent = math.tan(half_angle)
         cone_cosine = max(math.cos(half_angle), 0.2)
+        pattern_type = str(profile.get("pattern_type", "flat_fan")).strip().lower()
+        standoff_mm = standoff_units * mm_per_unit
+        footprint_width_units = 2.0 * standoff_units * cone_tangent
+        fan_reference_distance_units = max(
+            float(profile.get("fan_reference_distance_mm", 200.0) or 200.0) / mm_per_unit,
+            1e-9,
+        )
+        fan_thickness_units = max(
+            0.0,
+            float(profile.get("fan_thickness_at_reference_mm", 0.0) or 0.0) / mm_per_unit,
+        )
+        footprint_thickness_units = (
+            footprint_width_units if pattern_type == "round_cone"
+            else fan_thickness_units * standoff_units / fan_reference_distance_units
+        )
 
         paint_color_text = str(profile.get("paint_color", "#D95B43")).strip()
         try:
@@ -2029,6 +2049,7 @@ class ProductViewer(QWidget):
                 "m²" if source_unit in MM_PER_UNIT else "coordinate units²"
             ),
             "surface_tree": surface_tree,
+            "target_triangles_world": triangles_world,
             "coverage_sample_hits": np.zeros(len(face_samples), dtype=bool),
             "coverage_processed_index": -1,
             "coverage_render_stride": 4,
@@ -2038,17 +2059,13 @@ class ProductViewer(QWidget):
             "cone_tangent": cone_tangent,
             "cone_cosine": cone_cosine,
             "standoff_units": max(standoff_units, 1e-9),
-            "pattern_type": str(profile.get("pattern_type", "flat_fan")).strip().lower(),
-            "fan_thickness_units": max(
-                0.0,
-                float(profile.get("fan_thickness_at_reference_mm", 0.0) or 0.0)
-                / mm_per_unit,
-            ),
-            "fan_reference_distance_units": max(
-                float(profile.get("fan_reference_distance_mm", 200.0) or 200.0)
-                / mm_per_unit,
-                1e-9,
-            ),
+            "pattern_type": pattern_type,
+            "fan_thickness_units": fan_thickness_units,
+            "fan_reference_distance_units": fan_reference_distance_units,
+            "footprint_width_units": footprint_width_units,
+            "footprint_thickness_units": footprint_thickness_units,
+            "footprint_width_mm": footprint_width_units * mm_per_unit,
+            "footprint_thickness_mm": footprint_thickness_units * mm_per_unit,
             "paint_rgb": paint_rgb,
             "profile": dict(profile),
             "mm_per_unit": mm_per_unit,
@@ -2072,67 +2089,90 @@ class ProductViewer(QWidget):
         except Exception:
             pass
 
-    def _mark_surface_samples_from_spray(self, path_index):
+    def _get_surface_sample_hits_from_spray(self, path_index):
+        """Return mesh-surface samples inside the configured spray footprint."""
         cache = self._prepare_trajectory_playback_cache()
         if cache is None or cache["cone_tangent"] <= 0.0:
-            return
+            return np.empty(0, dtype=np.int64)
+        # Never invent a circular footprint for a flat fan with unknown thickness.
+        if cache["pattern_type"] == "flat_fan" and cache["fan_thickness_units"] <= 0.0:
+            return np.empty(0, dtype=np.int64)
+
         nozzle = cache["nozzle_points"][path_index]
         direction = cache["spray_directions"][path_index]
         if not np.all(np.isfinite(nozzle)) or np.linalg.norm(direction) <= 1e-12:
-            return
+            return np.empty(0, dtype=np.int64)
 
         max_axial = cache["standoff_units"] / cache["cone_cosine"] * 1.15
         search_radius = max_axial / cache["cone_cosine"] * 1.02
         tree = cache["surface_tree"]
         if tree is not None:
-            candidates = np.asarray(
-                tree.query_ball_point(nozzle, search_radius), dtype=np.int64
-            )
+            candidates = np.asarray(tree.query_ball_point(nozzle, search_radius), dtype=np.int64)
         else:
             delta_all = cache["face_samples"] - nozzle
             candidates = np.flatnonzero(
-                np.einsum("ij,ij->i", delta_all, delta_all)
-                <= search_radius * search_radius
+                np.einsum("ij,ij->i", delta_all, delta_all) <= search_radius * search_radius
             )
         if len(candidates) == 0:
-            return
+            return np.empty(0, dtype=np.int64)
 
         delta = cache["face_samples"][candidates] - nozzle
         axial = delta @ direction
         frame = cache["nozzle_frames"][path_index]
         local_x = delta @ frame[:, 0]
         local_y = delta @ frame[:, 1]
-        radial = np.sqrt(local_x * local_x + local_y * local_y)
-
-        pattern_type = cache["pattern_type"]
-        if (
-            pattern_type == "flat_fan"
-            and cache["fan_thickness_units"] > 0.0
-        ):
-            half_fan_width = axial * cache["cone_tangent"]
-            half_fan_thickness = (
+        if cache["pattern_type"] == "flat_fan":
+            half_width = axial * cache["cone_tangent"]
+            half_thickness = (
                 0.5 * cache["fan_thickness_units"]
                 * axial / cache["fan_reference_distance_units"]
             )
             inside_pattern = (
-                (np.abs(local_x) <= half_fan_width)
-                & (np.abs(local_y) <= half_fan_thickness)
+                (np.abs(local_x) <= half_width)
+                & (np.abs(local_y) <= half_thickness)
             )
         else:
-            # Round-cone model, also used as a clearly disclosed fallback
-            # when a flat-fan thickness measurement has not been entered.
+            radial = np.sqrt(local_x * local_x + local_y * local_y)
             inside_pattern = radial <= axial * cache["cone_tangent"]
 
         facing = np.einsum(
             "ij,j->i", cache["sample_normals"][candidates], -direction
         ) > 0.02
-        inside_envelope = (
-            (axial > 0.0)
-            & (axial <= max_axial)
-            & inside_pattern
-            & facing
+        inside = (
+            (axial > 0.0) & (axial <= max_axial)
+            & inside_pattern & facing
         )
-        cache["coverage_sample_hits"][candidates[inside_envelope]] = True
+        return candidates[inside]
+
+    def _mark_surface_samples_from_spray(self, path_index):
+        cache = self._prepare_trajectory_playback_cache()
+        if cache is None:
+            return
+        hit_samples = self._get_surface_sample_hits_from_spray(path_index)
+        if len(hit_samples):
+            cache["coverage_sample_hits"][hit_samples] = True
+
+    def _update_current_spray_footprint(self, path_index):
+        """Illuminate only target mesh triangles reached by the current spray sample."""
+        cache = self._prepare_trajectory_playback_cache()
+        actor = self._playback_spray_actor
+        polydata = self._playback_spray_polydata
+        if cache is None or actor is None or polydata is None:
+            return
+        rgba = np.zeros((len(cache["target_face_ids"]), 4), dtype=np.uint8)
+        known = cache["pattern_type"] == "round_cone" or cache["fan_thickness_units"] > 0.0
+        if cache["spray_on_mask"][path_index] and known:
+            hits = self._get_surface_sample_hits_from_spray(path_index)
+            if len(hits):
+                face_positions = np.unique(hits // cache["sample_count_per_face"])
+                rgba[face_positions] = [255, 151, 48, 190]
+        polydata.cell_data["Spray Footprint RGBA"] = rgba
+        vtk_array = polydata.GetCellData().GetArray("Spray Footprint RGBA")
+        if vtk_array is not None:
+            vtk_array.Modified()
+        polydata.Modified()
+        actor.SetVisibility(bool(np.any(rgba[:, 3] > 0)))
+
 
     def _update_paint_coverage_visualization(self, index):
         cache = self._prepare_trajectory_playback_cache()
@@ -2208,9 +2248,8 @@ class ProductViewer(QWidget):
         if hasattr(self, "trajectory_coverage_label"):
             if cache["pattern_type"] == "flat_fan":
                 model_label = (
-                    "FLAT FAN"
-                    if cache["fan_thickness_units"] > 0.0
-                    else "CONE APPROX."
+                    "FLAT FAN" if cache["fan_thickness_units"] > 0.0
+                    else "FAN THICKNESS REQUIRED"
                 )
             else:
                 model_label = "ROUND CONE"
@@ -2225,10 +2264,9 @@ class ProductViewer(QWidget):
                 and cache["fan_thickness_units"] <= 0.0
             ):
                 self.trajectory_coverage_label.setToolTip(
-                    "Estimated geometric coverage using a conical fallback. "
-                    "Enter the measured fan thickness at the reference distance "
-                    "in the sprayer profile for a flat-fan footprint estimate. "
-                    "This is not measured coating thickness or paint mass."
+                    "Flat-fan footprint is not displayed or counted because its "
+                    "measured thickness is zero/unknown. Enter the measured fan "
+                    "thickness at the reference distance. No conical substitute is used."
                 )
             else:
                 self.trajectory_coverage_label.setToolTip(
@@ -2310,25 +2348,29 @@ class ProductViewer(QWidget):
                 pickable=False,
             ),
         ]
-        plume_height = max(standoff, 1e-6)
-        plume_radius = max(
-            plume_height * cache["cone_tangent"],
-            plume_height * 0.01,
-        )
-        plume_mesh = pv.Cone(
-            center=(0.0, 0.0, plume_height * 0.5),
-            direction=(0.0, 0.0, 1.0),
-            height=plume_height,
-            radius=plume_radius,
-            resolution=32,
+        # Surface-conforming overlay: each target triangle can be illuminated
+        # only when its samples fall inside the configured spray footprint.
+        target_triangles = cache["target_triangles_world"]
+        target_points = target_triangles.reshape(-1, 3)
+        face_count = len(target_triangles)
+        target_faces = np.column_stack([
+            np.full(face_count, 3, dtype=np.int64),
+            np.arange(face_count, dtype=np.int64) * 3,
+            np.arange(face_count, dtype=np.int64) * 3 + 1,
+            np.arange(face_count, dtype=np.int64) * 3 + 2,
+        ]).reshape(-1)
+        self._playback_spray_polydata = pv.PolyData(target_points, target_faces)
+        self._playback_spray_polydata.cell_data["Spray Footprint RGBA"] = (
+            np.zeros((face_count, 4), dtype=np.uint8)
         )
         self._playback_spray_actor = self.plotter.add_mesh(
-            plume_mesh,
-            color="#F4A340",
-            opacity=0.22,
-            smooth_shading=False,
+            self._playback_spray_polydata,
+            scalars="Spray Footprint RGBA",
+            rgba=True,
+            preference="cell",
             lighting=False,
             pickable=False,
+            show_edges=False,
         )
         self._playback_spray_actor.SetVisibility(0)
         self._playback_nozzle_actor = self._playback_gun_actors[0]
@@ -2349,9 +2391,6 @@ class ProductViewer(QWidget):
         for actor in self._playback_gun_actors:
             actor.SetOrigin(0.0, 0.0, 0.0)
             actor.SetUserMatrix(vtk_matrix)
-        if self._playback_spray_actor is not None:
-            self._playback_spray_actor.SetOrigin(0.0, 0.0, 0.0)
-            self._playback_spray_actor.SetUserMatrix(vtk_matrix)
 
     def _make_playback_path_polydata(self, last_index):
         cache = self._prepare_trajectory_playback_cache()
@@ -2413,11 +2452,19 @@ class ProductViewer(QWidget):
 
         self._position_spray_gun(index)
         spray_on = bool(cache["spray_on_mask"][index])
-        if self._playback_spray_actor is not None:
-            self._playback_spray_actor.SetVisibility(1 if spray_on else 0)
+        self._update_current_spray_footprint(index)
         if hasattr(self, "trajectory_spray_state_label"):
             if spray_on:
-                self.trajectory_spray_state_label.setText("SPRAY: ON")
+                if cache["pattern_type"] == "flat_fan" and cache["fan_thickness_units"] <= 0.0:
+                    self.trajectory_spray_state_label.setText(
+                        f"SPRAY: ON · FAN THICKNESS REQUIRED "
+                        f"({cache['footprint_width_mm']:.1f} mm width)"
+                    )
+                else:
+                    self.trajectory_spray_state_label.setText(
+                        f"SPRAY: ON · {cache['footprint_width_mm']:.1f} × "
+                        f"{cache['footprint_thickness_mm']:.1f} mm"
+                    )
                 self.trajectory_spray_state_label.setStyleSheet(
                     "color: #FFB454; font-weight: 700; padding: 2px 6px;"
                 )
