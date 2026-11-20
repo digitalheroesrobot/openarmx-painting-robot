@@ -33,7 +33,8 @@ def _ocp_imports():
             TopAbs_VERTEX, TopAbs_REVERSED,
         )
         from OCP.TopExp import TopExp, TopExp_Explorer
-        from OCP.TopTools import TopTools_IndexedMapOfShape
+        # OCP 8 moved indexed TopoDS maps from OCP.TopTools to OCP.collections.
+        from OCP.collections import IndexedMap_TopoDS_Shape_TopTools_ShapeMapHasher
         from OCP.TopoDS import TopoDS
         from OCP.TopLoc import TopLoc_Location
         from OCP.GeomAbs import (
@@ -338,7 +339,7 @@ def load_step(
 
     brep_adjacency, unique_edge_shapes = _build_brep_face_edge_adjacency(
         shape, faces, ocp["TopExp"], TopExp_Explorer,
-        ocp["TopTools_IndexedMapOfShape"], ocp["TopAbs_EDGE"]
+        ocp["IndexedMap_TopoDS_Shape_TopTools_ShapeMapHasher"], ocp["TopAbs_EDGE"]
     )
     face_records = []
     surface_counts = Counter()
