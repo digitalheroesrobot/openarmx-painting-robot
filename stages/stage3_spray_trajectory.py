@@ -1319,6 +1319,45 @@ def _generate_surface_following_raster_for_patch(
             return None
         return float(hits[0]), float(hits[-1])
 
+    # A single global PCA grid can fall entirely inside a gap between
+    # disconnected projected components. If none of its lanes intersects any
+    # triangle, retry with one guaranteed interior scanline per projected
+    # triangle. The centroid's offset coordinate lies strictly inside every
+    # non-degenerate triangle, so this recovers narrow/disconnected bands
+    # without inventing geometry or relaxing barycentric validation.
+    regular_grid_has_intersection = any(
+        line_interval(triangle_2d, float(offset)) is not None
+        for offset in lane_offsets
+        for triangle_2d in projected_triangles
+    )
+    adaptive_scanline_offsets_used = False
+    if not regular_grid_has_intersection:
+        adaptive_offsets = np.mean(projected_triangles[:, :, 1], axis=1)
+        adaptive_offsets = np.unique(
+            np.round(adaptive_offsets.astype(np.float64), decimals=10)
+        )
+        if len(adaptive_offsets) > 0:
+            lane_offsets = adaptive_offsets
+            adaptive_scanline_offsets_used = True
+            if diagnostics is not None:
+                diagnostics["adaptive_scanline_offsets_used"] = True
+                diagnostics["adaptive_scanline_count"] = int(len(lane_offsets))
+                diagnostics["regular_scanline_count"] = int(
+                    len(np.unique(np.round(
+                        np.asarray([
+                            min_offset + min(lane_spacing * 0.5, extent * 0.5)
+                            + i * lane_spacing
+                            for i in range(max(
+                                1,
+                                int(math.floor(
+                                    (last_offset - first_offset) / lane_spacing
+                                )) + 1,
+                            ))
+                        ], dtype=np.float64),
+                        decimals=10,
+                    )))
+                )
+
     def barycentric_2d(point: np.ndarray, triangle: np.ndarray):
         a, b, c = triangle
         v0 = b - a
@@ -1462,6 +1501,8 @@ def _generate_surface_following_raster_for_patch(
         "offset_direction": offset_axis.tolist(),
         "projection_method": "pca_surface_triangle_barycentric",
         "projection_is_approximate": True,
+        "adaptive_scanline_offsets_used": bool(adaptive_scanline_offsets_used),
+        "adaptive_scanline_count": int(len(lane_offsets)) if adaptive_scanline_offsets_used else 0,
     }
 
 
@@ -3747,6 +3788,48 @@ def run_stage3_numerical_tests() -> dict:
             axis=1,
         ),
         25.0,
+        atol=1e-6,
+    )
+
+    # --------------------------------------------------------
+    # Test 22C: Adaptive scanlines recover separated projected bands.
+    # The regular global lane falls in the gap between the two triangles.
+    # --------------------------------------------------------
+    disconnected_band_mesh = trimesh.Trimesh(
+        vertices=np.asarray([
+            [0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 1.0, 0.0],
+            [100.0, 10.0, 0.0], [110.0, 10.0, 0.0], [100.0, 11.0, 0.0],
+        ], dtype=np.float64),
+        faces=np.asarray([[0, 1, 2], [3, 4, 5]], dtype=np.int64),
+        process=False,
+    )
+    disconnected_band_normals = np.asarray(
+        disconnected_band_mesh.face_normals, dtype=np.float64
+    )
+    adaptive_scanline_diagnostics = {}
+    adaptive_band_raster = _generate_surface_following_raster_for_patch(
+        mesh=disconnected_band_mesh,
+        face_indices=np.asarray([0, 1], dtype=np.int64),
+        normals=disconnected_band_normals,
+        standoff_coordinate_units=5.0,
+        sample_spacing_coordinate_units=2.0,
+        track_spacing_coordinate_units=100.0,
+        diagnostics=adaptive_scanline_diagnostics,
+    )
+    assert adaptive_band_raster is not None, (
+        "Adaptive scanlines should recover disconnected projected bands: "
+        f"{adaptive_scanline_diagnostics}"
+    )
+    assert adaptive_band_raster["adaptive_scanline_offsets_used"] is True
+    assert set(np.unique(adaptive_band_raster["face_indices"]).tolist()) == {0, 1}
+    assert len(np.unique(adaptive_band_raster["segment_ids"])) >= 2
+    assert np.allclose(
+        np.linalg.norm(
+            adaptive_band_raster["nozzle_points"]
+            - adaptive_band_raster["surface_points"],
+            axis=1,
+        ),
+        5.0,
         atol=1e-6,
     )
 
