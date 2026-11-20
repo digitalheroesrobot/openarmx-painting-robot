@@ -39,6 +39,7 @@ DEFAULT_SPRAYER_PROFILE = {
     "standoff_mm": 180.0,
     "spray_cone_angle_deg": 74.0,
     "fan_reference_distance_mm": 200.0,
+    "fan_thickness_at_reference_mm": 0.0,
     "overlap_percent": 50.0,
     "sampling_spacing_mm": 20.0,
     "travel_speed_mm_s": 0.0,
@@ -381,6 +382,7 @@ class SprayerSettingsDialog(QDialog):
             ("gun_body_diameter_mm", "Gun body diameter (mm)", 0.0, 200.0, 1),
             ("tcp_to_nozzle_tip_mm", "TCP to nozzle tip (mm)", 0.0, 500.0, 1),
             ("fan_reference_distance_mm", "Reference distance (mm)", 10.0, 2000.0, 1),
+            ("fan_thickness_at_reference_mm", "Fan thickness at reference distance (mm)", 0.0, 1000.0, 1),
             ("travel_speed_mm_s", "Gun travel speed (mm/s)", 0.0, 2000.0, 1),
             ("fan_air_pressure_bar", "Fan air pressure (bar)", 0.0, 10.0, 2),
             ("atomizing_air_pressure_bar", "Atomizing air pressure (bar)", 0.0, 10.0, 2),
@@ -393,6 +395,7 @@ class SprayerSettingsDialog(QDialog):
             "spray_cone_angle_deg",
             "overlap_percent",
             "sampling_spacing_mm",
+            "fan_thickness_at_reference_mm",
         }
 
         def add_profile_field(key, label, minimum, maximum, decimals):
@@ -426,8 +429,13 @@ class SprayerSettingsDialog(QDialog):
                 )
             elif key == "overlap_percent":
                 spin.setToolTip(
-                    "Target overlap used to calculate nominal track spacing. "
-                    "Automatic raster-lane generation is not implemented yet."
+                    "Target overlap used to calculate nominal track spacing."
+                )
+            elif key == "fan_thickness_at_reference_mm":
+                spin.setToolTip(
+                    "Measured narrow dimension of the flat-fan footprint at the "
+                    "reference distance. Leave at 0 only when this measurement "
+                    "is unavailable; coverage then uses a conical approximation."
                 )
             spin.valueChanged.connect(self._refresh_preview)
             self.fields[key] = spin
