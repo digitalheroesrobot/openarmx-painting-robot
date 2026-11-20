@@ -3025,13 +3025,6 @@ class MainWindow(QMainWindow):
         if self.current_step_report is not None:
             report = self.current_step_report
             topo = report["topology"]
-            bbox = report["bounding_box"]
-            mass = report["mass_properties"]
-            center = mass.get("volume_centroid_mm") or mass["surface_centroid_mm"]
-            type_summary = "\n".join(
-                f"{name}: {count}"
-                for name, count in report.get("surface_types", {}).items()
-            ) or "NOT CLASSIFIED"
 
             self.analysis_summary.setText(
                 f"STEP CAD LOADED\n"
@@ -3810,8 +3803,6 @@ class MainWindow(QMainWindow):
         )
         self.analysis_summary.setStyleSheet("color: #FFD740;")
 
-        previous = self.current_stage3_parameters or {}
-
         self.analysis_summary.setText(
             "TRAJECTORY OUTDATED\nREGENERATION REQUIRED"
         )
@@ -3825,86 +3816,20 @@ class MainWindow(QMainWindow):
         trajectory = self.current_stage3_result.get("trajectory", {})
 
         analysis = report.get("analysis", {})
-        normal_info = report.get("normal_orientation", {})
-        metrics = report.get("path_metrics", {})
-
         overall_status = analysis.get(
             "overall_status",
             report.get("overall_status", "REVIEW"),
-        )
-
-        geometric_status = analysis.get(
-            "geometric_generation_status",
-            "NOT AVAILABLE",
-        )
-
-        orientation_status = analysis.get(
-            "normal_orientation_status",
-            normal_info.get("status", "NOT AVAILABLE"),
-        )
-
-        parameters = self.current_stage3_parameters or {}
-
-        standoff = parameters.get(
-            "standoff_mm",
-            DEFAULT_STANDOFF_MM,
-        )
-
-        spacing = parameters.get(
-            "sampling_spacing_mm",
-            DEFAULT_SAMPLING_SPACING_MM,
-        )
-
-        spray_angle = parameters.get(
-            "spray_angle_deg",
-            DEFAULT_SPRAY_ANGLE_DEG,
         )
 
         sample_count = self.current_stage3_result.get(
             "sample_count",
             len(trajectory.get("surface_points", [])),
         )
-
         segment_ids = trajectory.get("segment_ids", [])
-
         segment_count = (
             len(set(np.asarray(segment_ids).tolist()))
             if len(segment_ids)
             else 0
-        )
-
-        path_length_mm = metrics.get(
-            "total_path_length_mm",
-            metrics.get("path_length_mm"),
-        )
-
-        if path_length_mm is None:
-            source_length = metrics.get(
-                "total_path_length_coordinate_units",
-                metrics.get("path_length_coordinate_units"),
-            )
-
-            if (
-                isinstance(source_length, (int, float))
-                and self._source_unit_ready()
-            ):
-                path_length_mm = (
-                    source_length
-                    * MM_PER_UNIT[self.coordinate_unit]
-                )
-
-        skipped_normals = report.get(
-            "skipped_invalid_normals",
-            normal_info.get("skipped_invalid_normals", 0),
-        )
-
-        invalid_normal_faces = normal_info.get(
-            "invalid_normal_faces",
-            "N/A",
-        )
-
-        self.summary_section.setText(
-            "STAGE 3 - ANALYSIS RESULTS"
         )
 
         self.analysis_summary.setText(
@@ -3956,16 +3881,6 @@ class MainWindow(QMainWindow):
                     f"{patch_count:,} PATCHES TO REVIEW"
                 )
             return
-
-        report = self.current_stage2_result.get(
-            "report",
-            {},
-        )
-
-        summary = report.get(
-            "summary",
-            {},
-        )
 
         total = len(self.patch_inspection)
 
