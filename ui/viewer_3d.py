@@ -774,9 +774,9 @@ class ProductViewer(QWidget):
         # Initial work-cell setup screen: only the World frame and box are
         # shown. Product placement/orientation will be enabled in the next
         # implementation step after the coordinate system is verified.
-        self.pose_control_panel.hide()
-        self.pose_manipulation_enabled = False
-        self.confirm_pose_button.setEnabled(False)
+        self.pose_control_panel.show()
+        self.pose_manipulation_enabled = True
+        self.confirm_pose_button.setEnabled(True)
         self.workspace_dimensions = np.maximum(
             np.asarray(self.current_mesh.extents, dtype=float) * 4.0,
             100.0,
@@ -1317,6 +1317,7 @@ class ProductViewer(QWidget):
             self.plotter.add_mesh(
                 lines, color=color, line_width=width,
                 opacity=opacity, lighting=False, render_lines_as_tubes=True,
+                pickable=False,
             )
 
         # Three differently tinted edge families give the volume depth cues.
@@ -1326,9 +1327,9 @@ class ProductViewer(QWidget):
                    [(0, 3), (1, 2), (4, 7), (5, 6)]]
         z_edges = [(corners[a], corners[b]) for a, b in
                    [(0, 4), (1, 5), (2, 6), (3, 7)]]
-        add_segments(x_edges, "#27C7F7", 2.5, 0.95)
-        add_segments(y_edges, "#168F9F", 2.0, 0.9)
-        add_segments(z_edges, "#426B91", 1.8, 0.85)
+        add_segments(x_edges, "#27C7F7", 3.0, 1.0)
+        add_segments(y_edges, "#168F9F", 2.6, 0.98)
+        add_segments(z_edges, "#426B91", 2.6, 0.98)
 
         # Fine reference grid on the central XY plane, passing through origin.
         grid_segments = []
@@ -1361,20 +1362,24 @@ class ProductViewer(QWidget):
                     start=(0.0, 0.0, 0.0),
                     direction=direction,
                     scale=axis_length,
-                    tip_length=0.22,
-                    tip_radius=0.075,
-                    shaft_radius=0.018,
+                    tip_length=0.28,
+                    tip_radius=0.105,
+                    shaft_radius=0.027,
                 ),
                 color=color,
                 lighting=False,
+                pickable=False,
             )
             self.plotter.add_point_labels(
-                np.asarray([direction * axis_length * 1.16]),
+                np.asarray([direction * axis_length * 1.22]),
                 [label],
-                font_size=18,
+                font_size=20,
                 text_color=color,
+                shape="rounded_rect",
+                shape_color="#07111D",
+                shape_opacity=0.92,
+                margin=4,
                 point_size=0,
-                shape=None,
                 always_visible=True,
                 bold=True,
             )
@@ -1391,6 +1396,7 @@ class ProductViewer(QWidget):
             smooth_shading=True,
             specular=0.8,
             specular_power=35,
+            pickable=False,
         )
 
         # Compact telemetry-style overlays; avoid long labels around the axes.
@@ -1591,7 +1597,22 @@ class ProductViewer(QWidget):
             # The only visible 3D objects are the fixed World frame and
             # the work-cell box. This lets us verify the coordinate system
             # independently before introducing CAD/product transforms.
-            self._pose_actor = None
+            # The product is the only movable 3D actor. World reference
+            # geometry is rendered separately and remains fixed.
+            self._pose_actor = self.plotter.add_mesh(
+                self.current_mesh,
+                color="#9FB7C7",
+                show_edges=True,
+                edge_color="#263E4D",
+                line_width=1.0,
+                smooth_shading=False,
+                specular=0.35,
+                specular_power=25,
+                pickable=True,
+            )
+            self._pose_actor.SetOrigin(*self.product_center_pivot.tolist())
+            self._pose_actor.SetPosition(0.0, 0.0, 0.0)
+            self._pose_actor.SetOrientation(0.0, 0.0, 0.0)
 
         # -------------------------------------------------
         # COMMON VIEWER ELEMENTS
@@ -2190,8 +2211,10 @@ class ProductViewer(QWidget):
         center = np.zeros(3, dtype=float)
         distance = max(float(np.linalg.norm(self.workspace_dimensions)), 100.0)
 
+        # Oblique operator-side view: all three positive axes remain
+        # visually separated instead of Y disappearing into depth.
         camera_position = center + np.array(
-            [0.0, 2.4 * distance, -0.8 * distance],
+            [1.65 * distance, 2.55 * distance, -1.75 * distance],
             dtype=float,
         )
 
@@ -2200,6 +2223,7 @@ class ProductViewer(QWidget):
             tuple(center.tolist()),
             (0.0, 0.0, -1.0),
         )
+        self.plotter.camera.zoom(1.12)
         self.plotter.reset_camera_clipping_range()
 
     def reset_camera(self):
