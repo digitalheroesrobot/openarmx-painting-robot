@@ -165,18 +165,33 @@ class SprayPatternPreview(QWidget):
             float(profile.get("gun_body_length_mm", 0.0) or 0.0),
         )
         visual_nozzle_length = min(58.0, max(8.0, body_length * 0.45))
+        body_diameter = float(profile.get("gun_body_diameter_mm", 0.0) or 0.0)
+        visual_body_width = (
+            min(52.0, max(26.0, body_diameter * 0.45))
+            if body_diameter > 0.0 else 36.0
+        )
+        visual_orifice_width = min(18.0, max(4.0, nozzle_orifice * 8.0))
         nozzle_top = tip_y - visual_nozzle_length
 
         painter.setPen(QPen(QColor("#B7CAD5"), 2))
         painter.setBrush(QColor("#344B5A"))
         painter.drawRoundedRect(
-            int(cx - 18), int(nozzle_top - 44), 36, int(visual_nozzle_length + 44),
-            7, 7
+            int(cx - visual_body_width * 0.5),
+            int(nozzle_top - 44),
+            int(visual_body_width),
+            int(visual_nozzle_length + 44),
+            7,
+            7,
         )
         painter.setPen(QPen(QColor("#DCEAF1"), 2))
         painter.drawLine(int(cx), int(nozzle_top - 30), int(cx), int(nozzle_top - 2))
         painter.setPen(QPen(QColor("#00E5FF"), 3))
-        painter.drawLine(int(cx - 10), int(nozzle_top), int(cx + 10), int(nozzle_top))
+        painter.drawLine(
+            int(cx - visual_orifice_width * 0.5),
+            int(nozzle_top),
+            int(cx + visual_orifice_width * 0.5),
+            int(nozzle_top),
+        )
         painter.drawLine(int(cx), int(nozzle_top), int(cx), int(tip_y))
 
         painter.setPen(QPen(QColor("#00E5FF"), 1.5))
@@ -217,9 +232,14 @@ class SprayPatternPreview(QWidget):
         painter.drawText(14, 45, str(profile.get("technology", "Sprayer")))
 
         painter.setPen(QColor("#EAF7FC"))
+        width_label = (
+            "SPRAY DIAMETER"
+            if pattern_type == "round_cone"
+            else "FAN WIDTH"
+        )
         painter.drawText(
             14, int(bottom_y + 24),
-            f"SPRAY WIDTH @ {standoff:.0f} mm: {spray_width_mm:.1f} mm"
+            f"{width_label} @ {standoff:.0f} mm: {spray_width_mm:.1f} mm"
         )
         painter.drawText(
             14, int(bottom_y + 44),
