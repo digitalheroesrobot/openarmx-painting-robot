@@ -800,6 +800,93 @@ class ProductViewer(QWidget):
             packed_faces.ravel(),
         )
 
+    @staticmethod
+    def _build_patch_light_beams(mesh, face_mask, max_beams=48):
+        """
+        Build outward-expanding light cones from a selected patch.
+
+        Each cone starts at a triangle center and follows that triangle's
+        oriented normal. On correctly oriented watertight CAD/STL meshes,
+        normals on hole walls point into the cavity, so the light is
+        projected into the hole instead of merely outlining its rim.
+        """
+        face_mask = np.asarray(face_mask, dtype=bool)
+
+        if len(face_mask) != len(mesh.faces):
+            raise ValueError(
+                "Selected patch mask does not match mesh triangles."
+            )
+
+        face_indices = np.flatnonzero(face_mask)
+
+        if face_indices.size == 0:
+            return pv.PolyData()
+
+        centers = np.asarray(mesh.triangles_center, dtype=float)
+        normals = np.asarray(mesh.face_normals, dtype=float)
+
+        valid = (
+            np.all(np.isfinite(centers), axis=1)
+            & np.all(np.isfinite(normals), axis=1)
+        )
+        face_indices = face_indices[valid[face_indices]]
+
+        if face_indices.size == 0:
+            return pv.PolyData()
+
+        # Keep the effect responsive even for very dense CAD meshes.
+        if face_indices.size > max_beams:
+            sample_positions = np.linspace(
+                0,
+                face_indices.size - 1,
+                num=max_beams,
+                dtype=int,
+            )
+            face_indices = face_indices[sample_positions]
+
+        bounds = np.asarray(mesh.bounds, dtype=float)
+        dimensions = bounds[[1, 3, 5]] - bounds[[0, 2, 4]]
+        model_diagonal = float(np.linalg.norm(dimensions))
+
+        if not np.isfinite(model_diagonal) or model_diagonal <= 0.0:
+            return pv.PolyData()
+
+        # Long enough to visibly project from small holes and recesses.
+        beam_length = model_diagonal * 0.28
+        beam_radius = beam_length * 0.105
+
+        beams = []
+
+        for face_index in face_indices:
+            normal = normals[face_index]
+            normal_length = float(np.linalg.norm(normal))
+
+            if not np.isfinite(normal_length) or normal_length <= 1e-12:
+                continue
+
+            normal = normal / normal_length
+            origin = centers[face_index]
+
+            # VTK cone's apex is placed on the surface. Its wide end
+            # expands along +normal, like a small headlight beam.
+            cone_center = origin + normal * (beam_length * 0.5)
+
+            beams.append(
+                pv.Cone(
+                    center=cone_center,
+                    direction=-normal,
+                    height=beam_length,
+                    radius=beam_radius,
+                    resolution=10,
+                    capping=True,
+                )
+            )
+
+        if not beams:
+            return pv.PolyData()
+
+        return pv.MultiBlock(beams).combine()
+
     # =========================================================
     # EMPTY SCENE
     # =========================================================
@@ -1727,11 +1814,62 @@ class ProductViewer(QWidget):
                         lighting=False,
                     )
 
+                    # -------------------------------------------------
+                    # PROJECTED LIGHT - HEADLIGHT / SPOTLIGHT EFFECT
+                    # -------------------------------------------------
+                    # Emit a fan of translucent cones from the selected
+                    # patch along its triangle normals. This reveals
+                    # recessed and hole-facing surfaces that a surface
+                    # outline alone cannot make visually obvious.
+                    light_beams = self._build_patch_light_beams(
+                        self.current_mesh,
+                        selected_mask,
+                    )
+
+                    light_actors = []
+                    if light_beams.n_cells > 0:
+                        # Wide, soft cyan beam envelope.
+                        light_actors.append(
+                            self.plotter.add_mesh(
+                                light_beams,
+                                color="#00DFFF",
+                                opacity=0.16,
+                                show_edges=False,
+                                lighting=False,
+                                ambient=1.0,
+                                diffuse=0.0,
+                                specular=0.0,
+                            )
+                        )
+
+                        # Narrow bright core gives the projected light
+                        # a visible direction and stronger headlight feel.
+                        core_beams = self._build_patch_light_beams(
+                            self.current_mesh,
+                            selected_mask,
+                            max_beams=48,
+                        )
+                        if core_beams.n_cells > 0:
+                            light_actors.append(
+                                self.plotter.add_mesh(
+                                    core_beams,
+                                    color="#D9FFFF",
+                                    opacity=0.24,
+                                    show_edges=False,
+                                    lighting=False,
+                                    ambient=1.0,
+                                    diffuse=0.0,
+                                    specular=0.0,
+                                    scale=0.72,
+                                )
+                            )
+
                     if previous_product_pose is not None:
                         for selected_actor in (
                             glow_actor,
                             outer_glow_actor,
                             edge_actor,
+                            *light_actors,
                         ):
                             selected_actor.SetOrigin(0.0, 0.0, 0.0)
                             selected_actor.SetOrientation(
