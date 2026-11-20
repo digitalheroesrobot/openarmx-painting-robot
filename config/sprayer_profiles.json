@@ -23,7 +23,8 @@
       "profile_notes": "Generic starting values, not a certified sprayer specification. The 1.4 mm nozzle, 150-200 mm working distance and 1.7 bar air starting pressure are based on manufacturer guidance examples. The 74 degree equivalent fan angle is estimated from a 275-330 mm fan width at 200 mm. Nozzle length is an illustrative placeholder. Confirm all settings against the actual sprayer and coating.",
       "gun_body_length_mm": 0,
       "gun_body_diameter_mm": 0,
-      "tcp_to_nozzle_tip_mm": 0
+      "tcp_to_nozzle_tip_mm": 0,
+      "fan_thickness_at_reference_mm": 0
     }
   ],
   "active_profile": "default sprayer"
