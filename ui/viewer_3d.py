@@ -82,7 +82,7 @@ class ProductViewer(QWidget):
         self.source_origin = np.zeros(3, dtype=float)
         self.rotation_pivot = np.zeros(3, dtype=float)
         self.product_center_pivot = np.zeros(3, dtype=float)
-        self.hook_length_source_units = 300.0
+        self.hook_length_source_units = 0.0
         self.selected_hook_point_cad = None
         self.hook_world_position = None
         self._hook_pick_active = False
@@ -384,11 +384,11 @@ class ProductViewer(QWidget):
 
         layout.addWidget(QLabel("HOOK LENGTH:"))
         self.hook_length_input = QDoubleSpinBox()
-        self.hook_length_input.setRange(0.1, 10000000.0)
+        self.hook_length_input.setRange(0.0, 10000000.0)
         self.hook_length_input.setDecimals(2)
         self.hook_length_input.setSingleStep(10.0)
         self.hook_length_input.setValue(self.hook_length_source_units)
-        self.hook_length_input.setSuffix(" source units")
+        self.hook_length_input.setSuffix(" CAD units")
         self.hook_length_input.setFixedWidth(130)
         self.hook_length_input.setToolTip("Vertical distance from the conveyor hook suspension point to the hook engagement point on the product, measured downward along +Z.")
         self.hook_length_input.valueChanged.connect(self._on_hook_length_changed)
@@ -452,6 +452,9 @@ class ProductViewer(QWidget):
             self.pose_status_label.setText("Load a STEP/STL product before selecting its hook point.")
             return
         self.hook_length_source_units = float(self.hook_length_input.value())
+        if self.hook_length_source_units <= 0.0:
+            self.pose_status_label.setText("Enter a positive Hook Length before selecting the product hook point.")
+            return
         self._hook_pick_active = True
         self.pose_status_label.setText("Click the product surface at the exact point where the hook will engage.")
         try:
