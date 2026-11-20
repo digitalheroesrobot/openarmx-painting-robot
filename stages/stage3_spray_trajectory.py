@@ -670,6 +670,83 @@ def _build_nozzle_frames(spray_directions: np.ndarray) -> np.ndarray:
     return frames
 
 
+def _build_parallel_transport_nozzle_frames(
+    spray_directions: np.ndarray,
+    segment_ids: np.ndarray,
+) -> np.ndarray:
+    """
+    Build minimum-twist right-handed nozzle frames along each stroke.
+
+    Z follows the requested spray direction. X is parallel-transported from
+    the previous sample using the smallest rotation that aligns consecutive
+    Z axes. Frames restart at every segment boundary; no roll continuity is
+    imposed across spray-OFF travel.
+    """
+    directions = np.asarray(spray_directions, dtype=np.float64)
+    segments = np.asarray(segment_ids, dtype=np.int64)
+    if directions.ndim != 2 or directions.shape[1] != 3:
+        raise ValueError("Spray directions must have shape (N, 3).")
+    if segments.shape != (len(directions),):
+        raise ValueError("Segment IDs must have shape (N,).")
+    if not np.all(np.isfinite(directions)):
+        raise ValueError("Spray directions must be finite.")
+
+    frames = np.empty((len(directions), 3, 3), dtype=np.float64)
+    previous_segment = None
+    previous_frame = None
+
+    for index, direction in enumerate(directions):
+        length = float(np.linalg.norm(direction))
+        if length <= NORMAL_EPSILON:
+            raise ValueError("Cannot build a frame from a zero spray direction.")
+        z_axis = direction / length
+
+        if previous_frame is None or int(segments[index]) != previous_segment:
+            frames[index] = _build_nozzle_frames(z_axis[None, :])[0]
+        else:
+            previous_z = previous_frame[:, 2]
+            cross = np.cross(previous_z, z_axis)
+            sine = float(np.linalg.norm(cross))
+            cosine = float(np.clip(np.dot(previous_z, z_axis), -1.0, 1.0))
+
+            if sine > 1e-10:
+                axis = cross / sine
+                skew = np.asarray([
+                    [0.0, -axis[2], axis[1]],
+                    [axis[2], 0.0, -axis[0]],
+                    [-axis[1], axis[0], 0.0],
+                ], dtype=np.float64)
+                rotation = (
+                    np.eye(3, dtype=np.float64)
+                    + sine * skew
+                    + (1.0 - cosine) * (skew @ skew)
+                )
+                x_axis = rotation @ previous_frame[:, 0]
+            elif cosine >= 0.0:
+                x_axis = previous_frame[:, 0].copy()
+            else:
+                # At a 180-degree spray-axis reversal, the minimum rotation
+                # axis is ambiguous. Rotate about the previous X axis so the
+                # gun's roll reference remains deterministic.
+                x_axis = previous_frame[:, 0].copy()
+
+            x_axis -= float(np.dot(x_axis, z_axis)) * z_axis
+            x_length = float(np.linalg.norm(x_axis))
+            if x_length <= 1e-10:
+                fallback = previous_frame[:, 1]
+                x_axis = np.cross(fallback, z_axis)
+                x_length = float(np.linalg.norm(x_axis))
+            x_axis /= max(x_length, NORMAL_EPSILON)
+            y_axis = np.cross(z_axis, x_axis)
+            y_axis /= max(float(np.linalg.norm(y_axis)), NORMAL_EPSILON)
+            frames[index] = np.column_stack((x_axis, y_axis, z_axis))
+
+        previous_frame = frames[index]
+        previous_segment = int(segments[index])
+
+    return frames
+
+
 def _transform_points(points: np.ndarray, transform: np.ndarray) -> np.ndarray:
     return np.asarray(points, dtype=np.float64) @ transform[:3, :3].T + transform[:3, 3]
 
@@ -2050,6 +2127,13 @@ def _order_trajectory_with_planar_raster(
     result, segment_metadata, travel_ordering = _optimize_stroke_order_for_travel(
         trajectory=result,
         segment_metadata=segment_metadata,
+    )
+    # Rebuild X/Y axes after stroke ordering and reversal. This avoids the
+    # independent global-reference projection that can cause 180-degree roll
+    # flips while preserving each sample's spray-axis direction.
+    result["nozzle_frames"] = _build_parallel_transport_nozzle_frames(
+        result["spray_directions"],
+        result["segment_ids"],
     )
     result["segments"] = segment_metadata
     result["travel_ordering"] = travel_ordering
@@ -4666,6 +4750,47 @@ def run_stage3_numerical_tests() -> dict:
             assert np.all(chunk_steps <= 30.0)
 
     # --------------------------------------------------------
+    # Test 22G: Parallel transport prevents arbitrary roll flips when the
+    # spray axis is unchanged and follows curved spray axes with minimum twist.
+    # --------------------------------------------------------
+    transport_z = np.asarray([
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0],
+        [0.0, math.sin(math.radians(20.0)), math.cos(math.radians(20.0))],
+        [0.0, math.sin(math.radians(40.0)), math.cos(math.radians(40.0))],
+    ], dtype=np.float64)
+    transport_segments = np.asarray([0, 0, 0, 0], dtype=np.int64)
+    transported_frames = _build_parallel_transport_nozzle_frames(
+        transport_z,
+        transport_segments,
+    )
+    transport_step_angles = []
+    for frame_index in range(len(transported_frames) - 1):
+        relative = (
+            transported_frames[frame_index].T
+            @ transported_frames[frame_index + 1]
+        )
+        transport_step_angles.append(math.degrees(math.acos(float(np.clip(
+            (np.trace(relative) - 1.0) * 0.5, -1.0, 1.0
+        )))))
+    assert abs(transport_step_angles[0]) < 1e-6
+    assert abs(transport_step_angles[1] - 20.0) < 1e-6
+    assert abs(transport_step_angles[2] - 20.0) < 1e-6
+    assert np.allclose(
+        np.linalg.det(transported_frames),
+        1.0,
+        atol=1e-6,
+    )
+    restarted_frames = _build_parallel_transport_nozzle_frames(
+        np.asarray([
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ], dtype=np.float64),
+        np.asarray([0, 1], dtype=np.int64),
+    )
+    assert np.allclose(restarted_frames[0], restarted_frames[1], atol=1e-6)
+
+    # --------------------------------------------------------
     # Test 22F: Normal smoothing reduces zig-zag while preserving a strict
     # angular bound from every original source normal.
     # --------------------------------------------------------
@@ -5049,6 +5174,7 @@ def run_stage3_numerical_tests() -> dict:
             "exact_continuity_outlier_diagnostics": "PASS",
             "curved_raster_projection_jump_splitting": "PASS",
             "curved_normal_smoothing_with_8deg_deviation_limit": "PASS",
+            "parallel_transport_nozzle_frame_continuity": "PASS",
             "full_nozzle_frame_roll_inspection": "PASS",
         },
         "sample_count": int(sample_count),
