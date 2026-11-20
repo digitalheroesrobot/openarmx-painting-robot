@@ -851,7 +851,20 @@ class ProductViewer(QWidget):
                 text, position="upper_left", font_size=12, color="#FFFFFF", shadow=True
             )
         else:
-            self._attitude_text_actor.SetInput(text)
+            # add_text(position="upper_left") returns PyVista CornerAnnotation,
+            # which is updated with set_text(position, text), not SetInput().
+            if hasattr(self._attitude_text_actor, "set_text"):
+                self._attitude_text_actor.set_text("upper_left", text)
+            elif hasattr(self._attitude_text_actor, "SetInput"):
+                # Compatibility with a vtkOpenGLTextActor/Text return value.
+                self._attitude_text_actor.SetInput(text)
+            else:
+                # Recreate the overlay rather than letting a UI refresh crash.
+                self.plotter.remove_actor(self._attitude_text_actor, render=False)
+                self._attitude_text_actor = self.plotter.add_text(
+                    text, position="upper_left", font_size=12,
+                    color="#FFFFFF", shadow=True, render=False
+                )
         if self._cad_axes_actor is not None:
             self._cad_axes_actor.SetUserMatrix(self._vtk_matrix_from_numpy(self._actor_matrix_array()))
 
