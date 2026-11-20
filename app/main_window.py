@@ -955,12 +955,16 @@ class MainWindow(QMainWindow):
         self.analysis_summary.setObjectName("Muted")
         summary_layout.addWidget(self.analysis_summary)
 
-        self.summary_section = QLabel("STAGE SUMMARY")
+        # The collapsible section title is the single SUMMARY heading.
+        # Keep the legacy inner label hidden for compatibility with
+        # existing stage callbacks that still update its text.
+        self.summary_section = QLabel("SUMMARY")
         self.summary_section.setObjectName("Muted")
+        self.summary_section.hide()
         summary_layout.addWidget(self.summary_section)
 
         summary_section = self._make_collapsible_section(
-            "STAGE SUMMARY",
+            "SUMMARY",
             "stage_summary",
             summary_content,
         )
@@ -3029,41 +3033,17 @@ class MainWindow(QMainWindow):
                 for name, count in report.get("surface_types", {}).items()
             ) or "NOT CLASSIFIED"
 
-            self.summary_section.setText("STEP CAD GEOMETRY")
             self.analysis_summary.setText(
-                "STEP B-REP IMPORT COMPLETE\n\n"
-                f"FACES: {topo['faces']:,}  |  EDGES: {topo['edges']:,}\n"
-                f"VERTICES: {topo['vertices']:,}  |  SOLIDS: {topo['solids']:,}\n"
-                f"SHELLS: {topo['shells']:,}\n\n"
-                f"BOUNDING BOX (mm):\n"
-                f"X: {bbox['dimensions_mm'][0]:,.3f}\n"
-                f"Y: {bbox['dimensions_mm'][1]:,.3f}\n"
-                f"Z: {bbox['dimensions_mm'][2]:,.3f}\n"
-                f"MIN: {bbox['minimum_mm']}\n"
-                f"MAX: {bbox['maximum_mm']}\n\n"
-                f"SURFACE AREA: {mass['surface_area_mm2']:,.3f} mm²\n"
-                f"VOLUME: {mass['volume_mm3']:,.3f} mm³\n"
-                f"EDGE LENGTH: {mass['total_edge_length_mm']:,.3f} mm\n"
-                f"GEOMETRIC CENTROID: {center}\n\n"
-                f"SURFACE TYPES:\n{type_summary}\n\n"
-                "CAD FACE IDS ARE LINKED TO DISPLAY TRIANGLES.\n"
-                "NEXT: GEOMETRY INSPECTION"
+                f"STEP CAD LOADED\n"
+                f"{topo['faces']:,} CAD FACES"
             )
         elif self.coordinate_unit == "unknown":
             self.analysis_summary.setText(
-                "PRODUCT LOADED\n"
-                "STL MODEL READY\n\n"
-                "COORDINATE UNIT: UNKNOWN\n\n"
-                "SELECT THE ACTUAL STL COORDINATE UNIT "
-                "BEFORE GEOMETRY INSPECTION."
+                "STL LOADED\nCOORDINATE UNIT REQUIRED"
             )
         else:
             self.analysis_summary.setText(
-                "PRODUCT LOADED\n"
-                "STL MODEL READY\n\n"
-                f"COORDINATE UNIT: {self.coordinate_unit.upper()}\n\n"
-                "NEXT OPERATION:\n"
-                "GEOMETRY INSPECTION"
+                f"STL LOADED\nUNIT: {self.coordinate_unit.upper()}"
             )
 
         self.summary_section.setText("STAGE SUMMARY")
@@ -3817,16 +3797,7 @@ class MainWindow(QMainWindow):
         self.analysis_summary.setStyleSheet("color: #D8E5ED;")
 
         self.analysis_summary.setText(
-            "STAGE 2 COMPLETE\n\n"
-            "ALL PATCHES HAVE BEEN INSPECTED.\n"
-            "MANUAL PAINT DECISIONS ARE APPLIED.\n\n"
-            "CURRENT PARAMETERS\n"
-            f"STANDOFF: {self.standoff_spin.value():.1f} mm\n"
-            f"SAMPLING: {self.spacing_spin.value():.1f} mm\n"
-            f"SPRAY ANGLE: {self.spray_angle_spin.value():.1f}°\n\n"
-            f"STL COORDINATE UNIT: {self.coordinate_unit.upper()}\n\n"
-            "ACTION:\n"
-            "GENERATE SPRAY TRAJECTORY"
+            "READY FOR SPRAY TRAJECTORY"
         )
 
     def _show_stage3_outdated_summary(self):
@@ -3842,18 +3813,7 @@ class MainWindow(QMainWindow):
         previous = self.current_stage3_parameters or {}
 
         self.analysis_summary.setText(
-            "PREVIOUS TRAJECTORY IS OUTDATED\n\n"
-            "SPRAY PARAMETERS HAVE CHANGED.\n\n"
-            "PREVIOUS PARAMETERS\n"
-            f"STANDOFF: {previous.get('standoff_mm', 0.0):.1f} mm\n"
-            f"SPACING: {previous.get('sampling_spacing_mm', 0.0):.1f} mm\n"
-            f"SPRAY ANGLE: {previous.get('spray_angle_deg', 0.0):.1f}°\n\n"
-            "CURRENT PARAMETERS\n"
-            f"STANDOFF: {self.standoff_spin.value():.1f} mm\n"
-            f"SPACING: {self.spacing_spin.value():.1f} mm\n"
-            f"SPRAY ANGLE: {self.spray_angle_spin.value():.1f}°\n\n"
-            "ACTION REQUIRED:\n"
-            "GENERATE SPRAY TRAJECTORY AGAIN"
+            "TRAJECTORY OUTDATED\nREGENERATION REQUIRED"
         )
 
     def _show_spray_trajectory_summary(self):
@@ -3947,47 +3907,10 @@ class MainWindow(QMainWindow):
             "STAGE 3 - ANALYSIS RESULTS"
         )
 
-        summary_lines = [
-            f"OVERALL: {self._format_status(overall_status)}",
-            "",
-            f"GEOMETRIC GENERATION: "
-            f"{self._format_status(geometric_status)}",
-            f"NORMAL ORIENTATION: "
-            f"{self._format_status(orientation_status)}",
-            "",
-            f"SURFACE SAMPLES: {sample_count:,}",
-            f"TRAJECTORY SEGMENTS: {segment_count:,}",
-            "",
-            f"STL COORDINATE UNIT: "
-            f"{self.coordinate_unit.upper()}",
-            f"STANDOFF: {standoff:.1f} mm",
-            f"SAMPLING SPACING: {spacing:.1f} mm",
-            f"SPRAY ANGLE: {spray_angle:.1f}°",
-            "",
-            f"INVALID-NORMAL FACES: {invalid_normal_faces}",
-            f"SKIPPED CANDIDATE FACES: {skipped_normals}",
-        ]
-
-        if isinstance(path_length_mm, (int, float)):
-            summary_lines.extend([
-                "",
-                "WITHIN-SEGMENT PATH LENGTH:",
-                f"{path_length_mm:,.2f} mm",
-                "(Inter-segment travel is not included.)",
-            ])
-
-        summary_lines.extend([
-            "",
-            "ENGINEERING REVIEW:",
-            "ROBOT REACHABILITY: NOT CHECKED",
-            "COLLISION: NOT CHECKED",
-            "FIXTURE CLEARANCE: NOT CHECKED",
-            "TCP CALIBRATION: NOT VERIFIED",
-            "SPRAY COVERAGE: NOT VERIFIED",
-        ])
-
         self.analysis_summary.setText(
-            "\n".join(summary_lines)
+            f"TRAJECTORY: {self._format_status(overall_status)}\n"
+            f"SURFACE SAMPLES: {sample_count:,}\n"
+            f"TRAJECTORY SEGMENTS: {segment_count:,}"
         )
 
         self.analysis_summary.setStyleSheet(
@@ -4010,31 +3933,12 @@ class MainWindow(QMainWindow):
     # ========================================================
 
     def _show_analysis_summary(self, report):
-        mesh_data = report["mesh"]
         segmentation = report["surface_segmentation"]
+        patch_count = int(segmentation["patch_count"])
 
-        unit = report.get(
-            "unit_configuration",
-            {},
-        ).get(
-            "coordinate_unit",
-            self.coordinate_unit,
-        )
-
-        self.summary_section.setText("STAGE 1 SUMMARY")
         self.analysis_summary.setStyleSheet("")
-
         self.analysis_summary.setText(
-            f"COORDINATE UNIT    {str(unit).upper()}\n\n"
-            f"SURFACE PATCHES   {segmentation['patch_count']}\n"
-            f"PLANAR PATCHES    {segmentation['planar_patch_count']}\n"
-            f"CURVED PATCHES    {segmentation['curved_patch_count']}\n"
-            f"INVALID PATCHES   {segmentation['invalid_patch_count']}\n\n"
-            f"CONNECTED PARTS   {mesh_data['connected_components']}\n"
-            f"DEGENERATE FACES  {mesh_data['degenerate_faces']}\n"
-            f"WATERTIGHT        {mesh_data['watertight']}\n"
-            f"WINDING           {mesh_data['winding_consistent']}\n\n"
-            "NEXT: SURFACE IDENTIFICATION"
+            f"{patch_count:,} SURFACE PATCHES"
         )
 
     # ========================================================
@@ -4047,11 +3951,9 @@ class MainWindow(QMainWindow):
                 self.summary_section.setText("STAGE 2 - READY")
                 self.analysis_summary.setStyleSheet("")
 
+                patch_count = len(self.patch_inspection)
                 self.analysis_summary.setText(
-                    "GEOMETRY INSPECTION COMPLETE\n\n"
-                    "READY TO CLASSIFY SURFACE PATCHES\n\n"
-                    "ACTION:\n"
-                    "IDENTIFY PAINTABLE SURFACES"
+                    f"{patch_count:,} PATCHES TO REVIEW"
                 )
             return
 
@@ -4101,23 +4003,6 @@ class MainWindow(QMainWindow):
 
         uninspected_count = total - inspected
 
-        candidate_area_mm2 = summary.get(
-            "total_candidate_area_mm2"
-        )
-
-        area_text = (
-            f"{candidate_area_mm2:,.2f} mm²"
-            if isinstance(
-                candidate_area_mm2,
-                (int, float),
-            )
-            else "NOT AVAILABLE"
-        )
-
-        self.summary_section.setText(
-            "STAGE 2 - MANUAL PATCH INSPECTION"
-        )
-
         self.analysis_summary.setStyleSheet(
             "color: #00E676;"
             if inspected == total and total > 0
@@ -4125,22 +4010,11 @@ class MainWindow(QMainWindow):
         )
 
         self.analysis_summary.setText(
-            f"PATCH INSPECTION: {inspected} / {total}\n\n"
-            f"PAINT PATCHES: {paint_count}\n"
-            f"NO PAINT PATCHES: {no_paint_count}\n"
-            f"REQUIRES INSPECTION: {requires_count}\n"
-            f"NOT YET INSPECTED: {uninspected_count}\n\n"
-            f"PAINTABLE FACE AREA:\n{area_text}\n\n"
-            "DECISION RULES:\n"
-            "PAINT: INCLUDED IN STAGE 3\n"
-            "NO PAINT: EXCLUDED FROM STAGE 3\n"
-            "REQUIRES INSPECTION: EXCLUDED FROM STAGE 3\n\n"
-            + (
-                "STAGE 2 COMPLETE\n"
-                "STAGE 3 IS NOW AVAILABLE."
-                if inspected == total and total > 0
-                else "INSPECT EVERY PATCH TO CONTINUE."
-            )
+            f"REVIEWED: {inspected} / {total}\n"
+            f"PAINTABLE: {paint_count}\n"
+            f"EXCLUDED: {no_paint_count}\n"
+            f"REVIEW REQUIRED: {requires_count}\n"
+            f"UNREVIEWED: {uninspected_count}"
         )
 
         if self.patch_inspection_path:
