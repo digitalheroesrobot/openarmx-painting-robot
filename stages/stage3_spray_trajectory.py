@@ -1250,6 +1250,7 @@ def generate_spray_trajectory(
     spray_angle_deg: float = DEFAULT_SPRAY_ANGLE_DEG,
     stage1_report: dict | None = None,
     coordinate_unit: str | None = None,
+    sprayer_profile: dict | None = None,
 ) -> dict:
 
     if not isinstance(mesh, trimesh.Trimesh):
@@ -1478,11 +1479,35 @@ def generate_spray_trajectory(
         advanced_analysis=advanced_analysis,
     )
 
+    profile_data = (
+        dict(sprayer_profile)
+        if isinstance(sprayer_profile, dict)
+        else {}
+    )
+    cone_angle = _safe_float(
+        profile_data.get("spray_cone_angle_deg", 0.0)
+    ) or 0.0
+    cone_angle = max(0.0, min(150.0, cone_angle))
+    overlap_percent = _safe_float(
+        profile_data.get("overlap_percent", 0.0)
+    ) or 0.0
+    overlap_percent = max(0.0, min(90.0, overlap_percent))
+    spray_width_at_standoff_mm = (
+        2.0 * standoff_mm * math.tan(math.radians(cone_angle * 0.5))
+        if cone_angle > 0.0 else 0.0
+    )
+    nominal_track_spacing_mm = (
+        spray_width_at_standoff_mm * (1.0 - overlap_percent / 100.0)
+    )
+
     return {
         "parameters": {
             "standoff_mm": standoff_mm,
             "sampling_spacing_mm": sampling_spacing_mm,
             "spray_angle_deg": spray_angle_deg,
+            "sprayer_profile": profile_data,
+            "spray_width_at_standoff_mm": spray_width_at_standoff_mm,
+            "nominal_track_spacing_from_overlap_mm": nominal_track_spacing_mm,
             "coordinate_unit": source_unit,
             "internal_coordinate_unit": source_unit,
             "standoff_coordinate_units": standoff_coordinate_units,
@@ -1627,6 +1652,7 @@ def _build_saved_report(
             "Coating thickness is not calculated.",
             "No actual spray-gun CAD or TCP offset is applied.",
             "No robot-base coordinate transformation is applied.",
+            "Fan width and overlap are recorded as planning inputs; raster spray lanes are not yet generated.",
             "Travel movements between separate patches are not generated.",
             "Bend and cylinder estimates do not yet modify nozzle orientation.",
         ],
@@ -1649,6 +1675,7 @@ def execute_stage3(
     spray_angle_deg: float = DEFAULT_SPRAY_ANGLE_DEG,
     stage1_report: dict | None = None,
     coordinate_unit: str | None = None,
+    sprayer_profile: dict | None = None,
 ) -> dict:
 
     if stage2_result is not None:
@@ -1680,6 +1707,7 @@ def execute_stage3(
         spray_angle_deg=spray_angle_deg,
         stage1_report=stage1_report,
         coordinate_unit=coordinate_unit,
+        sprayer_profile=sprayer_profile,
     )
 
     stage_directory = result_manager.stage_dir(
