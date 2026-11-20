@@ -1878,6 +1878,17 @@ class ProductViewer(QWidget):
             "cone_tangent": cone_tangent,
             "cone_cosine": cone_cosine,
             "standoff_units": max(standoff_units, 1e-9),
+            "pattern_type": str(profile.get("pattern_type", "flat_fan")).strip().lower(),
+            "fan_thickness_units": max(
+                0.0,
+                float(profile.get("fan_thickness_at_reference_mm", 0.0) or 0.0)
+                / mm_per_unit,
+            ),
+            "fan_reference_distance_units": max(
+                float(profile.get("fan_reference_distance_mm", 200.0) or 200.0)
+                / mm_per_unit,
+                1e-9,
+            ),
             "paint_rgb": paint_rgb,
             "profile": dict(profile),
             "mm_per_unit": mm_per_unit,
@@ -1928,15 +1939,37 @@ class ProductViewer(QWidget):
 
         delta = cache["face_samples"][candidates] - nozzle
         axial = delta @ direction
-        radial_vectors = delta - axial[:, None] * direction
-        radial = np.linalg.norm(radial_vectors, axis=1)
+        frame = cache["nozzle_frames"][path_index]
+        local_x = delta @ frame[:, 0]
+        local_y = delta @ frame[:, 1]
+        radial = np.sqrt(local_x * local_x + local_y * local_y)
+
+        pattern_type = cache["pattern_type"]
+        if (
+            pattern_type == "flat_fan"
+            and cache["fan_thickness_units"] > 0.0
+        ):
+            half_fan_width = axial * cache["cone_tangent"]
+            half_fan_thickness = (
+                0.5 * cache["fan_thickness_units"]
+                * axial / cache["fan_reference_distance_units"]
+            )
+            inside_pattern = (
+                (np.abs(local_x) <= half_fan_width)
+                & (np.abs(local_y) <= half_fan_thickness)
+            )
+        else:
+            # Round-cone model, also used as a clearly disclosed fallback
+            # when a flat-fan thickness measurement has not been entered.
+            inside_pattern = radial <= axial * cache["cone_tangent"]
+
         facing = np.einsum(
             "ij,j->i", cache["sample_normals"][candidates], -direction
         ) > 0.02
         inside_envelope = (
             (axial > 0.0)
             & (axial <= max_axial)
-            & (radial <= axial * cache["cone_tangent"])
+            & inside_pattern
             & facing
         )
         cache["coverage_sample_hits"][candidates[inside_envelope]] = True
@@ -2005,6 +2038,21 @@ class ProductViewer(QWidget):
                 f"{painted_area * cache['mm_per_unit'] ** 2 / 1_000_000.0:.3f} / "
                 f"{cache['target_area_m2']:.3f} m²"
             )
+            if (
+                cache["pattern_type"] == "flat_fan"
+                and cache["fan_thickness_units"] <= 0.0
+            ):
+                self.trajectory_coverage_label.setToolTip(
+                    "Estimated geometric coverage using a conical fallback. "
+                    "Enter the measured fan thickness at the reference distance "
+                    "in the sprayer profile for a flat-fan footprint estimate. "
+                    "This is not measured coating thickness or paint mass."
+                )
+            else:
+                self.trajectory_coverage_label.setToolTip(
+                    "Estimated geometric area reached by the configured spray envelope. "
+                    "This is not measured coating thickness or paint mass."
+                )
 
     def _create_spray_gun_actors(self):
         cache = self._prepare_trajectory_playback_cache()
