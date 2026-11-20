@@ -1960,43 +1960,65 @@ class ProductViewer(QWidget):
                     if not np.isfinite(model_diagonal) or model_diagonal <= 0:
                         model_diagonal = 1.0
 
-                    # Non-hole patches get one thin white membrane at a
-                    # small, constant offset from the original surface.
-                    # _build_offset_patch_shell displaces shared vertices
-                    # along their averaged vertex normals, keeping the shell
-                    # parallel to the selected patch rather than creating
-                    # separate per-triangle sheets.
+                    # Cylindrical/hole patches retain the axial white
+                    # cylinder so the opening is easy to recognize.
+                    # All other patches use one parallel white membrane.
                     glow_actors = []
+                    hole_glow = pv.PolyData()
                     try:
-                        halo_polydata = self._build_offset_patch_shell(
+                        hole_glow = self._build_patch_light_beams(
                             self.current_mesh,
                             selected_mask,
-                            model_diagonal * 0.008,
+                            max_beams=64,
+                            radius_scale=0.055,
                         )
-                        if halo_polydata.n_cells > 0:
-                            glow_actors.append(
-                                self.plotter.add_mesh(
-                                    halo_polydata,
-                                    color="#FFFFFF",
-                                    opacity=0.22,
-                                    show_edges=False,
-                                    lighting=False,
-                                    ambient=1.0,
-                                    diffuse=0.0,
-                                    specular=0.0,
-                                    pickable=False,
-                                )
-                            )
                     except Exception as exc:
                         print(
                             "[PATCH GLOW WARNING] "
-                            "Parallel white membrane skipped: "
+                            "Hole cylinder skipped: "
                             f"{type(exc).__name__}: {exc}"
                         )
 
-                    # Do not add projected cylinders or secondary rings.
-                    # The selected patch is represented by its single parallel
-                    # membrane only; its original patch contour remains below.
+                    if hole_glow.n_cells > 0:
+                        hole_actor = self.plotter.add_mesh(
+                            hole_glow,
+                            color="#FFFFFF",
+                            opacity=0.16,
+                            show_edges=False,
+                            lighting=False,
+                            ambient=1.0,
+                            diffuse=0.0,
+                            specular=0.0,
+                            pickable=False,
+                        )
+                        glow_actors.append(hole_actor)
+                    else:
+                        try:
+                            halo_polydata = self._build_offset_patch_shell(
+                                self.current_mesh,
+                                selected_mask,
+                                model_diagonal * 0.008,
+                            )
+                            if halo_polydata.n_cells > 0:
+                                glow_actors.append(
+                                    self.plotter.add_mesh(
+                                        halo_polydata,
+                                        color="#FFFFFF",
+                                        opacity=0.38,
+                                        show_edges=False,
+                                        lighting=False,
+                                        ambient=1.0,
+                                        diffuse=0.0,
+                                        specular=0.0,
+                                        pickable=False,
+                                    )
+                                )
+                        except Exception as exc:
+                            print(
+                                "[PATCH GLOW WARNING] "
+                                "Parallel white membrane skipped: "
+                                f"{type(exc).__name__}: {exc}"
+                            )
 
                     # The outer contour uses the patch's own color, not a
                     # universal cyan/white highlight.
