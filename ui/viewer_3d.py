@@ -1701,9 +1701,15 @@ class ProductViewer(QWidget):
             self._playback_timer.stop()
         if hasattr(self, "trajectory_play_button"):
             self.trajectory_play_button.setText("Play")
-        self._playback_path_actor = None
-        self._playback_nozzle_actor = None
         if reset:
+            for actor in (self._playback_path_actor, self._playback_nozzle_actor):
+                if actor is not None:
+                    try:
+                        self.plotter.remove_actor(actor, render=False)
+                    except Exception:
+                        pass
+            self._playback_path_actor = None
+            self._playback_nozzle_actor = None
             self._playback_index = 0
             self._playback_cache = None
             if hasattr(self, "trajectory_playback_slider"):
