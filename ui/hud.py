@@ -190,103 +190,27 @@ def apply_hud_style(app, fonts):
             border-top: 1px solid {COLORS["border"]};
         }}
 
-        /* High-contrast controls used throughout the right sidebar. */
-        QToolButton {{
-            background-color: #172B39;
+        /* Improve readability only in data tables; keep the original HUD theme. */
+        QTableWidget {{
+            background-color: #0D1822;
+            alternate-background-color: #132431;
             color: #F0F6FA;
-            border: 1px solid #426174;
-            border-radius: 4px;
-            padding: 7px 8px;
-            font-weight: bold;
-        }}
-
-        QToolButton:hover {{
-            background-color: #204154;
-            color: #FFFFFF;
-            border: 1px solid {COLORS["cyan"]};
-        }}
-
-        QToolButton:checked {{
-            background-color: #164052;
-            color: {COLORS["cyan"]};
-            border: 1px solid {COLORS["cyan"]};
-        }}
-
-        QToolButton:disabled {{
-            color: #83939E;
-            background-color: #111D26;
-            border-color: #293B47;
-        }}
-
-        QTableWidget, QTreeWidget, QListWidget {{
-            background-color: #101E29;
-            alternate-background-color: #172936;
-            color: #E7F0F5;
-            gridline-color: #385160;
-            border: 1px solid #385160;
-            selection-background-color: #15516A;
+            gridline-color: #29404D;
+            selection-background-color: #164052;
             selection-color: #FFFFFF;
+            font-size: 10pt;
+        }}
+
+        QTableWidget::item {{
+            color: #F0F6FA;
+            padding: 3px 5px;
         }}
 
         QHeaderView::section {{
-            background-color: #203746;
-            color: #FFFFFF;
-            border: 1px solid #385160;
+            background-color: #132431;
+            color: #00E5FF;
+            border: 1px solid #29404D;
             padding: 5px 4px;
             font-weight: bold;
-        }}
-
-        QCheckBox {{
-            color: #E7F0F5;
-            spacing: 7px;
-        }}
-
-        QCheckBox::indicator {{
-            width: 16px;
-            height: 16px;
-            border: 1px solid #78909F;
-            border-radius: 3px;
-            background-color: #132431;
-        }}
-
-        QCheckBox::indicator:checked {{
-            background-color: #00AFC4;
-            border: 1px solid #65F0FF;
-        }}
-
-        QSpinBox, QDoubleSpinBox, QLineEdit, QTextEdit, QPlainTextEdit {{
-            background-color: #132431;
-            color: #F0F6FA;
-            border: 1px solid #496474;
-            border-radius: 4px;
-            padding: 5px 6px;
-            selection-background-color: #15516A;
-            selection-color: #FFFFFF;
-        }}
-
-        QSpinBox:focus, QDoubleSpinBox:focus,
-        QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
-            border: 1px solid {COLORS["cyan"]};
-        }}
-
-        QScrollBar:vertical {{
-            background: #0D1822;
-            width: 12px;
-            margin: 2px;
-        }}
-
-        QScrollBar::handle:vertical {{
-            background: #496474;
-            min-height: 24px;
-            border-radius: 5px;
-        }}
-
-        QScrollBar::handle:vertical:hover {{
-            background: #00AFC4;
-        }}
-
-        QScrollBar::add-line:vertical,
-        QScrollBar::sub-line:vertical {{
-            height: 0px;
         }}
     """)
