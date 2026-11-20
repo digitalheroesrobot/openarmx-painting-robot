@@ -639,6 +639,8 @@ class ProductViewer(QWidget):
             self.plotter.render()
         except Exception as exc:
             self.pose_status_label.setText(f"Rotation manipulator unavailable: {exc}")
+            if hasattr(self, "hud_status"):
+                self.hud_status.setText("MANIPULATOR ERROR  /  SEE APPLICATION LOG")
             self.confirm_pose_button.setEnabled(False)
 
     def _on_vtk_left_press(self, caller, event_name):
@@ -856,11 +858,19 @@ class ProductViewer(QWidget):
     def _set_product_selected(self, selected):
         self._product_selected = bool(selected)
         self._update_rotation_gizmo_transform()
-        self.pose_status_label.setText(
-            "PRODUCT SELECTED  |  Drag red X, green Y, or blue Z ring to rotate."
+        status = (
+            "● PRODUCT LOCKED   /   DRAG X · Y · Z RINGS TO ROTATE"
             if self._product_selected else
-            "PRODUCT DESELECTED  |  Click the product to show its rotation rings."
+            "○ WAITING FOR PRODUCT SELECTION   /   LEFT-CLICK THE CAD MODEL"
         )
+        self.pose_status_label.setText(status)
+        if hasattr(self, "hud_status"):
+            self.hud_status.setText(status)
+            self.hud_status.setStyleSheet(
+                "color: #48F0B5; font-size: 9px; letter-spacing: 1px;"
+                if self._product_selected else
+                "color: #4E8794; font-size: 9px; letter-spacing: 1px;"
+            )
         self.plotter.render()
 
     def _sync_world_position_inputs(self):
@@ -1768,7 +1778,7 @@ class ProductViewer(QWidget):
 
         for tag in self._rotation_observer_tags:
             try:
-                self.plotter.interactor.RemoveObserver(tag)
+                self.plotter.iren.interactor.RemoveObserver(tag)
             except Exception:
                 pass
         self._rotation_observer_tags = []
