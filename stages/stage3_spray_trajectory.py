@@ -2528,7 +2528,10 @@ def _split_strokes_at_surface_discontinuities(
                 shared_vertices = int(
                     len(np.intersect1d(mesh.faces[face_a], mesh.faces[face_b]))
                 )
-                if shared_vertices == 0:
+                # Two triangles are edge-adjacent only when they share
+                # at least two vertices. Sharing a single vertex is merely a
+                # point contact and must not be treated as a continuous surface.
+                if shared_vertices < 2:
                     split_after.append(index + 1)
                     split_reasons["non_adjacent_source_faces"] += 1
                     continue
