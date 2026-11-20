@@ -1449,21 +1449,6 @@ class ProductViewer(QWidget):
             pickable=False,
         )
 
-        # Bright origin marker, centered exactly at the box midpoint.
-        self.plotter.add_mesh(
-            pv.Sphere(
-                radius=max(min(lx, ly, lz) * 0.012, 3.0),
-                center=(0.0, 0.0, 0.0),
-                theta_resolution=24,
-                phi_resolution=24,
-            ),
-            color="#F4FBFF",
-            smooth_shading=True,
-            specular=0.8,
-            specular_power=35,
-            pickable=False,
-        )
-
         # Compact telemetry-style overlays; avoid long labels around the axes.
 
     def _add_product_coordinate_frame(self):
