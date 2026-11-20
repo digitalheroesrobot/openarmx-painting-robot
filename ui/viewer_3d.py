@@ -81,6 +81,7 @@ class ProductViewer(QWidget):
 
         self.source_origin = np.zeros(3, dtype=float)
         self.rotation_pivot = np.zeros(3, dtype=float)
+        self.product_center_pivot = np.zeros(3, dtype=float)
         self.hook_length_source_units = 300.0
         self.selected_hook_point_cad = None
         self.hook_world_position = None
@@ -390,6 +391,7 @@ class ProductViewer(QWidget):
         self.hook_length_input.setSuffix(" source units")
         self.hook_length_input.setFixedWidth(130)
         self.hook_length_input.setToolTip("Vertical distance from the conveyor hook suspension point to the hook engagement point on the product, measured downward along +Z.")
+        self.hook_length_input.valueChanged.connect(self._on_hook_length_changed)
         layout.addWidget(self.hook_length_input)
 
         self.pick_hook_point_button = QPushButton("PICK PRODUCT HOOK POINT")
@@ -430,6 +432,20 @@ class ProductViewer(QWidget):
         delta = desired - current
         actor_position = np.asarray(self._pose_actor.GetPosition(), dtype=float)
         self._pose_actor.SetPosition(*(actor_position + delta).tolist())
+
+    def _on_hook_length_changed(self, value):
+        self.hook_length_source_units = float(value)
+        if self._pose_actor is None or self.selected_hook_point_cad is None:
+            return
+        matrix = self._actor_matrix_array()
+        point_world = (matrix @ np.append(self.selected_hook_point_cad, 1.0))[:3]
+        target = np.array([0.0, 0.0, self.hook_length_source_units], dtype=float)
+        delta = target - point_world
+        actor_position = np.asarray(self._pose_actor.GetPosition(), dtype=float)
+        self._pose_actor.SetPosition(*(actor_position + delta).tolist())
+        self.hook_world_position = target
+        self._sync_world_position_inputs()
+        self._render_product(reset_camera=False)
 
     def _start_hook_point_picking(self):
         if self._pose_actor is None:
@@ -487,6 +503,12 @@ class ProductViewer(QWidget):
 
         self.selected_hook_point_cad = cad_point.copy()
         self.hook_world_position = target.copy()
+        # Make the selected engagement point the rotation pivot. Subsequent
+        # manual orientation changes then keep the hook point fixed in World.
+        cad_origin_world = self._actor_matrix_array()[:3, 3].copy()
+        self.rotation_pivot = cad_point.copy()
+        self._pose_actor.SetOrigin(*self.rotation_pivot.tolist())
+        self._set_cad_origin_world_position(cad_origin_world)
         self._hook_pick_active = False
         try:
             self.plotter.disable_picking()
@@ -576,7 +598,7 @@ class ProductViewer(QWidget):
             "selected_hook_point_cad": None if self.selected_hook_point_cad is None else self.selected_hook_point_cad.tolist(),
             "hook_engagement_point_world_xyz": None if self.hook_world_position is None else self.hook_world_position.tolist(),
             "product_frame": "PRODUCT_CAD",
-            "rotation_pivot": "PRODUCT_BOUNDING_BOX_CENTER",
+            "rotation_pivot": "HOOK_ENGAGEMENT_POINT" if self.selected_hook_point_cad is not None else "PRODUCT_BOUNDING_BOX_CENTER",
             "rotation_pivot_cad": self.rotation_pivot.tolist(),
             "position_world_xyz_source_units": matrix[:3, 3].tolist(),
             "roll_pitch_yaw_world_xyz_deg": self._rotation_to_rpy(rotation).tolist(),
@@ -622,6 +644,7 @@ class ProductViewer(QWidget):
             self._pose_actor.SetPosition(0.0, 0.0, 0.0)
             self._pose_actor.SetOrientation(0.0, 0.0, 180.0)
             self._pose_actor.SetScale(1.0, 1.0, 1.0)
+            self.rotation_pivot = self.product_center_pivot.copy()
             self._pose_actor.SetOrigin(*self.rotation_pivot.tolist())
             self._set_cad_origin_world_position(np.zeros(3, dtype=float))
             self.selected_hook_point_cad = None
@@ -653,7 +676,8 @@ class ProductViewer(QWidget):
 
         self.source_origin = self._calculate_cad_origin(mesh_copy)
         bounds = np.asarray(mesh_copy.bounds, dtype=float)
-        self.rotation_pivot = (bounds[0] + bounds[1]) * 0.5
+        self.product_center_pivot = (bounds[0] + bounds[1]) * 0.5
+        self.rotation_pivot = self.product_center_pivot.copy()
 
         self.source_to_view_transform = np.eye(4, dtype=float)
         self.view_to_source_transform = np.eye(4, dtype=float)
