@@ -2563,6 +2563,7 @@ def generate_spray_trajectory(
         "travel_speeds_mm_s": travel_speeds_mm_s,
         "trajectory_time_s": trajectory_time_s,
         "segments": ordered["segments"],
+        "path_statistics": ordered.get("path_statistics", {}),
         "rasterization": {
             "algorithm": "planar_and_pca_surface_following_triangle_raster",
             "rasterized_planar_patch_ids": ordered.get("rasterized_planar_patch_ids", []),
@@ -2659,6 +2660,7 @@ def _build_saved_report(
         "orientation_analysis": trajectory["orientation_analysis"],
         "path_metrics": trajectory["path_metrics"],
         "segments": trajectory["segments"],
+        "path_statistics": trajectory.get("path_statistics", {}),
         "rasterization": trajectory.get("rasterization", {}),
         "advanced_geometry_analysis": trajectory[
             "advanced_geometry_analysis"
