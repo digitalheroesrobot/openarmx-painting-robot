@@ -876,8 +876,13 @@ class ProductViewer(QWidget):
             )
             face_indices = face_indices[sample_positions]
 
-        bounds = np.asarray(mesh.bounds, dtype=float)
-        dimensions = bounds[[1, 3, 5]] - bounds[[0, 2, 4]]
+        # trimesh.bounds has shape (2, 3): [minimum_xyz, maximum_xyz].
+        # Compute extents from vertices to avoid confusing it with VTK's
+        # flattened six-value bounds representation.
+        dimensions = np.ptp(
+            np.asarray(mesh.vertices, dtype=float),
+            axis=0,
+        )
         model_diagonal = float(np.linalg.norm(dimensions))
 
         if not np.isfinite(model_diagonal) or model_diagonal <= 0.0:
@@ -1835,10 +1840,12 @@ class ProductViewer(QWidget):
                         ]
                     )
 
-                    bounds = np.asarray(
-                        self.current_mesh.bounds, dtype=float
+                    # trimesh bounds are (2, 3), not a flattened
+                    # VTK (xmin, xmax, ymin, ymax, zmin, zmax) tuple.
+                    dimensions = np.ptp(
+                        np.asarray(self.current_mesh.vertices, dtype=float),
+                        axis=0,
                     )
-                    dimensions = bounds[[1, 3, 5]] - bounds[[0, 2, 4]]
                     model_diagonal = float(np.linalg.norm(dimensions))
                     if not np.isfinite(model_diagonal) or model_diagonal <= 0:
                         model_diagonal = 1.0
