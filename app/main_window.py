@@ -36,6 +36,7 @@ from core.result_manager import ResultManager
 
 from stages.stage1_geometry import execute_stage1
 from stages.stage2_surface_identification import execute_stage2
+from stages.cad_surface_analysis import analyze_step_faces
 from stages.stage3_spray_trajectory import (
     execute_stage3,
     DEFAULT_STANDOFF_MM,
@@ -982,9 +983,12 @@ class MainWindow(QMainWindow):
         self.cad_face_count_label.setObjectName("Muted")
         cad_face_layout.addWidget(self.cad_face_count_label)
 
-        self.cad_face_table = QTableWidget(0, 6)
+        self.cad_face_table = QTableWidget(0, 9)
         self.cad_face_table.setHorizontalHeaderLabels(
-            ["FACE", "TYPE", "AREA mm²", "CX mm", "CY mm", "CZ mm"]
+            [
+                "FACE", "TYPE", "AREA mm²", "CX mm", "CY mm", "CZ mm",
+                "ADJ.", "TRIS", "PRELIMINARY STATUS",
+            ]
         )
         self.cad_face_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.cad_face_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -3090,24 +3094,75 @@ class MainWindow(QMainWindow):
         faces = report.get("faces", [])
         self.cad_face_count_label.setText(
             f"ORIGINAL CAD FACES: {len(faces):,}  |  "
-            "AREA AND CENTROID FROM EXACT B-REP"
+            "EXACT B-REP AREA/CENTROID + PRELIMINARY SURFACE REVIEW"
         )
-        self.cad_face_table.setRowCount(len(faces))
 
+        analysis = None
+        if self.current_mesh is not None:
+            try:
+                analysis = analyze_step_faces(report, self.current_mesh)
+                self.current_cad_surface_analysis = analysis
+
+                # Keep an independent report beside the other Stage 2
+                # outputs. The original STEP geometry report is untouched.
+                stage_directory = Path(
+                    self.result_manager.stage_dir(
+                        self.current_stl_path,
+                        stage_number=2,
+                    )
+                )
+                stage_directory.mkdir(parents=True, exist_ok=True)
+                analysis_path = stage_directory / "cad_surface_analysis.json"
+                analysis_path.write_text(
+                    json.dumps(
+                        analysis["report"],
+                        indent=2,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                    ),
+                    encoding="utf-8",
+                )
+            except Exception as exc:
+                self.current_cad_surface_analysis = None
+                print("Preliminary STEP CAD surface analysis failed:", exc)
+
+        face_analysis = {}
+        if analysis is not None:
+            face_analysis = {
+                int(item["face_id"]): item
+                for item in analysis["report"].get("faces", [])
+            }
+
+        self.cad_face_table.setRowCount(len(faces))
         for row, face in enumerate(faces):
+            face_id = int(face.get("face_id", -1))
             center = face.get("centroid_mm", [0.0, 0.0, 0.0])
+            detail = face_analysis.get(face_id, {})
             values = [
-                str(face.get("face_id", "")),
+                str(face_id),
                 str(face.get("surface_type", "OTHER")),
                 f"{float(face.get('area_mm2', 0.0)):,.3f}",
                 f"{float(center[0]):,.3f}",
                 f"{float(center[1]):,.3f}",
                 f"{float(center[2]):,.3f}",
+                str(detail.get("adjacent_face_count", "--")),
+                str(detail.get("display_triangle_count", "--")),
+                str(detail.get("preliminary_status", "NOT ANALYZED")),
             ]
             for column, value in enumerate(values):
                 self.cad_face_table.setItem(
                     row, column, QTableWidgetItem(value)
                 )
+
+        if analysis is not None:
+            summary = analysis["report"]["summary"]
+            self.cad_face_count_label.setText(
+                f"CAD FACES: {summary['total_cad_faces']:,}  |  "
+                f"CANDIDATE: {summary['paintable_candidate_faces']:,}  |  "
+                f"REVIEW: {summary['review_required_faces']:,}  |  "
+                f"INVALID: {summary['invalid_faces']:,}  |  "
+                "EXTERIOR EXPOSURE NOT YET VERIFIED"
+            )
 
     # ========================================================
     # GEOMETRY DISPLAY
