@@ -1408,11 +1408,11 @@ class ProductViewer(QWidget):
         # larger Product frame remains visually dominant at coincident origins.
         product_bounds = np.asarray(self._pose_actor.GetBounds(), dtype=float).reshape(3, 2)
         product_size = max(float(np.max(product_bounds[:, 1] - product_bounds[:, 0])), 1.0)
-        world_axis_length = max(product_size * 0.16, 10.0)
+        world_axis_length = max(product_size * 0.36, 20.0)
         world_axes = [
-            (np.array([1.0, 0.0, 0.0]), "#A56B76", "X"),
-            (np.array([0.0, 1.0, 0.0]), "#679D87", "Y"),
-            (np.array([0.0, 0.0, 1.0]), "#6C91B2", "Z"),
+            (np.array([1.0, 0.0, 0.0]), "#C18A94", "X"),
+            (np.array([0.0, 1.0, 0.0]), "#82B49D", "Y"),
+            (np.array([0.0, 0.0, 1.0]), "#8AA9C8", "Z"),
         ]
         for direction, color, label in world_axes:
             dash_segments = []
@@ -1424,7 +1424,7 @@ class ProductViewer(QWidget):
                     direction * start_t,
                     direction * end_t,
                 ))
-            add_segments(dash_segments, color, 1.0, 0.48)
+            add_segments(dash_segments, color, 1.35, 0.62)
             self.plotter.add_point_labels(
                 np.asarray([direction * world_axis_length * 1.12]),
                 [label],
@@ -1463,12 +1463,12 @@ class ProductViewer(QWidget):
         product_size = max(float(np.max(product_bounds[:, 1] - product_bounds[:, 0])), 1.0)
         # The Product frame is intentionally larger and brighter than
         # the short, dashed World reference axes.
-        axis_length = product_size * 0.40
+        axis_length = product_size * 0.68
         axes.SetTotalLength(axis_length, axis_length, axis_length)
 
         axes.SetShaftTypeToLine()
-        axes.SetConeRadius(0.045)
-        axes.SetSphereRadius(0.028)
+        axes.SetConeRadius(0.060)
+        axes.SetSphereRadius(0.035)
         axes.SetXAxisLabelText("X")
         axes.SetYAxisLabelText("Y")
         axes.SetZAxisLabelText("Z")
@@ -1484,7 +1484,7 @@ class ProductViewer(QWidget):
             tip.SetColor(*color)
             shaft.SetOpacity(0.92)
             tip.SetOpacity(1.0)
-            shaft.SetLineWidth(2.0)
+            shaft.SetLineWidth(3.2)
 
         # Small, crisp XYZ glyphs, color-matched to their respective axes.
         caption_styles = (
