@@ -4721,6 +4721,7 @@ def run_stage3_numerical_tests() -> dict:
             "trajectory_coverage_continuity_orientation_and_spray_boundaries": "PASS",
             "inter_segment_spray_off_travel_estimates": "PASS",
             "greedy_stroke_travel_ordering": "PASS",
+            "exact_continuity_outlier_diagnostics": "PASS",
         },
         "sample_count": int(sample_count),
         "unit_standoff_tests": unit_test_results,
