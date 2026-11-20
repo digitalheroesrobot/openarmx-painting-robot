@@ -1867,10 +1867,49 @@ class MainWindow(QMainWindow):
 
             manual_status = DECISION_TO_FACE_STATUS[decision]
 
-            # Preserve genuinely invalid Stage 2 triangles. A manual
-            # Paint decision must not turn degenerate / invalid mesh
-            # geometry into a valid spray surface.
-            invalid_mask = automatic_labels == FACE_INVALID
+            # Preserve only genuinely invalid mesh triangles.
+            # A Stage 1 INVALID label may mean that surface fitting
+            # failed even though its underlying triangles are sound.
+            # After explicit operator approval, valid triangles in
+            # that reviewed patch may therefore become paintable.
+            # Degenerate triangles remain INVALID and can never be
+            # promoted to spray targets.
+            face_areas = np.asarray(
+                self.current_mesh.area_faces,
+                dtype=float,
+            )
+            face_normals = np.asarray(
+                self.current_mesh.face_normals,
+                dtype=float,
+            )
+
+            if (
+                face_areas.shape != automatic_labels.shape
+                or face_normals.shape != (len(automatic_labels), 3)
+            ):
+                raise ValueError(
+                    "Mesh triangle validity data does not match "
+                    "the Stage 2 face labels."
+                )
+
+            normal_lengths = np.linalg.norm(
+                face_normals,
+                axis=1,
+            )
+
+            valid_mesh_triangles = (
+                np.isfinite(face_areas)
+                & (face_areas > 0.0)
+                & np.all(np.isfinite(face_normals), axis=1)
+                & np.isfinite(normal_lengths)
+                & (normal_lengths > 0.0)
+            )
+
+            invalid_mask = (
+                (automatic_labels == FACE_INVALID)
+                & ~valid_mesh_triangles
+            )
+
             apply_mask = mask & ~invalid_mask
             face_labels[apply_mask] = manual_status
 
