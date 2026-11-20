@@ -1679,8 +1679,7 @@ class ProductViewer(QWidget):
                 )
 
             # -------------------------------------------------
-            # SELECTED PATCH HIGHLIGHT
-            # No text overlay.
+            # SELECTED PATCH - HIGH-VISIBILITY GLOW HIGHLIGHT
             # -------------------------------------------------
             if self.selected_patch_id is not None:
                 selected_mask = (
@@ -1693,23 +1692,54 @@ class ProductViewer(QWidget):
                 )
 
                 if selected_polydata.n_cells > 0:
-                    selected_actor = self.plotter.add_mesh(
+                    # Translucent cyan surface wash.
+                    glow_actor = self.plotter.add_mesh(
                         selected_polydata,
-                        color="#FFD740",
-                        show_edges=True,
-                        edge_color="#FFFFFF",
-                        line_width=2.5,
+                        color="#00E5FF",
+                        opacity=0.38,
+                        show_edges=False,
                         smooth_shading=False,
                         lighting=False,
+                        ambient=1.0,
+                        diffuse=0.0,
                     )
+
+                    # Broad luminous edge pass.
+                    outer_glow_actor = self.plotter.add_mesh(
+                        selected_polydata,
+                        style="wireframe",
+                        color="#00E5FF",
+                        opacity=0.78,
+                        line_width=7.0,
+                        render_lines_as_tubes=True,
+                        lighting=False,
+                    )
+
+                    # Bright inner edge makes the selected region
+                    # unmistakable against adjacent patch colors.
+                    edge_actor = self.plotter.add_mesh(
+                        selected_polydata,
+                        style="wireframe",
+                        color="#E9FFFF",
+                        opacity=1.0,
+                        line_width=2.5,
+                        render_lines_as_tubes=True,
+                        lighting=False,
+                    )
+
                     if previous_product_pose is not None:
-                        selected_actor.SetOrigin(0.0, 0.0, 0.0)
-                        selected_actor.SetOrientation(
-                            *patch_transform.GetOrientation()
-                        )
-                        selected_actor.SetPosition(
-                            *previous_product_pose[:3, 3].tolist()
-                        )
+                        for selected_actor in (
+                            glow_actor,
+                            outer_glow_actor,
+                            edge_actor,
+                        ):
+                            selected_actor.SetOrigin(0.0, 0.0, 0.0)
+                            selected_actor.SetOrientation(
+                                *patch_transform.GetOrientation()
+                            )
+                            selected_actor.SetPosition(
+                                *previous_product_pose[:3, 3].tolist()
+                            )
 
         # -------------------------------------------------
         # TRAJECTORY MODE
