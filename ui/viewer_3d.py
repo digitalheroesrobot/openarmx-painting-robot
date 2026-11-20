@@ -1835,7 +1835,7 @@ class ProductViewer(QWidget):
                             self.plotter.add_mesh(
                                 light_beams,
                                 color="#00DFFF",
-                                opacity=0.16,
+                                opacity=0.28,
                                 show_edges=False,
                                 lighting=False,
                                 ambient=1.0,
@@ -1857,7 +1857,7 @@ class ProductViewer(QWidget):
                                 self.plotter.add_mesh(
                                     core_beams,
                                     color="#D9FFFF",
-                                    opacity=0.24,
+                                    opacity=0.42,
                                     show_edges=False,
                                     lighting=False,
                                     ambient=1.0,
