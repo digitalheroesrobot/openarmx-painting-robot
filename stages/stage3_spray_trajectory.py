@@ -3378,7 +3378,8 @@ def run_stage3_numerical_tests() -> dict:
         curved_test_mesh.face_normals, dtype=np.float64
     )
     curved_side_faces = np.flatnonzero(
-        np.abs(curved_test_normals[:, 2]) < 0.1
+        (np.abs(curved_test_normals[:, 2]) < 0.1)
+        & (curved_test_normals[:, 0] > 0.3)
     )
     curved_raster = _generate_surface_following_raster_for_patch(
         mesh=curved_test_mesh,
