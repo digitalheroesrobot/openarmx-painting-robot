@@ -99,6 +99,14 @@ class ProductViewer(QWidget):
         self._rotation_last_matrix = None
         self._selection_observer_tag = None
         self._product_selected = False
+        self._rotation_ring_actors = []
+        self._rotation_observer_tags = []
+        self._rotation_drag_axis = None
+        self._rotation_drag_start_vector = None
+        self._rotation_drag_start_matrix = None
+        self._camera_style = None
+        self._rotation_drag_style = None
+        self._attitude_text_actor = None
         # Display-only bounds; operator must set actual work-cell extents.
         self.workspace_dimensions = np.array([1000.0, 1000.0, 1000.0], dtype=float)
 
@@ -412,72 +420,49 @@ class ProductViewer(QWidget):
         self.confirm_pose_button.clicked.connect(self._confirm_reference_pose)
         layout.addWidget(self.confirm_pose_button)
 
-        # ROS-style local CAD rotation controls. These controls rotate the
-        # product only; the camera and World reference geometry are untouched.
-        layout.addWidget(QLabel("LOCAL CAD ROTATION Δ°:"))
-        self.local_rotation_inputs = []
-        for axis in "XYZ":
+        layout.addWidget(QLabel("ATTITUDE RPY (°):"))
+        self.rpy_inputs = []
+        for label in ("ROLL", "PITCH", "YAW"):
             field = QDoubleSpinBox()
             field.setRange(-3600.0, 3600.0)
             field.setDecimals(2)
-            field.setSingleStep(5.0)
-            field.setSuffix(f"° {axis}")
-            field.setFixedWidth(78)
-            field.setToolTip(f"Incremental rotation about the product-local CAD {axis} axis.")
+            field.setSingleStep(1.0)
+            field.setSuffix(f"° {label}")
+            field.setFixedWidth(92)
+            field.setToolTip(f"Absolute {label.lower()} angle in the World XYZ frame.")
             layout.addWidget(field)
-            self.local_rotation_inputs.append(field)
+            self.rpy_inputs.append(field)
 
-        self.apply_local_rotation_button = QPushButton("APPLY ROTATION")
-        self.apply_local_rotation_button.clicked.connect(self._apply_local_rotation)
-        layout.addWidget(self.apply_local_rotation_button)
+        self.apply_rpy_button = QPushButton("APPLY RPY")
+        self.apply_rpy_button.clicked.connect(self._apply_rpy_inputs)
+        layout.addWidget(self.apply_rpy_button)
 
         self.reset_pose_button = QPushButton("RESET")
         self.reset_pose_button.clicked.connect(self._reset_reference_pose)
         layout.addWidget(self.reset_pose_button)
         return panel
 
-    def _apply_local_rotation(self):
-        """Apply incremental rotations about the STEP CAD local X/Y/Z axes."""
+    def _apply_rpy_inputs(self):
+        """Set absolute World-frame ZYX Roll/Pitch/Yaw orientation."""
         if self._pose_actor is None:
             return
-        angles = np.radians(np.asarray(
-            [field.value() for field in self.local_rotation_inputs], dtype=float
-        ))
-        if not np.all(np.isfinite(angles)):
-            self.pose_status_label.setText("Invalid local rotation angles.")
-            return
-
-        # Intrinsic/local-axis composition: R_new = R_current * Rx * Ry * Rz.
-        rx, ry, rz = angles
-        cx, sx = math.cos(rx), math.sin(rx)
-        cy, sy = math.cos(ry), math.sin(ry)
-        cz, sz = math.cos(rz), math.sin(rz)
-        rot_x = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]], dtype=float)
-        rot_y = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]], dtype=float)
-        rot_z = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]], dtype=float)
-
-        actor_matrix = self._actor_matrix_array()
-        current_rotation = actor_matrix[:3, :3]
-        updated_rotation = current_rotation @ rot_x @ rot_y @ rot_z
-        updated_matrix = np.eye(4, dtype=float)
-        updated_matrix[:3, :3] = updated_rotation
-        updated_matrix[:3, 3] = actor_matrix[:3, 3]
-
+        roll, pitch, yaw = np.radians([field.value() for field in self.rpy_inputs])
+        cr, sr = math.cos(roll), math.sin(roll)
+        cp, sp = math.cos(pitch), math.sin(pitch)
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]], dtype=float)
+        ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]], dtype=float)
+        rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]], dtype=float)
+        matrix = self._actor_matrix_array()
+        matrix[:3, :3] = rz @ ry @ rx
         from vtkmodules.vtkCommonTransforms import vtkTransform
         transform = vtkTransform()
-        transform.SetMatrix(self._vtk_matrix_from_numpy(updated_matrix))
+        transform.SetMatrix(self._vtk_matrix_from_numpy(matrix))
         self._pose_actor.SetOrientation(*transform.GetOrientation())
-
-        for field in self.local_rotation_inputs:
-            field.setValue(0.0)
-
-        # No camera update here: the complete viewport and World frame stay fixed.
-        self.plotter.render()
+        self._update_rotation_gizmo_transform()
         self._update_pose_readout()
-        self.pose_status_label.setText(
-            "LOCAL CAD ROTATION APPLIED  |  Product rotated about its own X/Y/Z axes; "
-            "camera and World frame remained fixed."
-        )
+        self.pose_status_label.setText("ATTITUDE UPDATED  |  Product set to the entered absolute RPY.")
+        self.plotter.render()
 
     def _apply_world_position(self):
         if self._pose_actor is None:
@@ -603,37 +588,150 @@ class ProductViewer(QWidget):
         self.pose_status_label.setText("World display box updated; extents are configurable visualization bounds.")
 
     def _install_actor_interaction(self):
-        """Keep camera navigation separate from explicit local-CAD rotation controls."""
+        """Install a selectable local-CAD X/Y/Z rotation-ring manipulator."""
         if self._pose_actor is None:
             return
         try:
-            from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
-            from vtkmodules.vtkRenderingCore import vtkPropPicker
+            from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera, vtkInteractorStyleUser
+            from vtkmodules.vtkRenderingCore import vtkCellPicker, vtkPropPicker
 
             interactor = self.plotter.interactor
-            self._actor_style = vtkInteractorStyleTrackballCamera()
-            self._actor_style.SetDefaultRenderer(self.plotter.renderer)
-            interactor.SetInteractorStyle(self._actor_style)
+            self._camera_style = vtkInteractorStyleTrackballCamera()
+            self._camera_style.SetDefaultRenderer(self.plotter.renderer)
+            self._rotation_drag_style = vtkInteractorStyleUser()
+            self._rotation_drag_style.SetDefaultRenderer(self.plotter.renderer)
+            interactor.SetInteractorStyle(self._camera_style)
 
-            # Selection is informational only. Product rotation is performed
-            # by the dedicated X/Y/Z controls, never by dragging the camera
-            # or by the old OrientationWidget (which controls camera orientation).
-            picker = vtkPropPicker()
+            self._create_rotation_gizmo()
+            ring_picker = vtkCellPicker()
+            ring_picker.SetTolerance(0.012)
+            ring_picker.PickFromListOn()
+            for ring_actor in self._rotation_ring_actors:
+                ring_picker.AddPickList(ring_actor)
+            product_picker = vtkPropPicker()
 
-            def select_product(caller, event):
-                if self._pose_actor is None:
+            def on_press(caller, event):
+                x, y = interactor.GetEventPosition()
+                hit_ring = ring_picker.Pick(x, y, 0, self.plotter.renderer)
+                ring_actor = ring_picker.GetActor() if hit_ring else None
+                if ring_actor in self._rotation_ring_actors and self._product_selected:
+                    axis_index = self._rotation_ring_actors.index(ring_actor)
+                    start_vector = self._screen_vector_from_cad_origin(x, y, axis_index)
+                    if start_vector is not None:
+                        self._rotation_drag_axis = axis_index
+                        self._rotation_drag_start_vector = start_vector
+                        self._rotation_drag_start_matrix = self._actor_matrix_array().copy()
+                        interactor.SetInteractorStyle(self._rotation_drag_style)
+                        return
+                hit_product = product_picker.Pick(x, y, 0, self.plotter.renderer)
+                picked = product_picker.GetActor() if hit_product else None
+                self._set_product_selected(picked == self._pose_actor)
+
+            def on_move(caller, event):
+                if self._rotation_drag_axis is None:
                     return
                 x, y = interactor.GetEventPosition()
-                picked = picker.Pick(x, y, 0, self.plotter.renderer)
-                selected_actor = picker.GetActor() if picked else None
-                self._set_product_selected(selected_actor == self._pose_actor)
+                current = self._screen_vector_from_cad_origin(x, y, self._rotation_drag_axis)
+                if current is None:
+                    return
+                start = self._rotation_drag_start_vector
+                index = self._rotation_drag_axis
+                local_axis = np.eye(3, dtype=float)[index]
+                base = self._rotation_drag_start_matrix
+                base_rotation = base[:3, :3]
+                world_axis = base_rotation @ local_axis
+                angle = math.atan2(
+                    float(np.dot(world_axis, np.cross(start, current))),
+                    float(np.clip(np.dot(start, current), -1.0, 1.0)),
+                )
+                ux, uy, uz = local_axis
+                skew = np.array([[0.0, -uz, uy], [uz, 0.0, -ux], [-uy, ux, 0.0]])
+                delta = np.eye(3) + math.sin(angle) * skew + (1.0 - math.cos(angle)) * (skew @ skew)
+                updated = base.copy()
+                updated[:3, :3] = base_rotation @ delta
+                from vtkmodules.vtkCommonTransforms import vtkTransform
+                transform = vtkTransform()
+                transform.SetMatrix(self._vtk_matrix_from_numpy(updated))
+                self._pose_actor.SetOrientation(*transform.GetOrientation())
+                self._update_rotation_gizmo_transform()
+                self._update_pose_readout()
+                self.plotter.render()
 
-            self._selection_observer_tag = interactor.AddObserver(
-                "LeftButtonPressEvent", select_product, 0.1
-            )
+            def on_release(caller, event):
+                if self._rotation_drag_axis is None:
+                    return
+                self._rotation_drag_axis = None
+                self._rotation_drag_start_vector = None
+                self._rotation_drag_start_matrix = None
+                interactor.SetInteractorStyle(self._camera_style)
+                self._update_pose_readout()
+                self.pose_status_label.setText("ROTATION COMPLETE  |  Camera orbit and zoom are available.")
+
+            self._rotation_observer_tags = [
+                interactor.AddObserver("LeftButtonPressEvent", on_press, 1.0),
+                interactor.AddObserver("MouseMoveEvent", on_move, 1.0),
+                interactor.AddObserver("LeftButtonReleaseEvent", on_release, 1.0),
+            ]
+            self._update_rotation_gizmo_transform()
+            self._update_pose_readout()
         except Exception as exc:
-            self.pose_status_label.setText(f"3D interaction setup unavailable: {exc}")
+            self.pose_status_label.setText(f"Rotation manipulator unavailable: {exc}")
             self.confirm_pose_button.setEnabled(False)
+
+    def _create_rotation_gizmo(self):
+        """Build three colored rings in CAD-local planes, centered on CAD origin."""
+        if self._pose_actor is None:
+            return
+        bounds = np.asarray(self.current_mesh.bounds, dtype=float)
+        diagonal = float(np.linalg.norm(bounds[[1, 3, 5]] - bounds[[0, 2, 4]]))
+        radius = max(diagonal * 0.62, 10.0)
+        tube_radius = max(radius * 0.012, diagonal * 0.002)
+        planes = (
+            (np.array([0.0, 1.0, 0.0]), np.array([0.0, 0.0, 1.0])),
+            (np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0])),
+            (np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0])),
+        )
+        self._rotation_ring_actors = []
+        for index, (u, v) in enumerate(planes):
+            theta = np.linspace(0.0, 2.0 * math.pi, 129)
+            points = radius * np.cos(theta)[:, None] * u + radius * np.sin(theta)[:, None] * v
+            line = pv.PolyData(points)
+            line.lines = np.hstack((np.array([len(points)], dtype=np.int64), np.arange(len(points), dtype=np.int64)))
+            tube = line.tube(radius=tube_radius, n_sides=10)
+            actor = self.plotter.add_mesh(
+                tube, color=("#FF5252", "#00E676", "#40C4FF")[index],
+                lighting=False, pickable=True, render=False,
+            )
+            actor.SetVisibility(False)
+            self._rotation_ring_actors.append(actor)
+
+    def _update_rotation_gizmo_transform(self):
+        if self._pose_actor is None:
+            return
+        matrix = self._vtk_matrix_from_numpy(self._actor_matrix_array())
+        for ring_actor in self._rotation_ring_actors:
+            ring_actor.SetUserMatrix(matrix)
+            ring_actor.SetVisibility(self._product_selected)
+
+    def _screen_vector_from_cad_origin(self, display_x, display_y, axis_index):
+        """Project a display point onto the plane normal to a local CAD axis."""
+        renderer = self.plotter.renderer
+        matrix = self._actor_matrix_array()
+        origin = matrix[:3, 3]
+        renderer.SetWorldPoint(float(origin[0]), float(origin[1]), float(origin[2]), 1.0)
+        renderer.WorldToDisplay()
+        depth = renderer.GetDisplayPoint()[2]
+        renderer.SetDisplayPoint(float(display_x), float(display_y), float(depth))
+        renderer.DisplayToWorld()
+        world = np.asarray(renderer.GetWorldPoint(), dtype=float)
+        if abs(world[3]) < 1e-12:
+            return None
+        point = world[:3] / world[3]
+        vector = point - origin
+        axis = matrix[:3, :3] @ np.eye(3, dtype=float)[axis_index]
+        vector -= axis * float(np.dot(vector, axis))
+        norm = float(np.linalg.norm(vector))
+        return None if norm < 1e-9 else vector / norm
 
     @staticmethod
     def _vtk_transform_matrix(transform):
@@ -645,15 +743,13 @@ class ProductViewer(QWidget):
 
     def _set_product_selected(self, selected):
         self._product_selected = bool(selected)
-        if self._product_selected:
-            self.pose_status_label.setText(
-                "PRODUCT SELECTED  |  Enter local CAD X/Y/Z rotation increments, "
-                "then APPLY ROTATION. Camera view remains unchanged."
-            )
-        else:
-            self.pose_status_label.setText(
-                "PRODUCT DESELECTED  |  Use the camera mouse controls to inspect the scene."
-            )
+        self._update_rotation_gizmo_transform()
+        self.pose_status_label.setText(
+            "PRODUCT SELECTED  |  Drag red X, green Y, or blue Z ring to rotate."
+            if self._product_selected else
+            "PRODUCT DESELECTED  |  Click the product to show its rotation rings."
+        )
+        self.plotter.render()
 
     def _sync_world_position_inputs(self):
         if self._pose_actor is None:
@@ -716,15 +812,20 @@ class ProductViewer(QWidget):
     def _update_pose_readout(self):
         if self._pose_actor is None:
             return
-        pose = self._current_pose_record()
-        p, rpy = pose["position_world_xyz_source_units"], pose["roll_pitch_yaw_world_xyz_deg"]
-        self.pose_status_label.setText(
-            f"CAD ORIGIN / WORLD XYZ: ({p[0]:.2f}, {p[1]:.2f}, {p[2]:.2f}) {self._source_unit_label()} | "
-            f"RPY ({rpy[0]:.2f}, {rpy[1]:.2f}, {rpy[2]:.2f})°"
-        )
+        rpy = self._current_pose_record()["roll_pitch_yaw_world_xyz_deg"]
+        for field, value in zip(self.rpy_inputs, rpy):
+            field.blockSignals(True)
+            field.setValue(float(value))
+            field.blockSignals(False)
+        text = f"ROLL  {rpy[0]:.2f}°    PITCH  {rpy[1]:.2f}°    YAW  {rpy[2]:.2f}°"
+        if self._attitude_text_actor is None:
+            self._attitude_text_actor = self.plotter.add_text(
+                text, position="upper_left", font_size=12, color="#FFFFFF", shadow=True
+            )
+        else:
+            self._attitude_text_actor.SetInput(text)
         if self._cad_axes_actor is not None:
             self._cad_axes_actor.SetUserMatrix(self._vtk_matrix_from_numpy(self._actor_matrix_array()))
-            self.plotter.render()
 
     @staticmethod
     def _vtk_matrix_from_numpy(values):
@@ -749,7 +850,7 @@ class ProductViewer(QWidget):
             self._pose_actor.SetPosition(0.0, 0.0, 0.0)
             self._pose_actor.SetOrientation(0.0, 0.0, 0.0)
             self._pose_actor.SetScale(1.0, 1.0, 1.0)
-            for field in getattr(self, "local_rotation_inputs", []):
+            for field in getattr(self, "rpy_inputs", []):
                 field.setValue(0.0)
             self.rotation_pivot = np.zeros(3, dtype=float)
             self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
@@ -851,13 +952,6 @@ class ProductViewer(QWidget):
         self._actor_style = None
         self._cad_axes_actor = None
         self.plotter.set_background("#07111D", top="#142B40")
-
-        self.plotter.add_text(
-            "PRODUCT VIEWER",
-            position="upper_left",
-            font_size=12,
-            color="#8195A3",
-        )
 
         self.plotter.render()
 
@@ -1506,28 +1600,6 @@ class ProductViewer(QWidget):
         )
 
         # Compact telemetry-style overlays; avoid long labels around the axes.
-        self.plotter.add_text(
-            "OPENARMX  /  WORLD COORDINATE SYSTEM",
-            position="upper_left",
-            font_size=12,
-            color="#BFEFFF",
-            shadow=True,
-        )
-        self.plotter.add_text(
-            "FRAME  LOCKED     ORIGIN  0, 0, 0\n"
-            "X  RIGHT       Y  INWARD       Z  DOWN",
-            position="lower_left",
-            font_size=10,
-            color="#7FD5E8",
-            shadow=True,
-        )
-        self.plotter.add_text(
-            f"WORK CELL  |  {lx:.0f} × {ly:.0f} × {lz:.0f} {self._source_unit_label()}",
-            position="lower_right",
-            font_size=10,
-            color="#A9C5D5",
-            shadow=True,
-        )
 
     def _add_product_coordinate_frame(self):
         if self._pose_actor is None:
@@ -1568,12 +1640,21 @@ class ProductViewer(QWidget):
             except Exception:
                 previous_camera = None
 
+        for tag in self._rotation_observer_tags:
+            try:
+                self.plotter.interactor.RemoveObserver(tag)
+            except Exception:
+                pass
+        self._rotation_observer_tags = []
         if self._selection_observer_tag is not None:
             try:
                 self.plotter.interactor.RemoveObserver(self._selection_observer_tag)
             except Exception:
                 pass
             self._selection_observer_tag = None
+        self._rotation_drag_axis = None
+        self._rotation_ring_actors = []
+        self._attitude_text_actor = None
         if self._rotation_widget is not None:
             try:
                 self._rotation_widget.SetEnabled(0)
