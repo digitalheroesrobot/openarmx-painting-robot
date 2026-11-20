@@ -1404,37 +1404,38 @@ class ProductViewer(QWidget):
             grid_segments.append((np.array([-hx, y, 0.0]), np.array([hx, y, 0.0])))
         add_segments(grid_segments, "#29404D", 0.7, 0.20)
 
-        # World XYZ axes are deliberately dashed and short so the brighter,
-        # larger Product frame remains visually dominant at coincident origins.
+        # World XYZ axes are intentionally much longer than the Product
+        # axes so the fixed reference direction remains easy to compare while
+        # the product rotates around the CAD origin.
         product_bounds = np.asarray(self._pose_actor.GetBounds(), dtype=float).reshape(3, 2)
         product_size = max(float(np.max(product_bounds[:, 1] - product_bounds[:, 0])), 1.0)
-        world_axis_length = max(product_size * 0.36, 20.0)
+        world_axis_length = max(product_size * 2.0, 20.0)
         world_axes = [
-            (np.array([1.0, 0.0, 0.0]), "#C18A94", "X"),
-            (np.array([0.0, 1.0, 0.0]), "#82B49D", "Y"),
-            (np.array([0.0, 0.0, 1.0]), "#8AA9C8", "Z"),
+            (np.array([1.0, 0.0, 0.0]), "#E2A0AC", "X"),
+            (np.array([0.0, 1.0, 0.0]), "#A1D7B7", "Y"),
+            (np.array([0.0, 0.0, 1.0]), "#A9C9EA", "Z"),
         ]
         for direction, color, label in world_axes:
             dash_segments = []
-            dash_count = 7
+            dash_count = 12
             for dash in range(dash_count):
                 start_t = (dash / dash_count) * world_axis_length
-                end_t = ((dash + 0.62) / dash_count) * world_axis_length
+                end_t = ((dash + 0.72) / dash_count) * world_axis_length
                 dash_segments.append((
                     direction * start_t,
                     direction * end_t,
                 ))
-            add_segments(dash_segments, color, 1.35, 0.62)
+            add_segments(dash_segments, color, 2.2, 0.84)
             self.plotter.add_point_labels(
-                np.asarray([direction * world_axis_length * 1.12]),
+                np.asarray([direction * world_axis_length * 1.04]),
                 [label],
-                font_size=9,
+                font_size=11,
                 text_color=color,
                 shape=None,
                 margin=1,
                 point_size=0,
                 always_visible=True,
-                bold=False,
+                bold=True,
             )
 
         # Small, understated World origin marker.
