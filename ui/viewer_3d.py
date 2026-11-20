@@ -1454,7 +1454,7 @@ class ProductViewer(QWidget):
                 previous_camera = None
 
         self.plotter.clear()
-        self.plotter.set_background("#101820")
+        self.plotter.set_background("#07111D", top="#142B40")
 
         # -------------------------------------------------
         # CLASSIFICATION MODE
