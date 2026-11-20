@@ -2606,7 +2606,11 @@ def _inspect_generated_trajectory(
             "spray_off_boundary_sample_count": int(spray_off_transitions),
             "spray_off_transition_count": int(spray_off_transitions),
             "stroke_segment_count": int(segment_count),
-            "policy": "Spray ON within a stroke; OFF at every segment boundary. No travel path is inserted yet.",
+            "policy": (
+                "Spray ON within a stroke; OFF at every segment boundary. "
+                "Direct straight-line OFF travel estimates are reported separately; "
+                "they are not collision-checked robot paths."
+            ),
         },
         "coverage_status": coverage_status,
         "note": (
@@ -2639,7 +2643,10 @@ def _inspect_generated_trajectory(
         f"OFF boundary samples {spray_off_transitions:,} | "
         f"stroke segments {segment_count:,}"
     )
-    print("NOTE: OFF is shown at segment changes; connecting travel paths are not generated.")
+    print(
+        "NOTE: Spray is OFF between strokes. Straight-line travel estimates are "
+        "reported separately; collision checking and IK are NOT performed."
+    )
     print(report["note"])
     print("=" * 68)
     return report
