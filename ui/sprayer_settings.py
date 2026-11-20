@@ -283,6 +283,22 @@ class SprayPatternPreview(QWidget):
 class SprayerSettingsDialog(QDialog):
     """Profile editor with immediate spray-envelope preview and JSON import/export."""
 
+    def _cancel_dialog(self):
+        self._cancel_requested = True
+        super().reject()
+
+    def reject(self):
+        # Ignore Escape and implicit reject requests; the visible Cancel
+        # button is the only control that is allowed to close this dialog.
+        if self._cancel_requested:
+            super().reject()
+
+    def closeEvent(self, event):
+        if self._cancel_requested:
+            event.accept()
+        else:
+            event.ignore()
+
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             event.accept()
@@ -297,6 +313,7 @@ class SprayerSettingsDialog(QDialog):
         parent=None,
     ):
         super().__init__(parent)
+        self._cancel_requested = False
         self.config_path = Path(config_path)
         self.profiles = deepcopy(profiles)
         self.current_profile = deepcopy(current_profile)
@@ -476,7 +493,7 @@ class SprayerSettingsDialog(QDialog):
         self.save_as_button.clicked.connect(self._save_as_new)
         self.import_button.clicked.connect(self._import_profile)
         self.export_button.clicked.connect(self._export_profile)
-        cancel_button.clicked.connect(self.reject)
+        cancel_button.clicked.connect(self._cancel_dialog)
         # Enter must never trigger QDialog's implicit accept behavior.
         for button in (
             self.save_button, self.save_as_button, self.import_button,
