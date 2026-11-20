@@ -2438,6 +2438,137 @@ def _build_analysis(
 
 
 # ------------------------------------------------------------
+# Generated trajectory inspection
+# ------------------------------------------------------------
+
+def _inspect_generated_trajectory(
+    mesh,
+    source_face_indices: np.ndarray,
+    trajectory: dict,
+    coordinate_unit: str,
+    sample_spacing_mm: float,
+    track_spacing_mm: float,
+) -> dict:
+    """Run geometric path checks and report explicit spray stroke boundaries."""
+    face_count = len(mesh.faces)
+    source_faces = np.unique(np.asarray(source_face_indices, dtype=np.int64))
+    path_faces = np.unique(np.asarray(trajectory["face_indices"], dtype=np.int64))
+    source_faces = source_faces[(source_faces >= 0) & (source_faces < face_count)]
+    path_faces = path_faces[(path_faces >= 0) & (path_faces < face_count)]
+    face_areas = np.asarray(mesh.area_faces, dtype=np.float64)
+    target_area = float(np.sum(face_areas[source_faces])) if len(source_faces) else 0.0
+    represented_area = float(np.sum(face_areas[np.intersect1d(source_faces, path_faces)])) if len(source_faces) else 0.0
+    face_coverage_percent = (
+        100.0 * represented_area / target_area if target_area > 1e-12 else 0.0
+    )
+
+    points = np.asarray(trajectory["nozzle_points"], dtype=np.float64)
+    directions = np.asarray(trajectory["spray_directions"], dtype=np.float64)
+    segments = np.asarray(trajectory["segment_ids"], dtype=np.int64)
+    mm_per_unit = MM_PER_UNIT[coordinate_unit]
+    jump_limit_mm = max(3.0 * float(sample_spacing_mm), 2.0 * float(track_spacing_mm), 1.0)
+    jumps_mm = []
+    orientation_changes_deg = []
+    segment_blocks = []
+    if len(segments):
+        starts = np.r_[0, np.flatnonzero(np.diff(segments) != 0) + 1]
+        ends = np.r_[starts[1:], len(segments)]
+        for start, end in zip(starts, ends):
+            segment_blocks.append((int(start), int(end), int(segments[start])))
+            if end - start > 1:
+                local_steps = np.linalg.norm(np.diff(points[start:end], axis=0), axis=1) * mm_per_unit
+                jumps_mm.extend(local_steps.tolist())
+                local_dots = np.einsum(
+                    "ij,ij->i", directions[start:end - 1], directions[start + 1:end]
+                )
+                orientation_changes_deg.extend(
+                    np.degrees(np.arccos(np.clip(local_dots, -1.0, 1.0))).tolist()
+                )
+
+    jumps = np.asarray(jumps_mm, dtype=np.float64)
+    angles = np.asarray(orientation_changes_deg, dtype=np.float64)
+    jump_outliers = int(np.count_nonzero(jumps > jump_limit_mm))
+    max_jump = float(np.max(jumps)) if len(jumps) else 0.0
+    p95_jump = float(np.percentile(jumps, 95)) if len(jumps) else 0.0
+    max_angle = float(np.max(angles)) if len(angles) else 0.0
+    p95_angle = float(np.percentile(angles, 95)) if len(angles) else 0.0
+    orientation_over_30 = int(np.count_nonzero(angles > 30.0))
+    segment_count = len(segment_blocks)
+    spray_off_transitions = max(0, segment_count - 1)
+    spray_on_samples = max(0, len(points) - spray_off_transitions)
+
+    coverage_status = "PASS" if face_coverage_percent >= 95.0 else "WARN"
+    continuity_status = "PASS" if jump_outliers == 0 else "WARN"
+    orientation_status = "PASS" if max_angle <= 60.0 else "WARN"
+    spray_status = "PASS" if segment_count > 0 else "FAIL"
+
+    report = {
+        "surface_face_representation_percent": face_coverage_percent,
+        "target_face_count": int(len(source_faces)),
+        "represented_face_count": int(len(np.intersect1d(source_faces, path_faces))),
+        "target_area_coordinate_units2": target_area,
+        "represented_area_coordinate_units2": represented_area,
+        "continuity": {
+            "status": continuity_status,
+            "within_segment_sample_pairs": int(len(jumps)),
+            "maximum_step_mm": max_jump,
+            "p95_step_mm": p95_jump,
+            "jump_limit_mm": jump_limit_mm,
+            "jump_outlier_count": jump_outliers,
+        },
+        "orientation": {
+            "status": orientation_status,
+            "maximum_change_deg": max_angle,
+            "p95_change_deg": p95_angle,
+            "changes_over_30_deg": orientation_over_30,
+            "warning_threshold_deg": 60.0,
+        },
+        "spray_control": {
+            "status": spray_status,
+            "spray_on_sample_count": int(spray_on_samples),
+            "spray_off_boundary_sample_count": int(spray_off_transitions),
+            "spray_off_transition_count": int(spray_off_transitions),
+            "stroke_segment_count": int(segment_count),
+            "policy": "Spray ON within a stroke; OFF at every segment boundary. No travel path is inserted yet.",
+        },
+        "coverage_status": coverage_status,
+        "note": (
+            "Surface face representation is the area of source candidate mesh faces "
+            "referenced by generated path samples. It is not physical spray-envelope "
+            "coverage, paint deposition, or film-thickness validation."
+        ),
+    }
+
+    print("\n" + "=" * 68)
+    print("STAGE 3 GENERATED TRAJECTORY INSPECTION")
+    print("=" * 68)
+    print(
+        f"[{coverage_status}] Surface face representation: "
+        f"{face_coverage_percent:.2f}% "
+        f"({report['represented_face_count']}/{report['target_face_count']} faces)"
+    )
+    print(
+        f"[{continuity_status}] Path continuity within strokes: "
+        f"max {max_jump:.2f} mm | P95 {p95_jump:.2f} mm | "
+        f"limit {jump_limit_mm:.2f} mm | outliers {jump_outliers}"
+    )
+    print(
+        f"[{orientation_status}] Nozzle orientation: max "
+        f"{max_angle:.2f} deg | P95 {p95_angle:.2f} deg | "
+        f"changes >30 deg: {orientation_over_30}"
+    )
+    print(
+        f"[{spray_status}] Spray control: ON samples {spray_on_samples:,} | "
+        f"OFF boundary samples {spray_off_transitions:,} | "
+        f"stroke segments {segment_count:,}"
+    )
+    print("NOTE: OFF is shown at segment changes; connecting travel paths are not generated.")
+    print(report["note"])
+    print("=" * 68)
+    return report
+
+
+# ------------------------------------------------------------
 # Adaptive spray travel-speed profile
 # ------------------------------------------------------------
 
@@ -2787,6 +2918,15 @@ def generate_spray_trajectory(
         coordinate_unit=source_unit,
     )
 
+    trajectory_validation = _inspect_generated_trajectory(
+        mesh=mesh,
+        source_face_indices=face_indices,
+        trajectory=ordered,
+        coordinate_unit=source_unit,
+        sample_spacing_mm=sampling_spacing_mm,
+        track_spacing_mm=path_track_spacing_mm,
+    )
+
     # 10. Associate Stage 1 geometry features.
     advanced_analysis = _build_advanced_geometry_analysis(
         feature_data=feature_data,
@@ -2939,6 +3079,7 @@ def generate_spray_trajectory(
         "trajectory_time_s": trajectory_time_s,
         "segments": ordered["segments"],
         "path_statistics": ordered.get("path_statistics", {}),
+        "trajectory_validation": trajectory_validation,
         "rasterization": {
             "algorithm": "planar_and_pca_surface_following_triangle_raster",
             "rasterized_planar_patch_ids": ordered.get("rasterized_planar_patch_ids", []),
