@@ -333,37 +333,41 @@ class SprayerSettingsDialog(QDialog):
         self.pattern_combo.addItem("Flat fan", "flat_fan")
         self.pattern_combo.addItem("Round cone", "round_cone")
 
-        form.addRow("Profile name", self.name_edit)
-        form.addRow("Manufacturer", self.manufacturer_edit)
-        form.addRow("Model / part number", self.model_edit)
-        form.addRow("Atomization technology", self.technology_combo)
-        form.addRow("Spray pattern", self.pattern_combo)
-
+        # Put the parameters most often adjusted for trajectory generation
+        # at the top of the left-hand form for quick access.
         self.fields = {}
         field_specs = [
+            ("standoff_mm", "Working distance (mm)", 20.0, 1000.0, 1),
+            ("spray_cone_angle_deg", "Full spray angle (deg)", 1.0, 150.0, 1),
+            ("overlap_percent", "Track overlap (%)", 0.0, 90.0, 1),
+            ("sampling_spacing_mm", "Surface sample spacing (mm)", 1.0, 100.0, 1),
             ("nozzle_orifice_mm", "Nozzle orifice (mm)", 0.1, 10.0, 2),
             ("nozzle_length_mm", "Nozzle length (mm)", 0.0, 300.0, 1),
             ("gun_body_length_mm", "Gun body length (mm)", 0.0, 600.0, 1),
             ("gun_body_diameter_mm", "Gun body diameter (mm)", 0.0, 200.0, 1),
             ("tcp_to_nozzle_tip_mm", "TCP to nozzle tip (mm)", 0.0, 500.0, 1),
-            ("standoff_mm", "Working distance (mm)", 20.0, 1000.0, 1),
-            ("spray_cone_angle_deg", "Full spray angle (deg)", 1.0, 150.0, 1),
             ("fan_reference_distance_mm", "Reference distance (mm)", 10.0, 2000.0, 1),
-            ("overlap_percent", "Track overlap (%)", 0.0, 90.0, 1),
-            ("sampling_spacing_mm", "Surface sample spacing (mm)", 1.0, 100.0, 1),
             ("travel_speed_mm_s", "Gun travel speed (mm/s)", 0.0, 2000.0, 1),
             ("fan_air_pressure_bar", "Fan air pressure (bar)", 0.0, 10.0, 2),
             ("atomizing_air_pressure_bar", "Atomizing air pressure (bar)", 0.0, 10.0, 2),
             ("fluid_pressure_bar", "Fluid pressure (bar)", 0.0, 500.0, 2),
             ("fluid_flow_ml_min", "Fluid flow (ml/min)", 0.0, 10000.0, 1),
         ]
-        for key, label, minimum, maximum, decimals in field_specs:
+
+        trajectory_keys = {
+            "standoff_mm",
+            "spray_cone_angle_deg",
+            "overlap_percent",
+            "sampling_spacing_mm",
+        }
+
+        def add_profile_field(key, label, minimum, maximum, decimals):
             spin = QDoubleSpinBox()
             spin.setRange(minimum, maximum)
             spin.setDecimals(decimals)
             spin.setKeyboardTracking(False)
             spin.setSingleStep(0.1 if decimals > 1 else 1.0)
-            if key in ("nozzle_length_mm",):
+            if key == "nozzle_length_mm":
                 spin.setToolTip(
                     "This is a mechanical dimension. The default is illustrative; "
                     "replace it with the actual sprayer drawing."
@@ -380,9 +384,45 @@ class SprayerSettingsDialog(QDialog):
                     "A value of 0 means not specified. Enter the value from "
                     "the sprayer data sheet or validated paint process."
                 )
+            elif key == "spray_cone_angle_deg":
+                spin.setToolTip(
+                    "Full included spray-pattern angle. This determines the "
+                    "theoretical spray width at the working distance; it is "
+                    "not the nozzle's surface-incidence angle."
+                )
+            elif key == "overlap_percent":
+                spin.setToolTip(
+                    "Target overlap used to calculate nominal track spacing. "
+                    "Automatic raster-lane generation is not implemented yet."
+                )
             spin.valueChanged.connect(self._refresh_preview)
             self.fields[key] = spin
             form.addRow(label, spin)
+
+        trajectory_header = QLabel("TRAJECTORY GENERATION")
+        trajectory_header.setStyleSheet(
+            "color: #00E5FF; font-weight: bold; padding-top: 5px;"
+        )
+        form.addRow(trajectory_header)
+
+        for key, label, minimum, maximum, decimals in field_specs:
+            if key in trajectory_keys:
+                add_profile_field(key, label, minimum, maximum, decimals)
+
+        sprayer_header = QLabel("SPRAYER PROFILE / TECHNICAL SPECIFICATIONS")
+        sprayer_header.setStyleSheet(
+            "color: #00E5FF; font-weight: bold; padding-top: 8px;"
+        )
+        form.addRow(sprayer_header)
+        form.addRow("Profile name", self.name_edit)
+        form.addRow("Manufacturer", self.manufacturer_edit)
+        form.addRow("Model / part number", self.model_edit)
+        form.addRow("Atomization technology", self.technology_combo)
+        form.addRow("Spray pattern", self.pattern_combo)
+
+        for key, label, minimum, maximum, decimals in field_specs:
+            if key not in trajectory_keys:
+                add_profile_field(key, label, minimum, maximum, decimals)
 
         self.profile_notes = QLabel()
         self.profile_notes.setWordWrap(True)
