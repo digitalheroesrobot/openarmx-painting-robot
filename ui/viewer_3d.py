@@ -643,8 +643,14 @@ class ProductViewer(QWidget):
         self.workspace_dimensions = np.maximum(np.asarray(self.current_mesh.extents, dtype=float) * 4.0, 100.0)
         for field, value in zip(self.workspace_size_inputs, self.workspace_dimensions):
             field.setValue(float(value))
-        for field in self.world_position_inputs:
-            field.setValue(0.0)
+        # Place the CAD origin at the inner-left-upper corner of the
+        # World workspace: X=0 (left), Y=max (inward), Z=0 (top).
+        # The operator can subsequently adjust this with SET POSITION.
+        initial_world_position = np.array(
+            [0.0, float(self.workspace_dimensions[1]), 0.0], dtype=float
+        )
+        for field, value in zip(self.world_position_inputs, initial_world_position):
+            field.setValue(float(value))
 
         self._render_product(reset_camera=True)
 
@@ -1968,7 +1974,12 @@ class ProductViewer(QWidget):
         # Positive World Z points downward, so camera-up is negative Z.
         center = self.workspace_dimensions * 0.5
         distance = max(float(np.linalg.norm(self.workspace_dimensions)), 100.0)
-        camera_position = center + np.array([0.0, -2.2 * distance, -1.25 * distance])
+        # View from the OUTSIDE/front of the cell (negative World Y),
+        # looking inward toward positive World Y. Offset toward negative X
+        # so the inner-left corner and the depth of the workspace are visible.
+        camera_position = center + np.array(
+            [-1.15 * distance, -2.2 * distance, -1.25 * distance]
+        )
         self.plotter.camera_position = (
             tuple(camera_position.tolist()),
             tuple(center.tolist()),
