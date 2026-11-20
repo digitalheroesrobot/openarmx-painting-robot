@@ -90,6 +90,103 @@ def _surface_name(adaptor, ocp):
     return "OTHER"
 
 
+def _build_brep_face_edge_adjacency(faces, explorer_type, edge_type):
+    """Build exact face/edge incidence from the original STEP B-Rep.
+
+    IsSame compares underlying TopoDS edge identity independent of edge
+    orientation. A seam may occur more than once on one face; it is reported
+    separately rather than incorrectly classified as an open boundary.
+    """
+    edge_shapes = []
+    edge_face_ids = []
+    edge_occurrences = []
+    face_edge_ids = []
+
+    for face_id, face in enumerate(faces, start=1):
+        explorer = explorer_type(face, edge_type)
+        local_edge_ids = []
+        while explorer.More():
+            edge = explorer.Current()
+            edge_id = None
+            for index, known_edge in enumerate(edge_shapes):
+                if edge.IsSame(known_edge):
+                    edge_id = index + 1
+                    break
+            if edge_id is None:
+                edge_shapes.append(edge)
+                edge_face_ids.append(set())
+                edge_occurrences.append({})
+                edge_id = len(edge_shapes)
+            edge_face_ids[edge_id - 1].add(face_id)
+            edge_occurrences[edge_id - 1][face_id] = (
+                edge_occurrences[edge_id - 1].get(face_id, 0) + 1
+            )
+            if edge_id not in local_edge_ids:
+                local_edge_ids.append(edge_id)
+            explorer.Next()
+        face_edge_ids.append(sorted(local_edge_ids))
+
+    edge_records = []
+    face_adjacency = {face_id: set() for face_id in range(1, len(faces) + 1)}
+    pair_to_edge_ids = {}
+    for edge_id, face_ids_set in enumerate(edge_face_ids, start=1):
+        face_ids = sorted(face_ids_set)
+        for i, face_a in enumerate(face_ids):
+            for face_b in face_ids[i + 1:]:
+                face_adjacency[face_a].add(face_b)
+                face_adjacency[face_b].add(face_a)
+                pair_to_edge_ids.setdefault((face_a, face_b), []).append(edge_id)
+        occurrences = edge_occurrences[edge_id - 1]
+        total_occurrences = int(sum(occurrences.values()))
+        if len(face_ids) >= 2:
+            classification = "SHARED_MANIFOLD" if len(face_ids) == 2 else "NON_MANIFOLD"
+        elif total_occurrences >= 2:
+            classification = "SEAM_OR_REPEATED_USE"
+        else:
+            classification = "BOUNDARY"
+        edge_records.append({
+            "edge_id": edge_id,
+            "adjacent_face_ids": face_ids,
+            "adjacent_face_count": len(face_ids),
+            "face_occurrence_counts": {
+                str(key): int(value) for key, value in sorted(occurrences.items())
+            },
+            "occurrence_count": total_occurrences,
+            "classification": classification,
+        })
+
+    face_pairs = [
+        {"face_id_a": int(a), "face_id_b": int(b), "shared_edge_ids": ids}
+        for (a, b), ids in sorted(pair_to_edge_ids.items())
+    ]
+    counts = {
+        "unique_edges": len(edge_records),
+        "shared_manifold_edges": sum(
+            item["classification"] == "SHARED_MANIFOLD" for item in edge_records
+        ),
+        "boundary_edges": sum(
+            item["classification"] == "BOUNDARY" for item in edge_records
+        ),
+        "seam_or_repeated_use_edges": sum(
+            item["classification"] == "SEAM_OR_REPEATED_USE" for item in edge_records
+        ),
+        "non_manifold_edges": sum(
+            item["classification"] == "NON_MANIFOLD" for item in edge_records
+        ),
+        "unique_adjacent_face_pairs": len(face_pairs),
+    }
+    return {
+        "edges": edge_records,
+        "face_edge_ids": face_edge_ids,
+        "face_adjacency": {
+            str(face_id): sorted(neighbors)
+            for face_id, neighbors in face_adjacency.items()
+        },
+        "adjacent_face_pairs": face_pairs,
+        "summary": counts,
+    }
+
+
 def _xyz(point):
     return [float(point.X()), float(point.Y()), float(point.Z())]
 
@@ -236,6 +333,9 @@ def load_step(
         float(bounds_max[i] - bounds_min[i]) for i in range(3)
     ]
 
+    brep_adjacency = _build_brep_face_edge_adjacency(
+        faces, TopExp_Explorer, ocp["TopAbs_EDGE"]
+    )
     face_records = []
     surface_counts = Counter()
     for face_id, face in enumerate(faces, start=1):
@@ -245,13 +345,49 @@ def load_step(
         surface_type = _surface_name(adaptor, ocp)
         area = float(props.Mass())
         center = _xyz(props.CentreOfMass())
+        try:
+            u_bounds = [float(adaptor.FirstUParameter()), float(adaptor.LastUParameter())]
+            v_bounds = [float(adaptor.FirstVParameter()), float(adaptor.LastVParameter())]
+            parameter_bounds = {
+                "u": u_bounds if all(math.isfinite(value) for value in u_bounds) else None,
+                "v": v_bounds if all(math.isfinite(value) for value in v_bounds) else None,
+            }
+        except (AttributeError, TypeError, ValueError):
+            parameter_bounds = {"u": None, "v": None}
         surface_counts[surface_type] += 1
         face_records.append({
             "face_id": face_id,
             "surface_type": surface_type,
             "area_mm2": area,
             "centroid_mm": center,
+            "edge_ids": brep_adjacency["face_edge_ids"][face_id - 1],
+            "adjacent_face_ids": brep_adjacency["face_adjacency"].get(str(face_id), []),
+            "orientation": (
+                "REVERSED"
+                if face.Orientation() == ocp["TopAbs_REVERSED"]
+                else "FORWARD_OR_OTHER"
+            ),
+            "parameter_bounds": parameter_bounds,
         })
+
+
+    # Attach exact B-Rep edge lengths (mm) to the topology records.
+    for edge_record in brep_adjacency["edges"]:
+        edge_id = int(edge_record["edge_id"])
+        edge_shape = None
+        # Recover the unique edge by the same stable first-seen traversal.
+        seen = []
+        for face in faces:
+            explorer = TopExp_Explorer(face, ocp["TopAbs_EDGE"])
+            while explorer.More():
+                candidate = explorer.Current()
+                if not any(candidate.IsSame(item) for item in seen):
+                    seen.append(candidate)
+                explorer.Next()
+        if 1 <= edge_id <= len(seen):
+            edge_props = GProp_GProps()
+            _static_call(BRepGProp, "LinearProperties", seen[edge_id - 1], edge_props)
+            edge_record["length_mm"] = float(edge_props.Mass())
 
     # Tessellate each original CAD face separately and retain Face IDs.
     mesher = ocp["BRepMesh_IncrementalMesh"](
@@ -321,9 +457,12 @@ def load_step(
             "unit when using measurements for manufacturing decisions."
         ),
         "topology": {
-            "faces": len(faces), "edges": len(edges),
+            "faces": len(faces),
+            "edges": len(brep_adjacency["edges"]),
+            "explored_edge_occurrences": len(edges),
             "vertices": len(vertices), "shells": len(shells),
             "solids": len(solids),
+            "face_edge_adjacency": brep_adjacency,
         },
         "mesh": {
             "vertices": len(mesh.vertices), "triangles": len(mesh.faces),
