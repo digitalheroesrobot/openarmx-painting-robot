@@ -2462,7 +2462,6 @@ def _split_strokes_at_surface_discontinuities(
     use_exact_brep = source_face_ids is not None and isinstance(source_face_adjacency, dict)
     cad_face_ids = None
     brep_adjacency_pairs: set[tuple[int, int]] = set()
-    cad_face_normals: dict[int, np.ndarray] = {}
     if use_exact_brep:
         cad_face_ids = np.asarray(source_face_ids, dtype=np.int64)
         if cad_face_ids.ndim != 1 or len(cad_face_ids) != len(mesh.faces):
@@ -2478,18 +2477,6 @@ def _split_strokes_at_surface_discontinuities(
                 continue
         if not brep_adjacency_pairs:
             raise ValueError("Exact STEP adjacency was supplied but contains no adjacent face pairs.")
-        # Area-weighted normals per original STEP face prevent tessellation
-        # facets within one curved CAD face from being treated as CAD creases.
-        triangle_areas = np.asarray(mesh.area_faces, dtype=np.float64)
-        for cad_id in np.unique(cad_face_ids):
-            triangle_indices = np.flatnonzero(cad_face_ids == cad_id)
-            weighted = np.sum(
-                face_normals[triangle_indices] * triangle_areas[triangle_indices, None],
-                axis=0,
-            )
-            magnitude = float(np.linalg.norm(weighted))
-            if magnitude > NORMAL_EPSILON:
-                cad_face_normals[int(cad_id)] = weighted / magnitude
 
     metadata_by_id = {
         int(item["segment_id"]): dict(item)
@@ -2524,10 +2511,10 @@ def _split_strokes_at_surface_discontinuities(
                     split_after.append(index + 1)
                     split_reasons["non_adjacent_source_faces"] += 1
                     continue
-                normal_a = cad_face_normals.get(cad_face_a)
-                normal_b = cad_face_normals.get(cad_face_b)
-                if normal_a is None or normal_b is None:
-                    continue
+                # Use the local tessellation normals at these path samples
+                # for the crease angle; topology itself comes from exact B-Rep.
+                normal_a = face_normals[face_a]
+                normal_b = face_normals[face_b]
             else:
                 if face_a == face_b:
                     continue
@@ -5604,6 +5591,7 @@ def run_stage3_numerical_tests() -> dict:
             maximum_normal_change_deg=30.0,
             source_face_ids=np.asarray([101, 102, 103], dtype=np.int64),
             source_face_adjacency={"101": [102], "102": [101], "103": []},
+            maximum_normal_change_deg=180.0,
         )
     )
     assert exact_topology_stats["adjacency_authority"] == "EXACT_STEP_BREP_SHARED_EDGES"
