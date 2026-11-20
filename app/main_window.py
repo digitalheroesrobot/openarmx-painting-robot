@@ -42,6 +42,7 @@ from stages.stage3_spray_trajectory import execute_stage3
 from ui.viewer_3d import ProductViewer
 from ui.sprayer_settings import (
     SprayerSettingsDialog,
+    load_active_sprayer_profile_name,
     load_sprayer_profiles,
     save_sprayer_profiles,
 )
@@ -335,14 +336,24 @@ class MainWindow(QMainWindow):
         self.sprayer_profiles = load_sprayer_profiles(
             self.sprayer_config_path
         )
+        self.active_sprayer_profile_name = (
+            load_active_sprayer_profile_name(self.sprayer_config_path)
+        )
         self.sprayer_profile = dict(
             next(
                 (
                     profile for profile in self.sprayer_profiles
                     if str(profile.get("name", "")).strip().lower()
-                    == "default sprayer"
+                    == self.active_sprayer_profile_name.strip().lower()
                 ),
-                self.sprayer_profiles[0],
+                next(
+                    (
+                        profile for profile in self.sprayer_profiles
+                        if str(profile.get("name", "")).strip().lower()
+                        == "default sprayer"
+                    ),
+                    self.sprayer_profiles[0],
+                ),
             )
         )
 
@@ -2438,9 +2449,13 @@ class MainWindow(QMainWindow):
 
         self.sprayer_profiles = dialog.profiles
         self.sprayer_profile = dict(dialog.selected_profile)
+        self.active_sprayer_profile_name = self.sprayer_profile.get(
+            "name", "default sprayer"
+        )
         save_sprayer_profiles(
             self.sprayer_config_path,
             self.sprayer_profiles,
+            active_profile_name=self.active_sprayer_profile_name,
         )
 
         self.sprayer_profile_label.setText(
