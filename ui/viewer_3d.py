@@ -1284,53 +1284,102 @@ class ProductViewer(QWidget):
     # =========================================================
 
     def _add_world_workspace(self):
-        lx, ly, lz = self.workspace_dimensions
-        # The operator stands on +Y and looks toward -Y, so the workcell
-        # extends from the conveyor-start boundary Y=0 into negative Y.
+        """Display only the fixed World frame and work-cell box."""
+        lx, ly, lz = np.asarray(self.workspace_dimensions, dtype=float)
+
+        # World origin = upper-left / conveyor start.
+        # +X = right, -Y = into the work cell, +Z = down.
         corners = np.array([
-            [0,0,0], [lx,0,0], [lx,-ly,0], [0,-ly,0],
-            [0,0,lz], [lx,0,lz], [lx,-ly,lz], [0,-ly,lz],
+            [0.0, 0.0, 0.0],
+            [lx, 0.0, 0.0],
+            [lx, -ly, 0.0],
+            [0.0, -ly, 0.0],
+            [0.0, 0.0, lz],
+            [lx, 0.0, lz],
+            [lx, -ly, lz],
+            [0.0, -ly, lz],
         ], dtype=float)
-        pairs = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+
+        pairs = [
+            (0, 1), (1, 2), (2, 3), (3, 0),
+            (4, 5), (5, 6), (6, 7), (7, 4),
+            (0, 4), (1, 5), (2, 6), (3, 7),
+        ]
         cells = []
         for i, j in pairs:
             cells.extend([2, i, j])
+
         outline = pv.PolyData(corners)
         outline.lines = np.asarray(cells, dtype=np.int64)
-        self.plotter.add_mesh(outline, color="#78909C", line_width=2, lighting=False)
-
-        # Grid on the bottom plane (positive Z), consistent with Z-down.
-        spacing = max(min(lx, ly) / 10.0, 1.0)
-        points, lines = [], []
-        for x in np.arange(0.0, lx + spacing * 0.5, spacing):
-            i = len(points); points.extend([[x,0.0,lz],[x,-ly,lz]]); lines.extend([2,i,i+1])
-        for y in np.arange(-ly, spacing * 0.5, spacing):
-            i = len(points); points.extend([[0.0,y,lz],[lx,y,lz]]); lines.extend([2,i,i+1])
-        if points:
-            grid = pv.PolyData(np.asarray(points, dtype=float))
-            grid.lines = np.asarray(lines, dtype=np.int64)
-            self.plotter.add_mesh(grid, color="#263B49", line_width=1, lighting=False)
-
-        axis_length = max(min(lx,ly,lz) * 0.18, 20.0)
-        for direction, color, label in [
-            ([1,0,0], "#FF5252", "+X CONVEYOR TRAVEL / RIGHT"),
-            ([0,1,0], "#00E676", "+Y OPERATOR / VIEWER SIDE"),
-            ([0,-1,0], "#00BFA5", "-Y VIEW DIRECTION / INTO WORKCELL"),
-            ([0,0,1], "#40C4FF", "+Z DOWN"),
-        ]:
-            vector = np.asarray(direction, dtype=float)
-            self.plotter.add_mesh(pv.Arrow(start=(0,0,0), direction=vector, scale=axis_length), color=color, lighting=False)
-            self.plotter.add_point_labels(
-                np.asarray([vector * axis_length * 1.15]), [label],
-                font_size=10, text_color=color, point_size=0, shape=None, always_visible=True,
-            )
-        self.plotter.add_point_labels(
-            np.asarray([[0.0,0.0,0.0]]), ["WORLD ORIGIN / CHAIN ENTRY"],
-            font_size=10, text_color="#FFFFFF", point_size=0, shape=None, always_visible=True,
+        self.plotter.add_mesh(
+            outline, color="#78909C", line_width=2, lighting=False
         )
+
+        axis_length = max(min(lx, ly, lz) * 0.22, 30.0)
+        axes = [
+            (np.array([1.0, 0.0, 0.0]), "#FF5252", "+X", "RIGHT / CONVEYOR TRAVEL"),
+            (np.array([0.0, -1.0, 0.0]), "#00E676", "-Y", "INTO WORK CELL"),
+            (np.array([0.0, 0.0, 1.0]), "#40C4FF", "+Z", "DOWN"),
+        ]
+
+        for direction, color, axis_label, description in axes:
+            self.plotter.add_mesh(
+                pv.Arrow(
+                    start=(0.0, 0.0, 0.0),
+                    direction=direction,
+                    scale=axis_length,
+                ),
+                color=color,
+                lighting=False,
+            )
+            self.plotter.add_point_labels(
+                np.asarray([direction * axis_length * 1.12]),
+                [f"{axis_label}  {description}"],
+                font_size=11,
+                text_color=color,
+                point_size=0,
+                shape=None,
+                always_visible=True,
+            )
+
+        self.plotter.add_mesh(
+            pv.Sphere(
+                radius=max(axis_length * 0.045, 3.0),
+                center=(0.0, 0.0, 0.0),
+                theta_resolution=16,
+                phi_resolution=16,
+            ),
+            color="#FFFFFF",
+            smooth_shading=True,
+        )
+
+        self.plotter.add_point_labels(
+            np.asarray([[0.0, 0.0, 0.0]]),
+            ["WORLD ORIGIN / CONVEYOR START (0, 0, 0)"],
+            font_size=11,
+            text_color="#FFFFFF",
+            point_size=0,
+            shape=None,
+            always_visible=True,
+        )
+
         self.plotter.add_text(
-            "WORLD XYZ | ORIGIN: CONVEYOR TRAVEL START\n+X: TRAVEL / OPERATOR RIGHT   -Y: VIEW INTO CELL   +Z: DOWN\n+Y: OPERATOR SIDE",
-            position="upper_left", font_size=9, color="#EAF4F8",
+            "WORLD FRAME\n"
+            "Origin: upper-left / conveyor start\n"
+            "+X: right\n"
+            "-Y: into work cell\n"
+            "+Z: down",
+            position="upper_left",
+            font_size=11,
+            color="#EAF4F8",
+        )
+
+        self.plotter.add_text(
+            f"WORK CELL BOX  |  X {lx:.0f}  x  Y {ly:.0f}  x  Z {lz:.0f} "
+            f"{self._source_unit_label()}",
+            position="lower_left",
+            font_size=10,
+            color="#A7BAC5",
         )
 
     def _add_product_coordinate_frame(self):
@@ -1346,22 +1395,10 @@ class ProductViewer(QWidget):
     def _add_pose_coordinate_frames(self):
         if self.display_mode != "product":
             return
+
+        # Initial setup stage: only the fixed World frame and work-cell
+        # box are displayed. Product geometry is added in a later step.
         self._add_world_workspace()
-        self._add_product_coordinate_frame()
-        if self.hook_world_position is not None:
-            marker = pv.Sphere(
-                radius=max(float(np.min(self.workspace_dimensions)) * 0.012, 3.0),
-                center=self.hook_world_position,
-                theta_resolution=20,
-                phi_resolution=20,
-            )
-            self.plotter.add_mesh(marker, color="#FF1744", smooth_shading=True)
-            self.plotter.add_point_labels(
-                np.asarray([self.hook_world_position]),
-                ["HOOK / PRODUCT ENGAGEMENT POINT"],
-                font_size=10, text_color="#FF5252", point_size=0,
-                shape=None, always_visible=True,
-            )
 
     # =========================================================
     # MAIN RENDERING
@@ -2133,17 +2170,17 @@ class ProductViewer(QWidget):
     # =========================================================
 
     def _set_standard_camera(self):
-        # Frame the complete World XYZ box rather than only the CAD mesh.
-        # Positive World Z points downward, so camera-up is negative Z.
-        lx, ly, lz = self.workspace_dimensions
+        # Operator is in front of the box at +Y and looks toward -Y.
+        # Thus screen-right is +X and screen-down is +Z.
+        lx, ly, lz = np.asarray(self.workspace_dimensions, dtype=float)
         center = np.array([lx * 0.5, -ly * 0.5, lz * 0.5], dtype=float)
         distance = max(float(np.linalg.norm(self.workspace_dimensions)), 100.0)
-        # Operator is on +Y and looks into the cell along -Y. Camera-up is
-        # -Z, so positive World Z is visually downward. Keeping camera X
-        # aligned with the workspace center makes screen-right equal +X.
+
         camera_position = center + np.array(
-            [0.0, 2.2 * distance, -1.0 * distance]
+            [0.0, 2.4 * distance, -0.8 * distance],
+            dtype=float,
         )
+
         self.plotter.camera_position = (
             tuple(camera_position.tolist()),
             tuple(center.tolist()),
