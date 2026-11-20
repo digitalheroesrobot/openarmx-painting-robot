@@ -430,6 +430,7 @@ class ProductViewer(QWidget):
             field.setSuffix(f"° {label}")
             field.setFixedWidth(92)
             field.setToolTip(f"Absolute {label.lower()} angle in the World XYZ frame.")
+            field.editingFinished.connect(self._apply_rpy_inputs)
             layout.addWidget(field)
             self.rpy_inputs.append(field)
 
