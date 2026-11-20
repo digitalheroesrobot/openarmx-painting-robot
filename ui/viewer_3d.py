@@ -511,8 +511,8 @@ class ProductViewer(QWidget):
 
         self.selected_hook_point_cad = cad_point.copy()
         self.hook_world_position = target.copy()
-        # Make the selected engagement point the rotation pivot. Subsequent
-        # manual orientation changes then keep the hook point fixed in World.
+        # Preserve the CAD origin's World position; product rotation
+        # remains centered on the STEP coordinate origin.
         cad_origin_world = self._actor_matrix_array()[:3, 3].copy()
         # Keep the STEP CAD origin as the rotation pivot even when a
         # separate hook engagement point has been selected.
@@ -737,12 +737,10 @@ class ProductViewer(QWidget):
     def _reset_reference_pose(self):
         if self._pose_actor is not None:
             self._pose_actor.SetPosition(0.0, 0.0, 0.0)
-            self._pose_actor.SetOrientation(0.0, 0.0, 180.0)
+            self._pose_actor.SetOrientation(0.0, 0.0, 0.0)
             self._pose_actor.SetScale(1.0, 1.0, 1.0)
             self.rotation_pivot = np.zeros(3, dtype=float)
             self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
-            self._pose_actor.SetPosition(0.0, 0.0, 0.0)
-            self._pose_actor.SetOrientation(0.0, 0.0, 0.0)
             self._set_cad_origin_world_position(np.zeros(3, dtype=float))
             self.selected_hook_point_cad = None
             self.hook_world_position = None
