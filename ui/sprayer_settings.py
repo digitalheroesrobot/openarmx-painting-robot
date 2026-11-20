@@ -595,6 +595,8 @@ class SprayerSettingsDialog(QDialog):
             widget.textChanged.connect(self._refresh_preview)
         self.technology_combo.currentTextChanged.connect(self._refresh_preview)
         self.pattern_combo.currentIndexChanged.connect(self._on_pattern_changed)
+        self.fields["standoff_mm"].valueChanged.connect(self._update_pattern_controls)
+        self.fields["spray_cone_angle_deg"].valueChanged.connect(self._update_pattern_controls)
 
     def _populate_profiles(self):
         self._loading = True
@@ -651,10 +653,19 @@ class SprayerSettingsDialog(QDialog):
                 "without it, the footprint cannot be estimated reliably."
             )
         else:
+            standoff_mm = float(self.fields["standoff_mm"].value())
+            full_angle_deg = float(self.fields["spray_cone_angle_deg"].value())
+            footprint_diameter_mm = (
+                2.0 * standoff_mm
+                * math.tan(math.radians(full_angle_deg * 0.5))
+            )
             self.pattern_description.setText(
-                "Round cone: produces a circular footprint on a surface "
-                "perpendicular to the spray axis. The footprint diameter is "
-                "calculated from working distance and full spray angle. "
+                "Round cone: circular target footprint. "
+                f"Calculated diameter at the target: {footprint_diameter_mm:.1f} mm "
+                f"(working distance {standoff_mm:.1f} mm, full included angle "
+                f"{full_angle_deg:.1f}°). "
+                "Verify the angle against the actual nozzle specification; "
+                "an estimated flat-fan angle is not a measured round-cone angle. "
                 "Flat-fan thickness settings are not used."
             )
 
