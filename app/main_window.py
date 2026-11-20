@@ -3358,6 +3358,21 @@ class MainWindow(QMainWindow):
                     12000,
                 )
         self.viewer.set_hole_candidates(hole_candidates)
+        if is_step:
+            diagnostics = mesh.metadata.get("hole_detection_diagnostics", {})
+            if hole_candidates:
+                self.status_bar.showMessage(
+                    f"STEP hole-axis candidates detected: {len(hole_candidates)}",
+                    10000,
+                )
+            else:
+                self.status_bar.showMessage(
+                    "STEP loaded, but no internal-cylinder candidates were classified. "
+                    f"B-Rep cylinders: {diagnostics.get('cylindrical_face_count', 'unknown')}; "
+                    f"orientation counts: {diagnostics.get('cylinder_orientation_counts', {})}. "
+                    "See terminal output for exact B-Rep diagnostics.",
+                    15000,
+                )
 
         self.part_name_label.setText(
             self.current_stl_path.name
