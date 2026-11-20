@@ -382,20 +382,20 @@ class ProductViewer(QWidget):
         layout.addWidget(step_label)
 
         self.rpy_step_input = QDoubleSpinBox()
-        # Fixed angular increment: every RPY arrow click changes exactly 1 degree.
-        self.rpy_step_input.setRange(1.0, 1.0)
-        self.rpy_step_input.setDecimals(0)
-        self.rpy_step_input.setSingleStep(1.0)
+        # Editable native number selector; its value drives all RPY arrow increments.
+        self.rpy_step_input.setRange(0.01, 90.0)
+        self.rpy_step_input.setDecimals(2)
+        self.rpy_step_input.setSingleStep(0.1)
         self.rpy_step_input.setValue(1.0)
-        self.rpy_step_input.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
-        self.rpy_step_input.setReadOnly(True)
-        self.rpy_step_input.setFixedWidth(76)
+        self.rpy_step_input.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.UpDownArrows)
+        self.rpy_step_input.setKeyboardTracking(False)
+        self.rpy_step_input.setFixedWidth(92)
         self.rpy_step_input.setToolTip(
-            "Fixed angular increment: each Roll, Pitch and Yaw arrow click changes 1 degree."
+            "Set the angular increment used by the Roll, Pitch and Yaw number selectors."
         )
+        self.rpy_step_input.valueChanged.connect(self._on_rpy_step_changed)
         layout.addWidget(self.rpy_step_input)
-        for field in self.rpy_inputs:
-            field.setSingleStep(1.0)
+        self._on_rpy_step_changed(self.rpy_step_input.value())
 
         self.reset_rpy_button = QPushButton("RESET RPY")
         self.reset_rpy_button.setToolTip(
@@ -436,9 +436,10 @@ class ProductViewer(QWidget):
         return panel
 
     def _on_rpy_step_changed(self, value):
-        """Compatibility handler; the angular increment is fixed at one degree."""
+        """Apply the selected angular increment to all three RPY selectors."""
+        increment = max(float(value), 0.01)
         for field in self.rpy_inputs:
-            field.setSingleStep(1.0)
+            field.setSingleStep(increment)
 
     def _reset_rpy_angles(self):
         """Reset orientation only; preserve product position and scale."""
@@ -1382,18 +1383,18 @@ class ProductViewer(QWidget):
                 pickable=False,
             )
 
-        # Three differently tinted edge families give the volume depth cues.
+        # World reference volume: thin, pale geometry stays in the background.
         x_edges = [(corners[a], corners[b]) for a, b in
                    [(0, 1), (3, 2), (4, 5), (7, 6)]]
         y_edges = [(corners[a], corners[b]) for a, b in
                    [(0, 3), (1, 2), (4, 7), (5, 6)]]
         z_edges = [(corners[a], corners[b]) for a, b in
                    [(0, 4), (1, 5), (2, 6), (3, 7)]]
-        add_segments(x_edges, "#27C7F7", 3.0, 1.0)
-        add_segments(y_edges, "#168F9F", 2.6, 0.98)
-        add_segments(z_edges, "#426B91", 2.6, 0.98)
+        add_segments(x_edges, "#426273", 1.1, 0.34)
+        add_segments(y_edges, "#385D68", 1.0, 0.30)
+        add_segments(z_edges, "#40566D", 1.0, 0.30)
 
-        # Fine reference grid on the central XY plane, passing through origin.
+        # Fine World reference grid on the central XY plane.
         grid_segments = []
         grid_count = 10
         for i in range(-grid_count, grid_count + 1):
@@ -1401,50 +1402,52 @@ class ProductViewer(QWidget):
             y = hy * i / grid_count
             grid_segments.append((np.array([x, -hy, 0.0]), np.array([x, hy, 0.0])))
             grid_segments.append((np.array([-hx, y, 0.0]), np.array([hx, y, 0.0])))
-        add_segments(grid_segments, "#24465B", 1.0, 0.42)
+        add_segments(grid_segments, "#29404D", 0.7, 0.20)
 
-        # Center crosshair: a subtle reference marker around World (0,0,0).
-        cross = min(lx, ly, lz) * 0.035
-        add_segments([
-            (np.array([-cross, 0.0, 0.0]), np.array([cross, 0.0, 0.0])),
-            (np.array([0.0, -cross, 0.0]), np.array([0.0, cross, 0.0])),
-            (np.array([0.0, 0.0, -cross]), np.array([0.0, 0.0, cross])),
-        ], "#D7F6FF", 2.0, 0.9)
-
-        # Positive coordinate arrows; keep their labels deliberately simple.
-        axis_length = max(min(lx, ly, lz) * 0.24, 30.0)
-        axes = [
-            (np.array([1.0, 0.0, 0.0]), "#FF657A", "X"),
-            (np.array([0.0, 1.0, 0.0]), "#4DDBA5", "Y"),
-            (np.array([0.0, 0.0, 1.0]), "#48BFFF", "Z"),
+        # World XYZ axes are deliberately dashed and short so the brighter,
+        # larger Product frame remains visually dominant at coincident origins.
+        world_axis_length = max(min(lx, ly, lz) * 0.14, 20.0)
+        world_axes = [
+            (np.array([1.0, 0.0, 0.0]), "#A56B76", "X"),
+            (np.array([0.0, 1.0, 0.0]), "#679D87", "Y"),
+            (np.array([0.0, 0.0, 1.0]), "#6C91B2", "Z"),
         ]
-        for direction, color, label in axes:
-            self.plotter.add_mesh(
-                pv.Arrow(
-                    start=(0.0, 0.0, 0.0),
-                    direction=direction,
-                    scale=axis_length,
-                    tip_length=0.28,
-                    tip_radius=0.105,
-                    shaft_radius=0.027,
-                ),
-                color=color,
-                lighting=False,
-                pickable=False,
-            )
+        for direction, color, label in world_axes:
+            dash_segments = []
+            dash_count = 7
+            for dash in range(dash_count):
+                start_t = (dash / dash_count) * world_axis_length
+                end_t = ((dash + 0.62) / dash_count) * world_axis_length
+                dash_segments.append((
+                    direction * start_t,
+                    direction * end_t,
+                ))
+            add_segments(dash_segments, color, 1.0, 0.48)
             self.plotter.add_point_labels(
-                np.asarray([direction * axis_length * 1.22]),
+                np.asarray([direction * world_axis_length * 1.12]),
                 [label],
-                font_size=20,
+                font_size=9,
                 text_color=color,
-                shape="rounded_rect",
-                shape_color="#07111D",
-                shape_opacity=0.92,
-                margin=4,
+                shape=None,
+                margin=1,
                 point_size=0,
                 always_visible=True,
-                bold=True,
+                bold=False,
             )
+
+        # Small, understated World origin marker.
+        self.plotter.add_mesh(
+            pv.Sphere(
+                radius=max(min(lx, ly, lz) * 0.004, 1.5),
+                center=(0.0, 0.0, 0.0),
+                theta_resolution=12,
+                phi_resolution=12,
+            ),
+            color="#AABBC5",
+            opacity=0.45,
+            lighting=False,
+            pickable=False,
+        )
 
         # Bright origin marker, centered exactly at the box midpoint.
         self.plotter.add_mesh(
@@ -1471,46 +1474,46 @@ class ProductViewer(QWidget):
         axes = vtkAxesActor()
         product_bounds = np.asarray(self._pose_actor.GetBounds(), dtype=float).reshape(3, 2)
         product_size = max(float(np.max(product_bounds[:, 1] - product_bounds[:, 0])), 1.0)
-        axis_length = product_size * 0.22
+        # The Product frame is intentionally larger and brighter than
+        # the short, dashed World reference axes.
+        axis_length = product_size * 0.40
         axes.SetTotalLength(axis_length, axis_length, axis_length)
 
-        # A subtle, lightweight product-attached triad. The axes should
-        # remain readable on the CAD surface without dominating the model.
         axes.SetShaftTypeToLine()
-        axes.SetConeRadius(0.022)
-        axes.SetSphereRadius(0.018)
+        axes.SetConeRadius(0.045)
+        axes.SetSphereRadius(0.028)
         axes.SetXAxisLabelText("X")
         axes.SetYAxisLabelText("Y")
         axes.SetZAxisLabelText("Z")
         axes.SetAxisLabels(True)
 
         axis_styles = (
-            (axes.GetXAxisShaftProperty(), axes.GetXAxisTipProperty(), (0.91, 0.70, 0.72)),
-            (axes.GetYAxisShaftProperty(), axes.GetYAxisTipProperty(), (0.73, 0.88, 0.78)),
-            (axes.GetZAxisShaftProperty(), axes.GetZAxisTipProperty(), (0.72, 0.82, 0.96)),
+            (axes.GetXAxisShaftProperty(), axes.GetXAxisTipProperty(), (1.00, 0.43, 0.52)),
+            (axes.GetYAxisShaftProperty(), axes.GetYAxisTipProperty(), (0.28, 0.92, 0.62)),
+            (axes.GetZAxisShaftProperty(), axes.GetZAxisTipProperty(), (0.30, 0.70, 1.00)),
         )
         for shaft, tip, color in axis_styles:
             shaft.SetColor(*color)
             tip.SetColor(*color)
-            shaft.SetOpacity(0.34)
-            tip.SetOpacity(0.42)
-            shaft.SetLineWidth(1.25)
+            shaft.SetOpacity(0.92)
+            tip.SetOpacity(1.0)
+            shaft.SetLineWidth(2.0)
 
         # Small, crisp XYZ glyphs, color-matched to their respective axes.
         caption_styles = (
-            (axes.GetXAxisCaptionActor2D(), (0.96, 0.76, 0.78)),
-            (axes.GetYAxisCaptionActor2D(), (0.79, 0.93, 0.83)),
-            (axes.GetZAxisCaptionActor2D(), (0.78, 0.87, 1.00)),
+            (axes.GetXAxisCaptionActor2D(), (1.00, 0.64, 0.69)),
+            (axes.GetYAxisCaptionActor2D(), (0.55, 1.00, 0.76)),
+            (axes.GetZAxisCaptionActor2D(), (0.58, 0.82, 1.00)),
         )
         for caption, color in caption_styles:
             text_property = caption.GetCaptionTextProperty()
             text_property.SetFontFamilyToArial()
-            text_property.SetFontSize(9)
+            text_property.SetFontSize(11)
             text_property.SetBold(True)
-            text_property.SetItalic(True)
+            text_property.SetItalic(False)
             text_property.SetShadow(False)
             text_property.SetColor(*color)
-            text_property.SetOpacity(0.78)
+            text_property.SetOpacity(1.0)
 
         axes.SetUserMatrix(self._vtk_matrix_from_numpy(self._actor_matrix_array()))
         self._cad_axes_actor = axes
