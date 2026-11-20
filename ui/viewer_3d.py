@@ -472,6 +472,7 @@ class ProductViewer(QWidget):
             self.pose_status_label.setText("Invalid World XYZ position.")
             return
         self._set_cad_origin_world_position(position)
+        self._update_rotation_gizmo_transform()
         self.plotter.render()
         self._update_pose_readout()
 
@@ -674,6 +675,7 @@ class ProductViewer(QWidget):
             ]
             self._update_rotation_gizmo_transform()
             self._update_pose_readout()
+            self.plotter.render()
         except Exception as exc:
             self.pose_status_label.setText(f"Rotation manipulator unavailable: {exc}")
             self.confirm_pose_button.setEnabled(False)
@@ -855,6 +857,7 @@ class ProductViewer(QWidget):
             self.rotation_pivot = np.zeros(3, dtype=float)
             self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
             self._set_cad_origin_world_position(np.zeros(3, dtype=float))
+            self._update_rotation_gizmo_transform()
             self.selected_hook_point_cad = None
             self.hook_world_position = None
             self._sync_world_position_inputs()
