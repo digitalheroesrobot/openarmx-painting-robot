@@ -91,11 +91,31 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
         ) from exc
 
 
-def save_sprayer_profiles(config_path: str | Path, profiles: list[dict]) -> None:
+def load_active_sprayer_profile_name(config_path: str | Path) -> str:
+    path = Path(config_path)
+    if not path.exists():
+        return "default sprayer"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            return str(payload.get("active_profile", "default sprayer"))
+    except (OSError, json.JSONDecodeError):
+        pass
+    return "default sprayer"
+
+
+def save_sprayer_profiles(
+    config_path: str | Path,
+    profiles: list[dict],
+    active_profile_name: str | None = None,
+) -> None:
     path = Path(config_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    if active_profile_name is None:
+        active_profile_name = load_active_sprayer_profile_name(path)
     payload = {
         "schema_version": 1,
+        "active_profile": str(active_profile_name),
         "profiles": profiles,
     }
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -463,7 +483,11 @@ class SprayerSettingsDialog(QDialog):
             self.profiles.append(profile)
         else:
             self.profiles[replacement_index] = profile
-        save_sprayer_profiles(self.config_path, self.profiles)
+        save_sprayer_profiles(
+            self.config_path,
+            self.profiles,
+            active_profile_name=profile["name"],
+        )
         self.current_profile = deepcopy(profile)
 
     def _save_and_accept(self):
@@ -493,7 +517,11 @@ class SprayerSettingsDialog(QDialog):
             ):
                 raise ValueError("A profile with this name already exists.")
             self.profiles.append(profile)
-            save_sprayer_profiles(self.config_path, self.profiles)
+            save_sprayer_profiles(
+                self.config_path,
+                self.profiles,
+                active_profile_name=profile["name"],
+            )
             self.current_profile = deepcopy(profile)
             self._populate_profiles()
             self.profile_selector.setCurrentText(profile["name"])
