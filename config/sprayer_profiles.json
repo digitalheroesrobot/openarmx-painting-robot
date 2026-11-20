@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {
+      "name": "default sprayer",
+      "manufacturer": "Unspecified",
+      "model": "Generic HVLP starting profile",
+      "technology": "HVLP air spray",
+      "pattern_type": "flat_fan",
+      "nozzle_orifice_mm": 1.4,
+      "nozzle_length_mm": 25.0,
+      "standoff_mm": 180.0,
+      "spray_cone_angle_deg": 74.0,
+      "fan_reference_distance_mm": 200.0,
+      "overlap_percent": 50.0,
+      "sampling_spacing_mm": 20.0,
+      "travel_speed_mm_s": 0.0,
+      "fan_air_pressure_bar": 1.7,
+      "atomizing_air_pressure_bar": 1.7,
+      "fluid_pressure_bar": 0.0,
+      "fluid_flow_ml_min": 0.0,
+      "nozzle_length_is_estimate": true,
+      "profile_notes": "Generic starting values, not a certified sprayer specification. The 1.4 mm nozzle, 150-200 mm working distance and 1.7 bar air starting pressure are based on manufacturer guidance examples. The 74 degree equivalent fan angle is estimated from a 275-330 mm fan width at 200 mm. Nozzle length is an illustrative placeholder. Confirm all settings against the actual sprayer and coating."
+    }
+  ]
+}
