@@ -2899,11 +2899,19 @@ def _inspect_generated_trajectory(
 
     points = np.asarray(trajectory["nozzle_points"], dtype=np.float64)
     directions = np.asarray(trajectory["spray_directions"], dtype=np.float64)
+    nozzle_frames = np.asarray(
+        trajectory.get(
+            "nozzle_frames",
+            np.repeat(np.eye(3, dtype=np.float64)[None, :, :], len(points), axis=0),
+        ),
+        dtype=np.float64,
+    )
     segments = np.asarray(trajectory["segment_ids"], dtype=np.int64)
     mm_per_unit = MM_PER_UNIT[coordinate_unit]
     jump_limit_mm = max(3.0 * float(sample_spacing_mm), 2.0 * float(track_spacing_mm), 1.0)
     jumps_mm = []
     orientation_changes_deg = []
+    nozzle_frame_changes_deg = []
     segment_blocks = []
     patch_ids = np.asarray(
         trajectory.get("patch_ids", np.full(len(points), -1)), dtype=np.int64
@@ -2932,6 +2940,20 @@ def _inspect_generated_trajectory(
                 orientation_changes_deg.extend(
                     np.degrees(np.arccos(np.clip(local_dots, -1.0, 1.0))).tolist()
                 )
+                if nozzle_frames.shape == (len(points), 3, 3):
+                    for frame_index in range(start, end - 1):
+                        relative_rotation = (
+                            nozzle_frames[frame_index].T
+                            @ nozzle_frames[frame_index + 1]
+                        )
+                        cosine = float(np.clip(
+                            (np.trace(relative_rotation) - 1.0) * 0.5,
+                            -1.0,
+                            1.0,
+                        ))
+                        nozzle_frame_changes_deg.append(
+                            math.degrees(math.acos(cosine))
+                        )
                 for local_offset, step_mm in enumerate(local_steps):
                     if float(step_mm) <= jump_limit_mm:
                         continue
@@ -2986,12 +3008,22 @@ def _inspect_generated_trajectory(
     )
     jumps = np.asarray(jumps_mm, dtype=np.float64)
     angles = np.asarray(orientation_changes_deg, dtype=np.float64)
+    frame_angles = np.asarray(nozzle_frame_changes_deg, dtype=np.float64)
     jump_outliers = int(np.count_nonzero(jumps > jump_limit_mm))
     max_jump = float(np.max(jumps)) if len(jumps) else 0.0
     p95_jump = float(np.percentile(jumps, 95)) if len(jumps) else 0.0
     max_angle = float(np.max(angles)) if len(angles) else 0.0
     p95_angle = float(np.percentile(angles, 95)) if len(angles) else 0.0
+    max_frame_angle = (
+        float(np.max(frame_angles)) if len(frame_angles) else max_angle
+    )
+    p95_frame_angle = (
+        float(np.percentile(frame_angles, 95))
+        if len(frame_angles) else p95_angle
+    )
     orientation_over_30 = int(np.count_nonzero(angles > 30.0))
+    frame_orientation_over_30 = int(np.count_nonzero(frame_angles > 30.0))
+    max_orientation_change = max(max_angle, max_frame_angle)
     segment_count = len(segment_blocks)
     spray_off_transitions = max(0, segment_count - 1)
     spray_on_samples = max(0, len(points) - spray_off_transitions)
@@ -3000,7 +3032,9 @@ def _inspect_generated_trajectory(
     continuity_status = "PASS" if jump_outliers == 0 else "WARN"
     orientation_warning_threshold_deg = 30.0
     orientation_status = (
-        "PASS" if max_angle <= orientation_warning_threshold_deg else "WARN"
+        "PASS"
+        if max_orientation_change <= orientation_warning_threshold_deg
+        else "WARN"
     )
     spray_status = "PASS" if segment_count > 0 else "FAIL"
 
@@ -3027,9 +3061,17 @@ def _inspect_generated_trajectory(
         },
         "orientation": {
             "status": orientation_status,
-            "maximum_change_deg": max_angle,
-            "p95_change_deg": p95_angle,
-            "changes_over_30_deg": orientation_over_30,
+            "maximum_change_deg": max_orientation_change,
+            "p95_change_deg": max(p95_angle, p95_frame_angle),
+            "spray_axis_maximum_change_deg": max_angle,
+            "spray_axis_p95_change_deg": p95_angle,
+            "spray_axis_changes_over_30_deg": orientation_over_30,
+            "full_nozzle_frame_maximum_change_deg": max_frame_angle,
+            "full_nozzle_frame_p95_change_deg": p95_frame_angle,
+            "full_nozzle_frame_changes_over_30_deg": frame_orientation_over_30,
+            "changes_over_30_deg": int(
+                max(orientation_over_30, frame_orientation_over_30)
+            ),
             "warning_threshold_deg": orientation_warning_threshold_deg,
             "max_normal_smoothing_deviation_deg": float(
                 trajectory.get("max_normal_smoothing_deviation_deg", 0.0)
@@ -3082,9 +3124,12 @@ def _inspect_generated_trajectory(
                 f"path={item['path_type']}"
             )
     print(
-        f"[{orientation_status}] Nozzle orientation: max "
-        f"{max_angle:.2f} deg | P95 {p95_angle:.2f} deg | "
-        f"changes >30 deg: {orientation_over_30} | "
+        f"[{orientation_status}] Nozzle orientation: "
+        f"axis max {max_angle:.2f} deg / P95 {p95_angle:.2f} deg | "
+        f"full-frame max {max_frame_angle:.2f} deg / "
+        f"P95 {p95_frame_angle:.2f} deg | "
+        f"axis >30 deg {orientation_over_30} | "
+        f"frame >30 deg {frame_orientation_over_30} | "
         f"max smoothing deviation: "
         f"{report['orientation']['max_normal_smoothing_deviation_deg']:.2f} deg "
         f"(limit 8.00 deg)"
