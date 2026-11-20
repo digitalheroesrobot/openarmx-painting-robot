@@ -4222,6 +4222,13 @@ class MainWindow(QMainWindow):
         travel_distance = float(travel.get("total_distance_mm", 0.0))
         travel_time = float(travel.get("estimated_time_s", 0.0))
         travel_safety = str(travel.get("safety_status", "NOT AVAILABLE"))
+        travel_ordering = travel.get("ordering_optimization", {})
+        travel_order_reduction = float(
+            travel_ordering.get("reduction_percent", 0.0)
+        )
+        travel_order_method = str(
+            travel_ordering.get("method", "not available")
+        )
 
         self.analysis_summary.setText(
             f"TRAJECTORY: {self._format_status(overall_status)}\n"
@@ -4243,6 +4250,8 @@ class MainWindow(QMainWindow):
             f"{int(spray_control.get('spray_off_transition_count', 0)):,} OFF boundaries\n"
             f"SPRAY-OFF TRAVEL: {travel_count:,} transitions  |  "
             f"{travel_distance:.1f} mm  |  {travel_time:.2f} s estimate\n"
+            f"TRAVEL ORDER: {travel_order_reduction:.1f}% shorter than original "
+            f"({travel_order_method})\n"
             f"TRAVEL SAFETY: {travel_safety}\n"
             "NOTE: Travel links are straight-line estimates only; collision and IK checks are not performed."
         )
