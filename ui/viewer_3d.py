@@ -661,6 +661,21 @@ class ProductViewer(QWidget):
             product_picker.PickFromListOn()
             product_picker.AddPickList(self._pose_actor)
 
+            event_observer_tags = {}
+
+            def abort_event(event_name):
+                # Abort the current VTK event before the active camera style
+                # can process a product click or a gizmo drag.
+                tag = event_observer_tags.get(event_name)
+                if tag is None:
+                    return
+                try:
+                    command = interactor.GetCommand(tag)
+                    if command is not None:
+                        command.SetAbortFlag(1)
+                except Exception:
+                    pass
+
             def on_press(caller, event):
                 x, y = interactor.GetEventPosition()
 
@@ -678,24 +693,26 @@ class ProductViewer(QWidget):
                         self._rotation_drag_start_vector = start_vector
                         self._rotation_drag_start_matrix = self._actor_matrix_array().copy()
                         interactor.SetInteractorStyle(self._rotation_drag_style)
-                        return 1
+                        abort_event("LeftButtonPressEvent")
+                        return
 
                 hit_product = bool(
                     product_picker.Pick(x, y, 0, self.plotter.renderer)
                 )
                 self._set_product_selected(hit_product)
 
-                # Consume a product click so the camera style cannot also
-                # interpret it as a camera drag. Empty-space clicks continue
-                # to the trackball camera for orbit/pan interaction.
-                return 1 if hit_product else 0
+                # Product clicks select the actor; empty-space clicks are
+                # intentionally left to the trackball camera.
+                if hit_product:
+                    abort_event("LeftButtonPressEvent")
 
             def on_move(caller, event):
                 if self._rotation_drag_axis is None:
-                    return 0
+                    return
                 x, y = interactor.GetEventPosition()
                 current = self._screen_vector_from_cad_origin(x, y, self._rotation_drag_axis)
                 if current is None:
+                    abort_event("MouseMoveEvent")
                     return
                 start = self._rotation_drag_start_vector
                 index = self._rotation_drag_axis
@@ -719,24 +736,28 @@ class ProductViewer(QWidget):
                 self._update_rotation_gizmo_transform()
                 self._update_pose_readout()
                 self.plotter.render()
-                return 1
+                abort_event("MouseMoveEvent")
 
             def on_release(caller, event):
                 if self._rotation_drag_axis is None:
-                    return 0
+                    return
                 self._rotation_drag_axis = None
                 self._rotation_drag_start_vector = None
                 self._rotation_drag_start_matrix = None
                 interactor.SetInteractorStyle(self._camera_style)
                 self._update_pose_readout()
                 self.pose_status_label.setText("ROTATION COMPLETE  |  Camera orbit and zoom are available.")
-                return 1
+                abort_event("LeftButtonReleaseEvent")
 
-            self._rotation_observer_tags = [
-                interactor.AddObserver("LeftButtonPressEvent", on_press, 1.0),
-                interactor.AddObserver("MouseMoveEvent", on_move, 1.0),
-                interactor.AddObserver("LeftButtonReleaseEvent", on_release, 1.0),
-            ]
+            press_tag = interactor.AddObserver("LeftButtonPressEvent", on_press, 1.0)
+            move_tag = interactor.AddObserver("MouseMoveEvent", on_move, 1.0)
+            release_tag = interactor.AddObserver("LeftButtonReleaseEvent", on_release, 1.0)
+            event_observer_tags.update({
+                "LeftButtonPressEvent": press_tag,
+                "MouseMoveEvent": move_tag,
+                "LeftButtonReleaseEvent": release_tag,
+            })
+            self._rotation_observer_tags = [press_tag, move_tag, release_tag]
             self._update_rotation_gizmo_transform()
             self._update_pose_readout()
             self.plotter.render()
