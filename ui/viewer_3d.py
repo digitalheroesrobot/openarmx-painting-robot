@@ -5,7 +5,7 @@ import math
 import numpy as np
 import pyvista as pv
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal, QTimer
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
     QPushButton,
+    QSlider,
 )
 from pyvistaqt import QtInteractor
 from vtkmodules.vtkRenderingCore import vtkCellPicker
@@ -140,6 +141,15 @@ class ProductViewer(QWidget):
         }
         self.trajectory_product_transform = np.eye(4, dtype=float)
         self._last_product_transform = np.eye(4, dtype=float)
+
+        # Stage 3 sequential trajectory playback state.
+        self._playback_index = 0
+        self._playback_path_actor = None
+        self._playback_nozzle_actor = None
+        self._playback_cache = None
+        self._playback_timer = QTimer(self)
+        self._playback_timer.setInterval(100)
+        self._playback_timer.timeout.connect(self._advance_trajectory_playback)
 
         self.plotter = QtInteractor(self)
 
@@ -291,65 +301,48 @@ class ProductViewer(QWidget):
     # =========================================================
 
     def _build_trajectory_controls(self):
-
         panel = QFrame()
         panel.setObjectName("TrajectoryDisplayControls")
-
         panel.setStyleSheet("""
             QFrame#TrajectoryDisplayControls {
                 background-color: #0D1822;
-                border: 1px solid #203746;
+                border: 1px solid #294858;
                 border-radius: 5px;
             }
-
-            QLabel {
-                color: #00E5FF;
-                font-weight: bold;
-                padding-right: 5px;
+            QFrame#TrajectoryDisplayControls QLabel {
+                color: #C9D8E2;
             }
-
-            QCheckBox {
-                color: #D8E5ED;
-                spacing: 5px;
-                padding: 3px;
+            QFrame#TrajectoryDisplayControls QPushButton {
+                background-color: #183244;
+                color: #E2EDF4;
+                border: 1px solid #36566A;
+                border-radius: 4px;
+                padding: 4px 10px;
             }
-
-            QCheckBox::indicator {
-                width: 14px;
-                height: 14px;
+            QFrame#TrajectoryDisplayControls QPushButton:hover {
+                background-color: #24485E;
             }
-
-            QCheckBox::indicator:unchecked {
-                background-color: #14232E;
-                border: 1px solid #557887;
+            QFrame#TrajectoryDisplayControls QSlider::groove:horizontal {
+                height: 5px;
+                background: #294454;
                 border-radius: 2px;
             }
-
-            QCheckBox::indicator:checked {
-                background-color: #00E676;
-                border: 1px solid #00E676;
-                border-radius: 2px;
-            }
-
-            QCheckBox#TrajectoryPlanarSurfaceCheckbox::indicator:checked {
-                background-color: #78AFA5;
-                border: 1px solid #78AFA5;
-                border-radius: 2px;
-            }
-
-            QCheckBox#TrajectoryCurvedSurfaceCheckbox::indicator:checked {
-                background-color: #C69A62;
-                border: 1px solid #C69A62;
-                border-radius: 2px;
+            QFrame#TrajectoryDisplayControls QSlider::handle:horizontal {
+                width: 13px;
+                margin: -5px 0;
+                background: #79B7C8;
+                border: 1px solid #B7DCE5;
+                border-radius: 6px;
             }
         """)
 
-        layout = QHBoxLayout(panel)
-        layout.setContentsMargins(8, 5, 8, 5)
-        layout.setSpacing(8)
+        root = QVBoxLayout(panel)
+        root.setContentsMargins(8, 5, 8, 5)
+        root.setSpacing(5)
 
-        layout.addWidget(QLabel("3D DISPLAY:"))
-
+        display_row = QHBoxLayout()
+        display_row.setSpacing(8)
+        display_row.addWidget(QLabel("3D DISPLAY:"))
         self.trajectory_checkboxes = {}
 
         checkbox_items = [
@@ -369,18 +362,58 @@ class ProductViewer(QWidget):
             elif key == "curved":
                 checkbox.setObjectName("TrajectoryCurvedSurfaceCheckbox")
             checkbox.setChecked(self.trajectory_visibility[key])
-
             checkbox.toggled.connect(
                 lambda checked, item=key:
-                self._on_trajectory_visibility_changed(
-                    item, checked
-                )
+                self._on_trajectory_visibility_changed(item, checked)
             )
-
-            layout.addWidget(checkbox)
+            display_row.addWidget(checkbox)
             self.trajectory_checkboxes[key] = checkbox
 
-        layout.addStretch()
+        display_row.addStretch()
+        root.addLayout(display_row)
+
+        playback_row = QHBoxLayout()
+        playback_row.setSpacing(7)
+        playback_row.addWidget(QLabel("PATH PLAYBACK:"))
+
+        self.trajectory_play_button = QPushButton("Play")
+        self.trajectory_play_button.setToolTip("Play the nozzle path from start to finish")
+        self.trajectory_play_button.clicked.connect(self._toggle_trajectory_playback)
+        playback_row.addWidget(self.trajectory_play_button)
+
+        self.trajectory_step_button = QPushButton("Step")
+        self.trajectory_step_button.setToolTip("Advance by one trajectory sample")
+        self.trajectory_step_button.clicked.connect(self._step_trajectory_playback)
+        playback_row.addWidget(self.trajectory_step_button)
+
+        self.trajectory_reset_button = QPushButton("Reset")
+        self.trajectory_reset_button.clicked.connect(self._reset_trajectory_playback)
+        playback_row.addWidget(self.trajectory_reset_button)
+
+        self.trajectory_playback_slider = QSlider(Qt.Horizontal)
+        self.trajectory_playback_slider.setRange(0, 0)
+        self.trajectory_playback_slider.setSingleStep(1)
+        self.trajectory_playback_slider.setPageStep(10)
+        self.trajectory_playback_slider.valueChanged.connect(
+            self._on_trajectory_playback_slider_changed
+        )
+        playback_row.addWidget(self.trajectory_playback_slider, 1)
+
+        self.trajectory_playback_label = QLabel("0 / 0")
+        self.trajectory_playback_label.setMinimumWidth(76)
+        self.trajectory_playback_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        playback_row.addWidget(self.trajectory_playback_label)
+
+        playback_row.addWidget(QLabel("Speed"))
+        self.trajectory_playback_speed = QDoubleSpinBox()
+        self.trajectory_playback_speed.setRange(0.25, 10.0)
+        self.trajectory_playback_speed.setSingleStep(0.25)
+        self.trajectory_playback_speed.setValue(1.0)
+        self.trajectory_playback_speed.setSuffix("x")
+        self.trajectory_playback_speed.setMaximumWidth(76)
+        playback_row.addWidget(self.trajectory_playback_speed)
+
+        root.addLayout(playback_row)
         return panel
 
     def _on_trajectory_visibility_changed(self, key, checked):
@@ -1439,6 +1472,12 @@ class ProductViewer(QWidget):
         self.face_status_labels = None
         self.selected_patch_id = None
         self.trajectory_data = data
+        self._stop_trajectory_playback(reset=True)
+        self.trajectory_playback_slider.blockSignals(True)
+        self.trajectory_playback_slider.setRange(0, max(0, count - 1))
+        self.trajectory_playback_slider.setValue(0)
+        self.trajectory_playback_slider.blockSignals(False)
+        self.trajectory_playback_label.setText(f"0 / {count}")
 
         if face_surface_types is not None:
             surface_types = np.asarray(
@@ -1656,6 +1695,160 @@ class ProductViewer(QWidget):
 
         # Keep the 3D viewport free of diagnostic text. Stage 3 metrics
         # belong in the Summary panel, not over the product geometry.
+
+    def _stop_trajectory_playback(self, reset=False):
+        if hasattr(self, "_playback_timer"):
+            self._playback_timer.stop()
+        if hasattr(self, "trajectory_play_button"):
+            self.trajectory_play_button.setText("Play")
+        self._playback_path_actor = None
+        self._playback_nozzle_actor = None
+        if reset:
+            self._playback_index = 0
+            self._playback_cache = None
+            if hasattr(self, "trajectory_playback_slider"):
+                self.trajectory_playback_slider.blockSignals(True)
+                self.trajectory_playback_slider.setValue(0)
+                self.trajectory_playback_slider.blockSignals(False)
+            if hasattr(self, "trajectory_playback_label"):
+                total = len(self.trajectory_data["nozzle_points"]) if self.trajectory_data is not None else 0
+                self.trajectory_playback_label.setText(f"0 / {total}")
+
+    def _prepare_trajectory_playback_cache(self):
+        if self.trajectory_data is None:
+            return None
+        if self._playback_cache is not None:
+            return self._playback_cache
+
+        data = self.trajectory_data
+        transform = self.trajectory_product_transform
+        rotation = transform[:3, :3]
+        translation = transform[:3, 3]
+        self._playback_cache = {
+            "nozzle_points": data["nozzle_points"] @ rotation.T + translation,
+            "segment_ids": np.asarray(data["segment_ids"], dtype=np.int64),
+        }
+        return self._playback_cache
+
+    def _make_playback_path_polydata(self, last_index):
+        cache = self._prepare_trajectory_playback_cache()
+        points = cache["nozzle_points"][:last_index + 1]
+        segments = cache["segment_ids"][:last_index + 1]
+        if len(points) == 0:
+            return pv.PolyData()
+
+        line_cells = []
+        point_offset = 0
+        for segment_id in np.unique(segments):
+            local = np.flatnonzero(segments == segment_id)
+            if len(local) < 2:
+                continue
+            line_cells.extend([len(local), *local.tolist()])
+        polydata = pv.PolyData(points)
+        if line_cells:
+            polydata.lines = np.asarray(line_cells, dtype=np.int64)
+        return polydata
+
+    def _update_trajectory_playback_visuals(self, index):
+        if self.trajectory_data is None or self.display_mode != "trajectory":
+            return
+        cache = self._prepare_trajectory_playback_cache()
+        nozzle_points = cache["nozzle_points"]
+        if len(nozzle_points) == 0:
+            return
+
+        index = int(np.clip(index, 0, len(nozzle_points) - 1))
+        self._playback_index = index
+        path = self._make_playback_path_polydata(index)
+
+        if self._playback_path_actor is None:
+            if path.n_lines > 0:
+                self._playback_path_actor = self.plotter.add_mesh(
+                    path,
+                    color="#F2C879",
+                    line_width=4,
+                    render_lines_as_tubes=True,
+                    lighting=False,
+                    pickable=False,
+                )
+        elif path.n_lines > 0:
+            mapper = self._playback_path_actor.GetMapper()
+            mapper.SetInputData(path)
+            mapper.Update()
+
+        current = nozzle_points[index]
+        if self._playback_nozzle_actor is None:
+            radius = max(self._trajectory_arrow_length() * 0.12, 1.0)
+            marker = pv.Sphere(radius=radius, center=current, theta_resolution=16, phi_resolution=12)
+            self._playback_nozzle_actor = self.plotter.add_mesh(
+                marker,
+                color="#42D9F5",
+                smooth_shading=True,
+                lighting=False,
+                pickable=False,
+            )
+        else:
+            self._playback_nozzle_actor.SetPosition(*current.tolist())
+
+        total = len(nozzle_points)
+        self.trajectory_playback_label.setText(f"{index + 1} / {total}")
+        self.trajectory_playback_slider.blockSignals(True)
+        self.trajectory_playback_slider.setValue(index)
+        self.trajectory_playback_slider.blockSignals(False)
+        self.plotter.render()
+
+    def _on_trajectory_playback_slider_changed(self, value):
+        if self.display_mode != "trajectory" or self.trajectory_data is None:
+            return
+        self._playback_timer.stop()
+        self.trajectory_play_button.setText("Play")
+        self._update_trajectory_playback_visuals(value)
+
+    def _toggle_trajectory_playback(self):
+        if self.trajectory_data is None or self.display_mode != "trajectory":
+            return
+        total = len(self.trajectory_data["nozzle_points"])
+        if total == 0:
+            return
+        if self._playback_timer.isActive():
+            self._playback_timer.stop()
+            self.trajectory_play_button.setText("Play")
+            return
+        if self._playback_index >= total - 1:
+            self._update_trajectory_playback_visuals(0)
+        self.trajectory_play_button.setText("Pause")
+        self._playback_timer.start()
+
+    def _advance_trajectory_playback(self):
+        if self.trajectory_data is None:
+            self._stop_trajectory_playback()
+            return
+        total = len(self.trajectory_data["nozzle_points"])
+        if self._playback_index >= total - 1:
+            self._stop_trajectory_playback()
+            return
+        # Keep playback duration manageable for dense trajectories while
+        # preserving a visible, monotonically advancing nozzle sequence.
+        base_step = max(1, int(np.ceil(total / 600.0)))
+        step = max(1, int(round(base_step * self.trajectory_playback_speed.value())))
+        next_index = min(total - 1, self._playback_index + step)
+        self._update_trajectory_playback_visuals(next_index)
+        if next_index >= total - 1:
+            self._stop_trajectory_playback()
+
+    def _step_trajectory_playback(self):
+        if self.trajectory_data is None or self.display_mode != "trajectory":
+            return
+        self._playback_timer.stop()
+        self.trajectory_play_button.setText("Play")
+        total = len(self.trajectory_data["nozzle_points"])
+        self._update_trajectory_playback_visuals(min(self._playback_index + 1, total - 1))
+
+    def _reset_trajectory_playback(self):
+        if self.trajectory_data is None or self.display_mode != "trajectory":
+            return
+        self._stop_trajectory_playback(reset=True)
+        self._update_trajectory_playback_visuals(0)
 
     def _trajectory_arrow_length(self):
         if self.trajectory_data is None:
@@ -1895,6 +2088,7 @@ class ProductViewer(QWidget):
 
     
     def _render_product(self, reset_camera=False):
+        self._stop_trajectory_playback(reset=True)
         if self.current_mesh is None:
             self._draw_empty_scene()
             return
