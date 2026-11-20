@@ -46,6 +46,11 @@ from stages.stage3_spray_trajectory import (
 )
 
 from ui.viewer_3d import ProductViewer
+from ui.sprayer_settings import (
+    SprayerSettingsDialog,
+    load_sprayer_profiles,
+    save_sprayer_profiles,
+)
 
 
 # ============================================================
@@ -329,6 +334,23 @@ class MainWindow(QMainWindow):
 
         self.project_root = Path(project_root).resolve()
         self.fonts = fonts
+
+        self.sprayer_config_path = (
+            self.project_root / "config" / "sprayer_profiles.json"
+        )
+        self.sprayer_profiles = load_sprayer_profiles(
+            self.sprayer_config_path
+        )
+        self.sprayer_profile = dict(
+            next(
+                (
+                    profile for profile in self.sprayer_profiles
+                    if str(profile.get("name", "")).strip().lower()
+                    == "default sprayer"
+                ),
+                self.sprayer_profiles[0],
+            )
+        )
 
         self.result_manager = ResultManager(self.project_root)
 
@@ -891,56 +913,26 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.reset_camera_button)
 
         layout.addSpacing(8)
-        layout.addWidget(self._section("SPRAY PARAMETERS"))
+        layout.addWidget(self._section("SPRAYER"))
 
-        parameter_grid = QGridLayout()
-        parameter_grid.setVerticalSpacing(7)
-
-        parameter_grid.addWidget(QLabel("STANDOFF (mm)"), 0, 0)
-
-        self.standoff_spin = QDoubleSpinBox()
-        self.standoff_spin.setRange(1.0, 2000.0)
-        self.standoff_spin.setDecimals(1)
-        self.standoff_spin.setSingleStep(5.0)
-        self.standoff_spin.setValue(float(DEFAULT_STANDOFF_MM))
-        parameter_grid.addWidget(self.standoff_spin, 0, 1)
-
-        parameter_grid.addWidget(QLabel("SPACING (mm)"), 1, 0)
-
-        self.spacing_spin = QDoubleSpinBox()
-        self.spacing_spin.setRange(1.0, 500.0)
-        self.spacing_spin.setDecimals(1)
-        self.spacing_spin.setSingleStep(1.0)
-        self.spacing_spin.setValue(
-            float(DEFAULT_SAMPLING_SPACING_MM)
+        self.sprayer_settings_button = QPushButton(
+            "SPRAYER SETTINGS"
         )
-        parameter_grid.addWidget(self.spacing_spin, 1, 1)
+        self.sprayer_settings_button.setObjectName("PrimaryButton")
+        self.sprayer_settings_button.setToolTip(
+            "Configure sprayer technical specifications and preview its spray pattern."
+        )
+        self.sprayer_settings_button.clicked.connect(
+            self._open_sprayer_settings
+        )
+        layout.addWidget(self.sprayer_settings_button)
 
-        parameter_grid.addWidget(QLabel("SPRAY ANGLE (°)"), 2, 0)
-
-        self.spray_angle_spin = QDoubleSpinBox()
-        self.spray_angle_spin.setRange(
-            float(DEFAULT_SPRAY_ANGLE_DEG),
-            float(DEFAULT_SPRAY_ANGLE_DEG),
+        self.sprayer_profile_label = QLabel(
+            f"ACTIVE PROFILE: {self.sprayer_profile.get('name', 'default sprayer')}"
         )
-        self.spray_angle_spin.setDecimals(1)
-        self.spray_angle_spin.setValue(
-            float(DEFAULT_SPRAY_ANGLE_DEG)
-        )
-        self.spray_angle_spin.setEnabled(False)
-        parameter_grid.addWidget(self.spray_angle_spin, 2, 1)
-
-        layout.addLayout(parameter_grid)
-
-        self.standoff_spin.valueChanged.connect(
-            self._on_spray_parameter_changed
-        )
-        self.spacing_spin.valueChanged.connect(
-            self._on_spray_parameter_changed
-        )
-        self.spray_angle_spin.valueChanged.connect(
-            self._on_spray_parameter_changed
-        )
+        self.sprayer_profile_label.setObjectName("Muted")
+        self.sprayer_profile_label.setWordWrap(True)
+        layout.addWidget(self.sprayer_profile_label)
 
         layout.addStretch()
         return panel
@@ -2426,11 +2418,44 @@ class MainWindow(QMainWindow):
     # ========================================================
 
     def _get_current_spray_parameters(self):
+        profile = dict(self.sprayer_profile)
         return {
-            "standoff_mm": float(self.standoff_spin.value()),
-            "sampling_spacing_mm": float(self.spacing_spin.value()),
-            "spray_angle_deg": float(self.spray_angle_spin.value()),
+            "standoff_mm": float(profile["standoff_mm"]),
+            "sampling_spacing_mm": float(profile["sampling_spacing_mm"]),
+            "spray_angle_deg": 0.0,
+            "sprayer_profile": profile,
         }
+
+    def _open_sprayer_settings(self):
+        if self._operation_running:
+            return
+
+        dialog = SprayerSettingsDialog(
+            config_path=self.sprayer_config_path,
+            profiles=self.sprayer_profiles,
+            current_profile=self.sprayer_profile,
+            parent=self,
+        )
+        if dialog.exec() != dialog.Accepted:
+            return
+
+        if dialog.selected_profile is None:
+            return
+
+        self.sprayer_profiles = dialog.profiles
+        self.sprayer_profile = dict(dialog.selected_profile)
+        save_sprayer_profiles(
+            self.sprayer_config_path,
+            self.sprayer_profiles,
+        )
+
+        self.sprayer_profile_label.setText(
+            f"ACTIVE PROFILE: {self.sprayer_profile.get('name', 'Unnamed')}"
+        )
+        self.status_bar.showMessage(
+            f"SPRAYER PROFILE LOADED: {self.sprayer_profile.get('name', 'Unnamed')}"
+        )
+        self._on_spray_parameter_changed()
 
     def _stage3_parameters_match(self):
         if self.current_stage3_parameters is None:
@@ -3109,9 +3134,7 @@ class MainWindow(QMainWindow):
         self.coordinate_unit_selector.setEnabled(False)
         self.unit_selector.setEnabled(False)
 
-        self.standoff_spin.setEnabled(False)
-        self.spacing_spin.setEnabled(False)
-        self.spray_angle_spin.setEnabled(False)
+        self.sprayer_settings_button.setEnabled(False)
 
         self.system_status.setText("● PROCESSING")
         self.system_status.setStyleSheet(
@@ -3130,9 +3153,7 @@ class MainWindow(QMainWindow):
 
         self.load_button.setEnabled(True)
 
-        self.standoff_spin.setEnabled(True)
-        self.spacing_spin.setEnabled(True)
-        self.spray_angle_spin.setEnabled(False)
+        self.sprayer_settings_button.setEnabled(True)
 
         self._set_coordinate_unit_controls()
 
@@ -3964,6 +3985,7 @@ class MainWindow(QMainWindow):
             standoff_mm=parameters["standoff_mm"],
             sampling_spacing_mm=parameters["sampling_spacing_mm"],
             spray_angle_deg=parameters["spray_angle_deg"],
+            sprayer_profile=parameters["sprayer_profile"],
         )
 
         self._worker.succeeded.connect(
