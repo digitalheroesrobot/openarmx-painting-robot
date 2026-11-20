@@ -135,6 +135,7 @@ class ProductViewer(QWidget):
         self.display_control_panel = self._build_trajectory_controls()
         layout.addWidget(self.display_control_panel)
         self.pose_control_panel = self._build_pose_controls()
+        self.pose_control_panel.setMaximumHeight(48)
         layout.addWidget(self.pose_control_panel)
         layout.addWidget(self.plotter.interactor, 1)
 
@@ -420,7 +421,10 @@ class ProductViewer(QWidget):
         self.confirm_pose_button.clicked.connect(self._confirm_reference_pose)
         layout.addWidget(self.confirm_pose_button)
 
-        layout.addWidget(QLabel("ATTITUDE RPY (°):"))
+        self.attitude_label = QLabel("ATTITUDE RPY (°)")
+        self.attitude_label.setStyleSheet("color: #00E5FF; font-weight: bold;")
+        layout.addWidget(self.attitude_label)
+
         self.rpy_inputs = []
         for label in ("ROLL", "PITCH", "YAW"):
             field = QDoubleSpinBox()
@@ -428,8 +432,9 @@ class ProductViewer(QWidget):
             field.setDecimals(2)
             field.setSingleStep(1.0)
             field.setSuffix(f"° {label}")
-            field.setFixedWidth(92)
+            field.setFixedWidth(112)
             field.setToolTip(f"Absolute {label.lower()} angle in the World XYZ frame.")
+            field.valueChanged.connect(self._apply_rpy_inputs)
             field.editingFinished.connect(self._apply_rpy_inputs)
             layout.addWidget(field)
             self.rpy_inputs.append(field)
@@ -441,6 +446,24 @@ class ProductViewer(QWidget):
         self.reset_pose_button = QPushButton("RESET")
         self.reset_pose_button.clicked.connect(self._reset_reference_pose)
         layout.addWidget(self.reset_pose_button)
+
+        # Keep the advanced placement/hook controls available internally,
+        # but do not clutter the product viewer. The operator-facing strip
+        # contains only the live-editable Roll/Pitch/Yaw values.
+        for widget in (
+            *self.world_position_inputs,
+            self.apply_position_button,
+            *self.workspace_size_inputs,
+            self.apply_workspace_button,
+            self.hook_length_input,
+            self.pick_hook_point_button,
+            self.pose_status_label,
+            self.confirm_pose_button,
+            self.apply_rpy_button,
+            self.reset_pose_button,
+        ):
+            widget.hide()
+
         return panel
 
     def _apply_rpy_inputs(self):
@@ -622,21 +645,29 @@ class ProductViewer(QWidget):
             interactor.SetInteractorStyle(self._camera_style)
 
             self._create_rotation_gizmo()
-            ring_picker = vtkCellPicker()
-            ring_picker.SetTolerance(0.012)
-            ring_picker.PickFromListOn()
+
+            # Each picker is restricted to exactly one intended prop. This
+            # avoids comparing PyVista Actor wrappers with VTK picker props
+            # and prevents the World box/axes from stealing product clicks.
+            ring_pickers = []
             for ring_actor in self._rotation_ring_actors:
-                ring_picker.AddPickList(ring_actor)
+                picker = vtkCellPicker()
+                picker.SetTolerance(0.025)
+                picker.PickFromListOn()
+                picker.AddPickList(ring_actor)
+                ring_pickers.append(picker)
+
             product_picker = vtkPropPicker()
+            product_picker.PickFromListOn()
+            product_picker.AddPickList(self._pose_actor)
 
             def on_press(caller, event):
                 x, y = interactor.GetEventPosition()
-                hit_ring = ring_picker.Pick(x, y, 0, self.plotter.renderer)
-                ring_actor = ring_picker.GetViewProp() if hit_ring else None
+
                 axis_index = next(
                     (
-                        index for index, candidate in enumerate(self._rotation_ring_actors)
-                        if self._same_vtk_object(ring_actor, candidate)
+                        index for index, picker in enumerate(ring_pickers)
+                        if picker.Pick(x, y, 0, self.plotter.renderer)
                     ),
                     None,
                 )
@@ -647,16 +678,21 @@ class ProductViewer(QWidget):
                         self._rotation_drag_start_vector = start_vector
                         self._rotation_drag_start_matrix = self._actor_matrix_array().copy()
                         interactor.SetInteractorStyle(self._rotation_drag_style)
-                        return
-                hit_product = product_picker.Pick(x, y, 0, self.plotter.renderer)
-                picked = product_picker.GetViewProp() if hit_product else None
-                self._set_product_selected(
-                    self._same_vtk_object(picked, self._pose_actor)
+                        return 1
+
+                hit_product = bool(
+                    product_picker.Pick(x, y, 0, self.plotter.renderer)
                 )
+                self._set_product_selected(hit_product)
+
+                # Consume a product click so the camera style cannot also
+                # interpret it as a camera drag. Empty-space clicks continue
+                # to the trackball camera for orbit/pan interaction.
+                return 1 if hit_product else 0
 
             def on_move(caller, event):
                 if self._rotation_drag_axis is None:
-                    return
+                    return 0
                 x, y = interactor.GetEventPosition()
                 current = self._screen_vector_from_cad_origin(x, y, self._rotation_drag_axis)
                 if current is None:
@@ -683,16 +719,18 @@ class ProductViewer(QWidget):
                 self._update_rotation_gizmo_transform()
                 self._update_pose_readout()
                 self.plotter.render()
+                return 1
 
             def on_release(caller, event):
                 if self._rotation_drag_axis is None:
-                    return
+                    return 0
                 self._rotation_drag_axis = None
                 self._rotation_drag_start_vector = None
                 self._rotation_drag_start_matrix = None
                 interactor.SetInteractorStyle(self._camera_style)
                 self._update_pose_readout()
                 self.pose_status_label.setText("ROTATION COMPLETE  |  Camera orbit and zoom are available.")
+                return 1
 
             self._rotation_observer_tags = [
                 interactor.AddObserver("LeftButtonPressEvent", on_press, 1.0),
