@@ -344,7 +344,7 @@ class ProductViewer(QWidget):
             ("arrows", "Direction arrows"),
             ("paths", "Trajectory paths"),
             ("samples", "Surface samples"),
-            ("frames", "Nozzle orientation frames"),
+            ("frames", "Nozzle frames"),
         ]
 
         for key, label_text in checkbox_items:
