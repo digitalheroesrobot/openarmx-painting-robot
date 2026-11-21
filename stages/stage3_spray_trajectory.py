@@ -4235,10 +4235,12 @@ def generate_spray_trajectory(
     )
 
     if path_spray_width_mm > 0.0 and path_track_spacing_mm > 0.0:
-        # A triangular surface lattice has a finite covering radius. Capping
-        # the lattice interval at half the footprint diameter prevents holes
-        # even when the requested track overlap is very small.
+        # Treat the user sampling interval as a maximum-resolution constraint.
+        # The footprint/overlap spacing can force a denser lattice, while a
+        # finer user-selected interval is always preserved. Capping at half
+        # the footprint diameter provides a conservative geometric cover.
         coverage_spacing_mm = min(
+            float(sampling_spacing_mm),
             path_track_spacing_mm,
             0.5 * path_spray_width_mm,
         )
