@@ -92,8 +92,6 @@ STAGE_PRODUCT_SETUP = 0
 STAGE_GEOMETRY_INSPECTION = 1
 STAGE_SURFACE_IDENTIFICATION = 2
 STAGE_SPRAY_TRAJECTORY = 3
-STAGE_ROBOT_CONFIGURATION = 4
-STAGE_EXECUTION = 5
 
 FACE_EXCLUDED = 0
 FACE_PAINTABLE_CANDIDATE = 1
@@ -143,28 +141,13 @@ WORKFLOW_STAGES = [
         ),
         "action": "GENERATE SPRAY TRAJECTORY",
     },
-    {
-        "name": "ROBOT CONFIGURATION",
-        "description": (
-            "Configure the dual-arm robot system, allocate "
-            "painting tasks, and verify robot reachability."
-        ),
-        "action": "ROBOT CONFIGURATION NOT AVAILABLE",
-    },
-    {
-        "name": "EXECUTION & MONITORING",
-        "description": (
-            "Simulate robot motion, verify collision clearance, "
-            "and monitor painting execution."
-        ),
-        "action": "EXECUTION NOT AVAILABLE",
-    },
 ]
 
 PIPELINE_ITEMS = [
     "Product loading",
     "Geometry inspection",
     "Paintable surface identification",
+    "Spray trajectory generation",
 ]
 
 
@@ -410,17 +393,13 @@ class MainWindow(QMainWindow):
             STAGE_GEOMETRY_INSPECTION: False,
             STAGE_SURFACE_IDENTIFICATION: False,
             STAGE_SPRAY_TRAJECTORY: False,
-            STAGE_ROBOT_CONFIGURATION: False,
-            STAGE_EXECUTION: False,
         }
 
         self._build_ui()
 
-        # Keep the application focused on the first three workflow stages.
-        # Trajectory display and playback controls stay hidden until reopened.
+        # The workflow intentionally ends at spray trajectory generation.
+        # Robot configuration and execution stages are removed from this build.
         self.viewer.display_control_panel.hide()
-        if hasattr(self, "spray_playback_section"):
-            self.spray_playback_section.hide()
 
         self._refresh_workflow_ui()
 
@@ -819,11 +798,7 @@ class MainWindow(QMainWindow):
                 self._select_workflow_stage(i)
             )
 
-            # Reopen Stage 3 only; robot configuration and execution remain hidden.
-            if index > STAGE_SPRAY_TRAJECTORY:
-                button.hide()
-            else:
-                layout.addWidget(button, 1)
+            layout.addWidget(button, 1)
             self.workflow_buttons.append(button)
 
         return panel
@@ -1104,34 +1079,6 @@ class MainWindow(QMainWindow):
         ].setChecked(False)
 
         layout.addWidget(summary_section)
-
-        # ----------------------------------------------------
-        # STAGE 3 SPRAY PLAYBACK AND DIAGNOSTICS
-        # The controls are hosted here rather than above the 3D viewport.
-        # ----------------------------------------------------
-        spray_playback_content = QWidget()
-        spray_playback_layout = QVBoxLayout(spray_playback_content)
-        spray_playback_layout.setContentsMargins(5, 3, 5, 5)
-        spray_playback_layout.setSpacing(6)
-
-        spray_playback_layout.addWidget(
-            self.viewer.trajectory_playback_panel
-        )
-        spray_playback_layout.addWidget(
-            self.viewer.trajectory_path_stats_label
-        )
-        spray_playback_layout.addWidget(
-            self.viewer.trajectory_validation_label
-        )
-
-        self.spray_playback_section = self._make_collapsible_section(
-            "SPRAY PLAYBACK",
-            "spray_playback",
-            spray_playback_content,
-        )
-        self._right_section_buttons["spray_playback"].setChecked(False)
-        self.spray_playback_section.hide()
-        layout.addWidget(self.spray_playback_section)
 
         # ----------------------------------------------------
         # EXACT CAD FACE INVENTORY
@@ -2277,9 +2224,6 @@ class MainWindow(QMainWindow):
         self.current_stage2_result = None
         self.current_stage3_result = None
 
-        if hasattr(self, "spray_playback_section"):
-            self.spray_playback_section.hide()
-
         self.current_stage3_parameters = None
         self.pending_stage3_parameters = None
 
@@ -2675,11 +2619,6 @@ class MainWindow(QMainWindow):
     def _refresh_workflow_ui(self):
 
         stage = WORKFLOW_STAGES[self.active_stage]
-
-        if hasattr(self, "spray_playback_section"):
-            # Stage 3 playback remains hidden while trajectory generation
-            # and all downstream stages are locked.
-            self.spray_playback_section.hide()
 
         self.current_stage_label.setText(stage["name"])
         self.workflow_description.setText(stage["description"])
@@ -3080,7 +3019,12 @@ class MainWindow(QMainWindow):
         else:
             pipeline_states.append("WAITING")
 
-        # The visible pipeline intentionally ends at surface identification.
+        if self.stage_completed[STAGE_SPRAY_TRAJECTORY]:
+            pipeline_states.append("COMPLETE")
+        elif self._stage_available(STAGE_SPRAY_TRAJECTORY):
+            pipeline_states.append("ACTIVE")
+        else:
+            pipeline_states.append("WAITING")
 
         for label, state, item in zip(
             self.pipeline_labels,
@@ -3179,29 +3123,12 @@ class MainWindow(QMainWindow):
             return
 
         # ----------------------------------------------------
-        # STAGE 4 - SPRAY TRAJECTORY
+        # STAGE 3 - SPRAY TRAJECTORY
         # ----------------------------------------------------
 
         elif self.active_stage == STAGE_SPRAY_TRAJECTORY:
 
             self.run_spray_trajectory(force=True)
-            return
-
-        # ----------------------------------------------------
-        # OTHER STAGES
-        # ----------------------------------------------------
-
-        elif self.active_stage in (
-            STAGE_ROBOT_CONFIGURATION,
-            STAGE_EXECUTION,
-        ):
-
-            QMessageBox.information(
-                self,
-                "Not Available",
-                "This workflow stage is not implemented yet.",
-            )
-
             return
 
     # ========================================================
@@ -3371,8 +3298,6 @@ class MainWindow(QMainWindow):
             STAGE_GEOMETRY_INSPECTION: False,
             STAGE_SURFACE_IDENTIFICATION: False,
             STAGE_SPRAY_TRAJECTORY: False,
-            STAGE_ROBOT_CONFIGURATION: False,
-            STAGE_EXECUTION: False,
         }
 
         self.source_unit_from_stl = get_mesh_source_unit(mesh)
@@ -4149,9 +4074,6 @@ class MainWindow(QMainWindow):
 
         # Keep playback, coverage correction and downstream controls closed.
         # This first reopening step is a static circular-footprint preview only.
-        if hasattr(self, "spray_playback_section"):
-            self.spray_playback_section.hide()
-
         self._update_viewer_display_unit()
 
     def _on_spray_trajectory_complete(self, result):
