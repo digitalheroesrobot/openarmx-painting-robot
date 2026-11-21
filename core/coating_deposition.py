@@ -121,6 +121,147 @@ def accumulate_double_beta_deposition_step(
     }
 
 
+def calculate_cone_deposition_step(
+    *,
+    surface_points_mm: np.ndarray,
+    surface_normals: np.ndarray,
+    nozzle_position_mm: np.ndarray,
+    spray_direction: np.ndarray,
+    cone_angle_deg: float,
+    duration_s: float,
+    fluid_flow_ml_min: float,
+    transfer_efficiency_percent: float,
+    volume_solids_percent: float,
+    number_of_coats: int = 1,
+    travel_speed_mm_s: float = 0.0,
+    radial_alpha: float = 2.0,
+    radial_beta: float = 2.0,
+) -> dict:
+    """Calculate one geometry-aware spray interval over face centroids.
+
+    Distance controls footprint size, cone angle controls the footprint
+    radius, incidence controls local deposition, and duration (therefore
+    travel speed for a moving gun) controls deposited volume.  The result is
+    an engineering prediction; measured nozzle-profile calibration is still
+    required for production-grade film thickness.
+    """
+    points = np.asarray(surface_points_mm, dtype=np.float64)
+    normals = np.asarray(surface_normals, dtype=np.float64)
+    nozzle = np.asarray(nozzle_position_mm, dtype=np.float64)
+    direction = np.asarray(spray_direction, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 3 or not np.all(np.isfinite(points)):
+        raise ValueError("surface_points_mm must be finite (N,3).")
+    if normals.shape != points.shape or not np.all(np.isfinite(normals)):
+        raise ValueError("surface_normals must match surface_points_mm.")
+    if nozzle.shape != (3,) or not np.all(np.isfinite(nozzle)):
+        raise ValueError("nozzle_position_mm must be finite (3,).")
+    if direction.shape != (3,) or not np.all(np.isfinite(direction)):
+        raise ValueError("spray_direction must be finite (3,).")
+    cone = float(cone_angle_deg)
+    dt = float(duration_s)
+    speed = float(travel_speed_mm_s)
+    flow = float(fluid_flow_ml_min)
+    if not math.isfinite(cone) or not 0.0 < cone < 179.0:
+        raise ValueError("cone_angle_deg must be in (0,179).")
+    if not math.isfinite(dt) or dt < 0.0:
+        raise ValueError("duration_s must be finite and non-negative.")
+    if not math.isfinite(speed) or speed < 0.0:
+        raise ValueError("travel_speed_mm_s must be finite and non-negative.")
+    if not math.isfinite(flow) or flow < 0.0:
+        raise ValueError("fluid_flow_ml_min must be finite and non-negative.")
+
+    nlen = np.linalg.norm(normals, axis=1)
+    if np.any(nlen <= 1e-12):
+        raise ValueError("Surface normals cannot be zero.")
+    normals = normals / nlen[:, None]
+    dlen = float(np.linalg.norm(direction))
+    if dlen <= 1e-12:
+        raise ValueError("spray_direction cannot be zero.")
+    direction = direction / dlen
+
+    delta = points - nozzle[None, :]
+    axial = delta @ direction
+    radial_vec = delta - axial[:, None] * direction[None, :]
+    radial_distance = np.linalg.norm(radial_vec, axis=1)
+    radius = np.maximum(axial, 0.0) * math.tan(math.radians(cone * 0.5))
+    inside = (axial > 1e-9) & (radial_distance <= radius) & (radius > 1e-9)
+    facing = np.clip(normals @ (-direction), 0.0, 1.0)
+
+    # Build a stable orthonormal basis perpendicular to the spray axis.
+    reference = np.array([0.0, 0.0, 1.0])
+    if abs(float(np.dot(reference, direction))) > 0.9:
+        reference = np.array([0.0, 1.0, 0.0])
+    basis_x = np.cross(direction, reference)
+    basis_x /= max(float(np.linalg.norm(basis_x)), 1e-12)
+    basis_y = np.cross(direction, basis_x)
+    basis_y /= max(float(np.linalg.norm(basis_y)), 1e-12)
+
+    local_x = radial_vec @ basis_x
+    local_y = radial_vec @ basis_y
+    normalized_xy = np.column_stack(
+        (local_x / np.maximum(radius, 1e-12),
+         local_y / np.maximum(radius, 1e-12))
+    )
+    normalized_xy[~inside] = 2.0
+
+    # The cone cross-section grows with standoff². This is the key distance
+    # term: identical paint volume spread over a larger footprint produces a
+    # lower film thickness.
+    footprint_area = math.pi * np.maximum(radius, 1e-9) ** 2
+
+    areas = np.ones(len(points), dtype=np.float64)
+    density = double_beta_spatial_density(
+        normalized_xy, radial_alpha, radial_beta, radial_alpha, radial_beta
+    )
+    density[~inside] = 0.0
+    input_dry = (
+        flow * dt / 60.0 * 1000.0
+        * (float(transfer_efficiency_percent) / 100.0)
+        * (float(volume_solids_percent) / 100.0)
+        * int(number_of_coats)
+    )
+    increments = np.zeros(len(points), dtype=np.float64)
+    if input_dry <= 0.0 or not len(points):
+        return {
+            "thickness_increment_um": increments,
+            "deposited_volume_mm3": 0.0,
+            "input_dry_volume_mm3": float(max(input_dry, 0.0)),
+            "inside_cone": inside,
+            "facing_cosine": facing,
+            "travel_speed_mm_s": speed,
+            "footprint_radius_mm": radius,
+        }
+
+    # Centroids are point samples. Use equal quadrature weights here; the
+    # caller supplies actual face areas separately when accumulating thickness.
+    weight = density * np.clip(facing, 0.0, 1.0)
+    weight[~inside] = 0.0
+    total = float(np.sum(weight))
+    if total <= 1e-12:
+        return {
+            "thickness_increment_um": increments,
+            "deposited_volume_mm3": 0.0,
+            "input_dry_volume_mm3": float(input_dry),
+            "inside_cone": inside,
+            "facing_cosine": facing,
+            "travel_speed_mm_s": speed,
+            "footprint_radius_mm": radius,
+        }
+    deposited = input_dry * weight / total
+    # This helper returns volume per centroid; callers divide by actual face
+    # area. Keeping the volume field explicit prevents speed from being hidden
+    # inside an arbitrary visual gain.
+    return {
+        "deposited_volume_mm3": deposited,
+        "total_deposited_volume_mm3": float(np.sum(deposited)),
+        "input_dry_volume_mm3": float(input_dry),
+        "inside_cone": inside,
+        "facing_cosine": facing,
+        "travel_speed_mm_s": speed,
+        "footprint_radius_mm": radius,
+        "normalized_xy": normalized_xy,
+    }
+
 def simulate_double_beta_deposition(*, sample_normalized_xy_by_path: np.ndarray, sample_area_mm2: np.ndarray, sample_facing_cosine_by_path: np.ndarray, sample_face_ids: np.ndarray, trajectory_time_s: np.ndarray, spray_on_mask: np.ndarray, hit_sample_indices_by_path: Iterable[np.ndarray], fluid_flow_ml_min: float, transfer_efficiency_percent: float, volume_solids_percent: float, footprint_width_mm: float, footprint_thickness_mm: float, number_of_coats: int = 1, alpha_x: float = 2.0, beta_x: float = 2.0, alpha_y: float = 2.0, beta_y: float = 2.0) -> dict:
     """Accumulate predicted dry film; visible hit IDs must already include occlusion tests.
 
