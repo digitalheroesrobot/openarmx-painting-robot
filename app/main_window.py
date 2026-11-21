@@ -598,24 +598,10 @@ class MainWindow(QMainWindow):
 
 
     def _set_patch_inspection_readonly(self, readonly=True):
-        for widgets in self.patch_row_widgets.values():
-
-            checkbox = widgets.get("checkbox")
-            decision = widgets.get("decision")
-
-            if checkbox is not None:
-                checkbox.setEnabled(not readonly)
-
-            if decision is not None:
-                decision.setEnabled(not readonly)
-
-            # Patch buttons are editable only during Stage 2 inspection.
-            # In Stage 3 spray trajectory simulation, the selected painting
-            # patches are already committed and must remain read-only.
-            select_button = widgets.get("select_button")
-
-            if select_button is not None:
-                select_button.setEnabled(not readonly)
+        # Disable the complete row container in one Qt operation. Iterating
+        # over every patch widget on each workflow refresh made Stage 3 entry
+        # increasingly slow on products with many patches.
+        self.patch_rows_container.setEnabled(not readonly)
 
     def _build_ui(self):
         central = QWidget()
@@ -1298,12 +1284,12 @@ class MainWindow(QMainWindow):
             "INTERACTIVE SPRAY PATH"
         )
         self.interactive_spray_path_button.setObjectName("SecondaryButton")
+        self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
         self.interactive_spray_path_button.setToolTip(
-            "Use the mouse as the spray nozzle. Move over the product to aim; "
-            "hold the left mouse button while moving to record a surface-following path."
+            "Finish the automatically recorded interactive spray path and optimize its stroke route."
         )
         self.interactive_spray_path_button.clicked.connect(
-            self._toggle_interactive_spray_path
+            self._finish_interactive_spray_path
         )
         self.interactive_spray_path_button.hide()
         layout.addWidget(self.interactive_spray_path_button)
@@ -2614,6 +2600,7 @@ class MainWindow(QMainWindow):
         if not self._stage_available(stage_index):
             return
 
+        previous_stage = self.active_stage
         self.active_stage = stage_index
         self._refresh_workflow_ui()
 
@@ -2633,6 +2620,13 @@ class MainWindow(QMainWindow):
             else:
                 self._show_stage3_outdated_summary()
                 self._display_current_trajectory()
+
+        # Start exactly once on entry, not on every UI refresh.
+        if (
+            stage_index == STAGE_SPRAY_TRAJECTORY
+            and previous_stage != STAGE_SPRAY_TRAJECTORY
+        ):
+            self._start_interactive_spray_path()
 
     
     
@@ -2792,8 +2786,11 @@ class MainWindow(QMainWindow):
                 and self._stage_available(STAGE_SPRAY_TRAJECTORY)
             )
             self.interactive_spray_path_button.setVisible(interactive_available)
+            self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
             self.interactive_spray_path_button.setEnabled(
-                interactive_available and not self._operation_running
+                interactive_available
+                and self.viewer._interactive_spray_active
+                and not self._operation_running
             )
 
         if self.active_stage == STAGE_SPRAY_TRAJECTORY:
@@ -4024,53 +4021,20 @@ class MainWindow(QMainWindow):
 
         self._worker.start()
 
-    def _toggle_interactive_spray_path(self):
-        """Start or finish mouse-driven surface-following spray-path recording."""
-        if self._operation_running or self.current_mesh is None:
+    def _start_interactive_spray_path(self):
+        """Automatically start mouse-driven spray recording on Stage 3 entry."""
+        if (
+            self._operation_running
+            or self.current_mesh is None
+            or self.viewer._interactive_spray_active
+        ):
             return
 
-        if self.viewer._interactive_spray_active:
-            result = self.viewer.finish_interactive_spray_path()
-            self.interactive_spray_path = result
-            self.interactive_spray_path_button.setText("INTERACTIVE SPRAY PATH")
-            if result is None:
-                self.status_bar.showMessage("INTERACTIVE SPRAY PATH CANCELLED")
-                return
-
-            nozzle_points = np.asarray(result["nozzle_points_product"], dtype=float)
-            stroke_ids = np.asarray(result["stroke_ids"], dtype=np.int64)
-            if len(nozzle_points) >= 2:
-                step_lengths = np.linalg.norm(np.diff(nozzle_points, axis=0), axis=1)
-                continuous_steps = stroke_ids[1:] == stroke_ids[:-1]
-                path_length = float(np.sum(step_lengths[continuous_steps]))
-            else:
-                path_length = 0.0
-            self.analysis_summary.setText(
-                "INTERACTIVE SPRAY PATH RECORDED\n\n"
-                f"RECORDED POSES: {len(nozzle_points)}\n"
-                f"PATH LENGTH: {path_length:.2f} {self.coordinate_unit}\n"
-                f"STANDOFF: {result['standoff_source_units']:.2f} {self.coordinate_unit}\n"
-                f"CONE ANGLE: {result['cone_angle_deg']:.1f} deg\n\n"
-                "GREEN: RECORDED SPRAY FOOTPRINTS\n"
-                "CYAN: RECORDED NOZZLE PATH\n"
-                "PATH IS STORED SEPARATELY FROM THE AUTOMATIC STAGE 3 TRAJECTORY."
-            )
-            self.status_bar.showMessage(
-                f"INTERACTIVE SPRAY PATH RECORDED | {len(nozzle_points)} POSES | "
-                f"LENGTH {path_length:.2f} {self.coordinate_unit}"
-            )
-            return
-
-        if self.active_stage != STAGE_SPRAY_TRAJECTORY:
-            QMessageBox.warning(
-                self, "Stage 3 Required",
-                "Complete surface identification and patch inspection before recording a spray path.",
-            )
-            return
         if not self._source_unit_ready():
             QMessageBox.warning(
-                self, "Coordinate Unit Required",
-                "Select the actual coordinate unit before recording a spray path.",
+                self,
+                "Coordinate Unit Required",
+                "Select the actual coordinate unit before interactive spraying.",
             )
             return
 
@@ -4080,30 +4044,53 @@ class MainWindow(QMainWindow):
             parameters["sprayer_profile"],
             float(parameters["standoff_mm"]),
         )
-        standoff_source_units = float(parameters["standoff_mm"]) / mm_per_unit
-        cone_angle_deg = float(footprint["included_angle_deg"])
-        try:
-            self.viewer.start_interactive_spray_path(
-                standoff=standoff_source_units,
-                cone_angle_deg=cone_angle_deg,
-            )
-        except Exception as exc:
-            QMessageBox.critical(
-                self, "Interactive Spray Path Error", str(exc)
-            )
-            return
-
-        self.interactive_spray_path_button.setText("FINISH INTERACTIVE SPRAY PATH")
+        self.viewer.start_interactive_spray_path(
+            standoff=float(parameters["standoff_mm"]) / mm_per_unit,
+            cone_angle_deg=float(footprint["included_angle_deg"]),
+        )
+        self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
+        self.interactive_spray_path_button.setEnabled(True)
         self.status_bar.showMessage(
-            "SPRAY CURSOR ACTIVE | MOVE TO AIM | HOLD LEFT MOUSE TO RECORD | RELEASE TO PAUSE"
+            "INTERACTIVE SPRAY ACTIVE | MOVE THE MOUSE OVER THE PRODUCT TO RECORD"
         )
         self.analysis_summary.setText(
-            "INTERACTIVE SPRAY CURSOR ACTIVE\n\n"
-            "MOVE THE MOUSE OVER THE PRODUCT TO POSITION THE NOZZLE.\n"
-            "THE NOZZLE MAINTAINS THE CONFIGURED STANDOFF FROM THE SURFACE.\n"
-            "HOLD THE LEFT MOUSE BUTTON WHILE MOVING TO RECORD.\n"
-            "RELEASE THE BUTTON TO PAUSE RECORDING.\n"
-            "CLICK FINISH INTERACTIVE SPRAY PATH TO COMPLETE."
+            "INTERACTIVE SPRAY RECORDING
+
+"
+            "Move the mouse over the product surface.
+"
+            "The nozzle follows the surface at the configured standoff.
+"
+            "Valid surface poses are recorded automatically.
+"
+            "Use FINISH SPRAY PATH in this panel to complete recording."
+        )
+
+    def _finish_interactive_spray_path(self):
+        """Stop interactive input, optimize the recorded stroke route and report it."""
+        if self._operation_running or not self.viewer._interactive_spray_active:
+            return
+
+        result = self.viewer.finish_interactive_spray_path()
+        self.interactive_spray_path = result
+        self.interactive_spray_path_button.setEnabled(False)
+        if result is None:
+            self.status_bar.showMessage("INTERACTIVE SPRAY PATH CANCELLED")
+            return
+
+        nozzle_points = np.asarray(result["nozzle_points_product"], dtype=float)
+        path_length = float(result.get("route_length_product_units", 0.0))
+        self.analysis_summary.setText(
+            "INTERACTIVE SPRAY PATH COMPLETE\n\n"
+            f"RECORDED POSES: {len(nozzle_points)}\n"
+            f"ROUTE LENGTH: {path_length:.2f} {self.coordinate_unit}\n"
+            f"STANDOFF: {result['standoff_source_units']:.2f} {self.coordinate_unit}\n"
+            f"CONE ANGLE: {result['cone_angle_deg']:.1f} deg\n\n"
+            "CYAN: OPTIMIZED NOZZLE ROUTE"
+        )
+        self.status_bar.showMessage(
+            f"INTERACTIVE SPRAY PATH COMPLETE | {len(nozzle_points)} POSES | "
+            f"ROUTE {path_length:.2f} {self.coordinate_unit}"
         )
 
     def _display_current_trajectory(self):
