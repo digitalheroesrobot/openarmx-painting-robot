@@ -92,7 +92,7 @@ class DoubleBetaDepositionTests(unittest.TestCase):
             source,
         )
         self.assertIn("playback_layout.addWidget(self.trajectory_thickness_legend_label)", source)
-        self.assertIn("150%+ — OVERSPRAY", source)
+        self.assertIn("150%+ — EXCESS FILM", source)
         self.assertIn("WHEN FILM THICKNESS IS OFF: COVERAGE COLORS SHOW GEOMETRIC REACH", source)
         self.assertNotIn("GEOMETRIC REACH ONLY - NO FILM THICKNESS", source)
 
