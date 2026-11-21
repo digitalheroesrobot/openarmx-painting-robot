@@ -116,7 +116,10 @@ def load_coating_process(config_path: str | Path, legacy_sprayer_profile: dict |
         legacy = legacy_sprayer_profile if isinstance(legacy_sprayer_profile, dict) else {}
         values = deepcopy(DEFAULT_COATING_PROCESS)
         values["base_travel_speed_mm_s"] = legacy.get("travel_speed_mm_s", values["base_travel_speed_mm_s"])
-        values["min_travel_speed_mm_s"] = legacy.get("min_travel_speed_mm_s", values["min_travel_speed_mm_s"])
+        values["min_travel_speed_mm_s"] = min(
+            float(legacy.get("min_travel_speed_mm_s", values["min_travel_speed_mm_s"])),
+            float(values["base_travel_speed_mm_s"]),
+        )
         values["max_travel_acceleration_mm_s2"] = legacy.get("max_travel_acceleration_mm_s2", values["max_travel_acceleration_mm_s2"])
         values["fluid_flow_ml_min"] = legacy.get("fluid_flow_ml_min", values["fluid_flow_ml_min"])
         save_coating_process(path, values)
