@@ -2879,6 +2879,15 @@ class ProductViewer(QWidget):
                 self.trajectory_coverage_label.setText(
                     "N/A — NO STAGE 2 PAINTABLE TARGET AREA"
                 )
+            elif (
+                cache["pattern_type"] == "flat_fan"
+                and cache["fan_thickness_units"] <= 0.0
+            ):
+                self.trajectory_coverage_label.setText(
+                    "N/A — FAN THICKNESS REQUIRED | "
+                    f"TARGET {cache['target_area'] * cache['area_display_scale']:.3f} "
+                    f"{cache['area_display_unit']}"
+                )
             else:
                 self.trajectory_coverage_label.setText(
                     f"{coverage_percent:.1f}% SAMPLED REACH | "
