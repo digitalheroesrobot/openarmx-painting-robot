@@ -4187,10 +4187,13 @@ class MainWindow(QMainWindow):
                 return
 
             nozzle_points = np.asarray(result["nozzle_points_product"], dtype=float)
-            path_length = (
-                float(np.sum(np.linalg.norm(np.diff(nozzle_points, axis=0), axis=1)))
-                if len(nozzle_points) >= 2 else 0.0
-            )
+            stroke_ids = np.asarray(result["stroke_ids"], dtype=np.int64)
+            if len(nozzle_points) >= 2:
+                step_lengths = np.linalg.norm(np.diff(nozzle_points, axis=0), axis=1)
+                continuous_steps = stroke_ids[1:] == stroke_ids[:-1]
+                path_length = float(np.sum(step_lengths[continuous_steps]))
+            else:
+                path_length = 0.0
             self.analysis_summary.setText(
                 "INTERACTIVE SPRAY PATH RECORDED\n\n"
                 f"RECORDED POSES: {len(nozzle_points)}\n"
