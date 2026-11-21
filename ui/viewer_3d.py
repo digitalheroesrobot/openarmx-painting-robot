@@ -385,6 +385,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_transform = np.eye(4, dtype=float)
         self._interactive_spray_latest_pose = None
         self._interactive_spray_records = []
+        self._interactive_spray_stroke_id = -1
         self._interactive_spray_painted_actors = []
         self._interactive_spray_live_actors = []
         self._interactive_spray_path_actor = None
@@ -2362,6 +2363,7 @@ class ProductViewer(QWidget):
             "spray_direction_product": local_pose["spray_direction"].copy(),
             "timestamp": float(pose["timestamp"]),
             "face_index": int(pose["cell_id"]),
+            "stroke_id": int(self._interactive_spray_stroke_id),
         }
         self._interactive_spray_records.append(record)
         return True
@@ -2374,6 +2376,8 @@ class ProductViewer(QWidget):
         if pose is None:
             self._interactive_remove_live_actors()
             self._interactive_spray_latest_pose = None
+            # Do not bridge a recorded stroke across an off-surface gap.
+            self._interactive_spray_recording = False
             self.plotter.render()
             return
         self._interactive_update_cursor(pose)
@@ -2385,6 +2389,7 @@ class ProductViewer(QWidget):
         pose = self._interactive_pick_surface_pose(x, y)
         if pose is None:
             return
+        self._interactive_spray_stroke_id += 1
         self._interactive_spray_recording = True
         self._interactive_update_cursor(pose)
 
@@ -2419,9 +2424,15 @@ class ProductViewer(QWidget):
         records = self._interactive_spray_records
         if len(records) >= 2:
             points = np.asarray([item["nozzle_point_world"] for item in records])
-            lines = np.hstack(([len(points)], np.arange(len(points), dtype=np.int64)))
+            line_cells = []
+            stroke_ids = np.asarray([item["stroke_id"] for item in records], dtype=np.int64)
+            for stroke_id in np.unique(stroke_ids):
+                indices = np.flatnonzero(stroke_ids == stroke_id)
+                if len(indices) >= 2:
+                    line_cells.extend([len(indices), *indices.tolist()])
             path = pv.PolyData(points)
-            path.lines = lines
+            if line_cells:
+                path.lines = np.asarray(line_cells, dtype=np.int64)
             self._interactive_spray_path_actor = self.plotter.add_mesh(
                 path, color="#00E5FF", line_width=3.0,
                 lighting=False, pickable=False,
@@ -2456,6 +2467,9 @@ class ProductViewer(QWidget):
             ),
             "face_indices": np.asarray(
                 [item["face_index"] for item in records], dtype=np.int64
+            ),
+            "stroke_ids": np.asarray(
+                [item["stroke_id"] for item in records], dtype=np.int64
             ),
             "product_transform_4x4": self._interactive_spray_transform.copy(),
         }
