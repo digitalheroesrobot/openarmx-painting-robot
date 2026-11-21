@@ -45,6 +45,8 @@ on:
       - "scripts/test_spray_deposition_path_optimizer.py"
       - "stages/spray_stroke_route_optimizer.py"
       - "scripts/test_spray_stroke_route_optimizer.py"
+      - "ui/viewer_3d.py"
+      - "app/main_window.py"
       - ".github/workflows/spray-coverage-optimizer.yml"
 
 jobs:
