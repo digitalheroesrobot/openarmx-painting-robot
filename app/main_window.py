@@ -619,11 +619,13 @@ class MainWindow(QMainWindow):
             if decision is not None:
                 decision.setEnabled(not readonly)
 
-            # Keep 3D patch selection available.
+            # Patch buttons are editable only during Stage 2 inspection.
+            # In Stage 3 spray trajectory simulation, the selected painting
+            # patches are already committed and must remain read-only.
             select_button = widgets.get("select_button")
 
             if select_button is not None:
-                select_button.setEnabled(True)
+                select_button.setEnabled(not readonly)
 
     def _build_ui(self):
         central = QWidget()
@@ -2655,6 +2657,11 @@ class MainWindow(QMainWindow):
 
         if self.active_stage == STAGE_SPRAY_TRAJECTORY:
             self._collapse_patch_inspection_section()
+            # Painting patch selection is locked once spray trajectory
+            # simulation begins. Stage 2 remains the editing stage.
+            self._set_patch_inspection_readonly(True)
+        elif self.active_stage == STAGE_SURFACE_IDENTIFICATION:
+            self._set_patch_inspection_readonly(False)
 
         # ----------------------------------------------------
         # MAIN ACTION BUTTON
