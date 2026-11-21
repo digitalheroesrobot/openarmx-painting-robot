@@ -2893,6 +2893,8 @@ def _split_strokes_at_surface_discontinuities(
         "surface_points", "surface_normals", "nozzle_points",
         "spray_directions", "nozzle_frames", "face_indices", "patch_ids",
         "source_surface_normals",
+        "step_face_ids",
+        "step_surface_types",
     )
     updated = dict(trajectory)
     new_ids = np.empty(len(old_segments), dtype=np.int64)
