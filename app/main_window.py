@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from core.step_loader import load_step, convert_step_report_units
 from core.result_manager import ResultManager
 from core.geometry_analyzer import detect_hole_candidates
+from core.coating_process import load_coating_process
 
 from stages.stage1_geometry import execute_stage1
 from stages.stage2_surface_identification import execute_stage2
@@ -41,6 +42,7 @@ from stages.cad_surface_analysis import analyze_step_faces
 from stages.stage3_spray_trajectory import execute_stage3
 
 from ui.viewer_3d import ProductViewer
+from ui.coating_process_settings import CoatingProcessSettingsDialog
 from ui.sprayer_settings import (
     SprayerSettingsDialog,
     load_active_sprayer_profile_name,
@@ -356,6 +358,13 @@ class MainWindow(QMainWindow):
                     self.sprayer_profiles[0],
                 ),
             )
+        )
+
+        self.coating_process_config_path = (
+            self.project_root / "config" / "coating_process.json"
+        )
+        self.coating_process = load_coating_process(
+            self.coating_process_config_path, self.sprayer_profile
         )
 
         self.result_manager = ResultManager(self.project_root)
@@ -938,6 +947,22 @@ class MainWindow(QMainWindow):
         self.sprayer_profile_label.setObjectName("Muted")
         self.sprayer_profile_label.setWordWrap(True)
         layout.addWidget(self.sprayer_profile_label)
+
+        self.coating_process_button = QPushButton("COATING PROCESS PARAMETERS")
+        self.coating_process_button.setObjectName("PrimaryButton")
+        self.coating_process_button.setToolTip(
+            "Configure target dry-film thickness, paint flow, transfer efficiency, solids and process motion."
+        )
+        self.coating_process_button.clicked.connect(self._open_coating_process_settings)
+        layout.addWidget(self.coating_process_button)
+
+        self.coating_process_label = QLabel(
+            f"PROCESS: {self.coating_process.get('name', 'default coating process')}  |  "
+            f"TARGET: {self.coating_process.get('target_dry_film_thickness_um', 0.0):.1f} µm"
+        )
+        self.coating_process_label.setObjectName("Muted")
+        self.coating_process_label.setWordWrap(True)
+        layout.addWidget(self.coating_process_label)
 
         layout.addStretch()
         return panel
@@ -2460,6 +2485,7 @@ class MainWindow(QMainWindow):
             "sampling_spacing_mm": float(profile["sampling_spacing_mm"]),
             "spray_angle_deg": float(profile.get("spray_cone_angle_deg", 0.0)),
             "sprayer_profile": profile,
+            "coating_process": dict(self.coating_process),
             # Capture the operator-confirmed CAD-to-World pose before
             # the background Stage 3 worker starts.
             "product_transform_4x4": self.viewer.get_product_transform().tolist(),
@@ -2498,6 +2524,27 @@ class MainWindow(QMainWindow):
         )
         self.status_bar.showMessage(
             f"SPRAYER PROFILE LOADED: {self.sprayer_profile.get('name', 'Unnamed')}"
+        )
+        self._on_spray_parameter_changed()
+
+    def _open_coating_process_settings(self):
+        if self._operation_running:
+            return
+        dialog = CoatingProcessSettingsDialog(
+            config_path=self.coating_process_config_path,
+            current_process=self.coating_process,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.Accepted or dialog.selected_process is None:
+            return
+        self.coating_process = dict(dialog.selected_process)
+        self.coating_process_label.setText(
+            f"PROCESS: {self.coating_process.get('name', 'Unnamed')}  |  "
+            f"TARGET: {self.coating_process['target_dry_film_thickness_um']:.1f} µm  |  "
+            f"FLOW: {self.coating_process['fluid_flow_ml_min']:.1f} ml/min"
+        )
+        self.status_bar.showMessage(
+            f"COATING PROCESS LOADED: {self.coating_process['name']}"
         )
         self._on_spray_parameter_changed()
 
@@ -4085,6 +4132,7 @@ class MainWindow(QMainWindow):
             sampling_spacing_mm=parameters["sampling_spacing_mm"],
             spray_angle_deg=parameters["spray_angle_deg"],
             sprayer_profile=parameters["sprayer_profile"],
+            coating_process=parameters["coating_process"],
             product_transform=parameters["product_transform_4x4"],
         )
 
