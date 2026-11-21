@@ -266,6 +266,30 @@ class ProductViewer(QWidget):
                 padding: 3px 5px;
                 min-height: 20px;
             }
+            QFrame#HookDiameterControls QCheckBox {
+                color: #F3EAF5;
+                spacing: 8px;
+                font-weight: 600;
+                padding: 3px 5px;
+            }
+            QFrame#HookDiameterControls QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border: 2px solid #B8CBD6;
+                border-radius: 3px;
+                background-color: #172A35;
+            }
+            QFrame#HookDiameterControls QCheckBox::indicator:unchecked {
+                background-color: #172A35;
+                border: 2px solid #B8CBD6;
+            }
+            QFrame#HookDiameterControls QCheckBox::indicator:checked {
+                background-color: #00A878;
+                border: 2px solid #62E6B5;
+            }
+            QFrame#HookDiameterControls QCheckBox::indicator:hover {
+                border: 2px solid #FFFFFF;
+            }
         """)
         row = QHBoxLayout(panel)
         row.setContentsMargins(8, 5, 8, 5)
@@ -301,7 +325,7 @@ class ProductViewer(QWidget):
         )
         row.addWidget(self.hole_clearance_input)
 
-        self.hole_info_checkbox = QCheckBox("SHOW HOLE INFORMATION")
+        self.hole_info_checkbox = QCheckBox("SHOW HOLE")
         self.hole_info_checkbox.setChecked(False)
         self.hole_info_checkbox.setToolTip(
             "Show or hide detected hole centers and their D/L/C annotations."
