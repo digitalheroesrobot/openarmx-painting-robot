@@ -2738,7 +2738,7 @@ class ProductViewer(QWidget):
     def _get_surface_sample_hits_from_spray(self, path_index):
         """Return visible mesh samples inside the spray footprint.
 
-        The footprint test is only the geometric envelope. A VTK OBBTree
+        The footprint test is only the geometric envelope. A VTK BSP-tree
         ray query then rejects samples whose nozzle-to-surface segment
         intersects any nearer product triangle, including non-paintable faces.
         """
