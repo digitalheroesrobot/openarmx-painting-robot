@@ -847,54 +847,62 @@ def _sample_candidate_faces(
     candidate_faces = np.flatnonzero(
         face_status_labels == FACE_PAINTABLE_CANDIDATE
     )
+    if len(candidate_faces) == 0:
+        raise RuntimeError(
+            "No valid trajectory samples were generated. "
+            "Check Stage 2 candidate labels and mesh normals."
+        )
+
+    # Validate all candidate triangles in contiguous NumPy batches. The
+    # previous implementation repeated finite checks and cross products in
+    # Python for every face; this preserves source-face order and the same
+    # normal-first skip accounting while moving those operations to NumPy.
+    candidate_triangles = vertices[faces[candidate_faces]]
+    candidate_normals = np.asarray(normals, dtype=np.float64)[candidate_faces]
+    valid_normal_mask = np.all(np.isfinite(candidate_normals), axis=1)
+    skipped_invalid_normals = int(np.count_nonzero(~valid_normal_mask))
+
+    geometry_triangles = candidate_triangles[valid_normal_mask]
+    geometry_face_indices = candidate_faces[valid_normal_mask]
+    edge_ab = geometry_triangles[:, 1] - geometry_triangles[:, 0]
+    edge_ac = geometry_triangles[:, 2] - geometry_triangles[:, 0]
+    triangle_areas = 0.5 * np.linalg.norm(
+        np.cross(edge_ab, edge_ac), axis=1
+    )
+    valid_geometry_mask = (
+        np.all(np.isfinite(geometry_triangles), axis=(1, 2))
+        & np.isfinite(triangle_areas)
+        & (triangle_areas > NORMAL_EPSILON)
+    )
+    skipped_invalid_geometry = int(
+        np.count_nonzero(~valid_geometry_mask)
+    )
+
+    valid_triangles = geometry_triangles[valid_geometry_mask]
+    valid_face_indices = geometry_face_indices[valid_geometry_mask]
+    valid_normals = candidate_normals[valid_normal_mask][valid_geometry_mask]
 
     all_points = []
     all_normals = []
     all_face_indices = []
     all_patch_ids = []
-
     sample_count = 0
-    skipped_invalid_normals = 0
-    skipped_invalid_geometry = 0
 
-    for face_index in candidate_faces:
-
-        triangle = vertices[faces[face_index]]
-        normal = normals[face_index]
-
-        if not np.all(np.isfinite(normal)):
-            skipped_invalid_normals += 1
-            continue
-
-        if not np.all(np.isfinite(triangle)):
-            skipped_invalid_geometry += 1
-            continue
-
-        triangle_area = 0.5 * np.linalg.norm(
-            np.cross(
-                triangle[1] - triangle[0],
-                triangle[2] - triangle[0],
-            )
-        )
-
-        if (
-            not math.isfinite(triangle_area)
-            or triangle_area <= NORMAL_EPSILON
-        ):
-            skipped_invalid_geometry += 1
-            continue
-
+    # Keep the per-face sampler and append order unchanged. Only validation
+    # and area computation above are batched; each face still uses the
+    # exact same triangular-lattice sampling routine.
+    for triangle, normal, face_index in zip(
+        valid_triangles, valid_normals, valid_face_indices
+    ):
         points = _triangle_sample_points(
             triangle,
             spacing_coordinate_units,
         )
-
         if len(points) == 0:
             skipped_invalid_geometry += 1
             continue
 
         sample_count += len(points)
-
         if sample_count > max_total_samples:
             raise RuntimeError(
                 f"Stage 3 would generate more than "
@@ -904,15 +912,12 @@ def _sample_candidate_faces(
             )
 
         all_points.append(points)
-
         all_normals.append(
             np.repeat(normal[None, :], len(points), axis=0)
         )
-
         all_face_indices.append(
             np.full(len(points), face_index, dtype=np.int64)
         )
-
         all_patch_ids.append(
             np.full(
                 len(points),
