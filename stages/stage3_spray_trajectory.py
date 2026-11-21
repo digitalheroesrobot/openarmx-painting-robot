@@ -4397,22 +4397,7 @@ def generate_spray_trajectory(
     # Track overlap (%) and no previously covered probe becomes uncovered.
     cone_angle_for_optimization = float(spray_footprint["included_angle_deg"])
     if cone_angle_for_optimization > 0.0:
-        face_sample_counts = np.bincount(
-            ordered["face_indices"], minlength=len(mesh.faces)
-        )
         face_areas = np.asarray(mesh.area_faces, dtype=np.float64)
-        sample_face_counts = face_sample_counts[ordered["face_indices"]]
-        sample_face_areas = face_areas[ordered["face_indices"]]
-        sample_area_weights = np.zeros(len(ordered["face_indices"]), dtype=np.float64)
-        valid_area_samples = (
-            np.isfinite(sample_face_areas)
-            & (sample_face_areas > 0.0)
-            & (sample_face_counts > 0)
-        )
-        sample_area_weights[valid_area_samples] = (
-            sample_face_areas[valid_area_samples]
-            / sample_face_counts[valid_area_samples]
-        )
         # Use a finer independent mesh-probe set for footprint-area integration.
         # This prevents point pruning from relying only on the coarse candidate
         # centers and missing uncovered regions between them.
