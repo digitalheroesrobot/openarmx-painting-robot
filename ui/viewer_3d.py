@@ -107,6 +107,7 @@ class ProductViewer(QWidget):
         self.hole_candidates = []
         self.hook_diameter_mm = 4.5
         self.hole_clearance_mm = 1.0
+        self.hole_info_visible = False
 
         self.display_mode = "product"
 
@@ -300,6 +301,16 @@ class ProductViewer(QWidget):
         )
         row.addWidget(self.hole_clearance_input)
 
+        self.hole_info_checkbox = QCheckBox("SHOW HOLE INFORMATION")
+        self.hole_info_checkbox.setChecked(False)
+        self.hole_info_checkbox.setToolTip(
+            "Show or hide detected hole centers and their D/L/C annotations."
+        )
+        self.hole_info_checkbox.toggled.connect(
+            self._on_hole_info_visibility_changed
+        )
+        row.addWidget(self.hole_info_checkbox)
+
         row.addStretch(1)
         self.hook_compatible_count_label = QLabel("0 compatible holes")
         row.addWidget(self.hook_compatible_count_label)
@@ -312,6 +323,11 @@ class ProductViewer(QWidget):
 
     def _on_hole_clearance_changed(self, value):
         self.hole_clearance_mm = float(value)
+        if self.current_mesh is not None:
+            self._render_product(reset_camera=False)
+
+    def _on_hole_info_visibility_changed(self, checked):
+        self.hole_info_visible = bool(checked)
         if self.current_mesh is not None:
             self._render_product(reset_camera=False)
 
@@ -389,7 +405,10 @@ class ProductViewer(QWidget):
         self.hook_compatible_count_label.setText(
             f"{len(candidates)} compatible holes"
         )
-        if not candidates:
+
+        # Hole markers and D/L/C annotations are opt-in. The checkbox
+        # starts unchecked so the product opens without hole overlays.
+        if not self.hole_info_visible or not candidates:
             return
         matrix = self._actor_matrix_array()
         centers_view, labels = [], []
