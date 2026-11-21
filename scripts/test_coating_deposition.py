@@ -146,6 +146,22 @@ class DoubleBetaDepositionTests(unittest.TestCase):
         self.assertIn("and not self.viewer.is_trajectory_playing()", main_source)
         self.assertIn("if self.viewer.is_trajectory_playing():", main_source)
 
+    def test_target_face_area_array_uses_target_local_indexing(self):
+        # face_areas is already filtered to Stage 2 target faces, while
+        # target_face_ids retain original full-mesh cell IDs. Indexing the
+        # filtered area array again by full-mesh IDs causes playback crashes.
+        viewer_path = ROOT / "ui" / "viewer_3d.py"
+        source = viewer_path.read_text(encoding="utf-8")
+        compile(source, str(viewer_path), "exec")
+        self.assertEqual(
+            source.count('target_areas = cache["face_areas"]'),
+            2,
+        )
+        self.assertNotIn(
+            'cache["face_areas"][cache["target_face_ids"]]',
+            source,
+        )
+
     def _args(self):
         return {"sample_normalized_xy_by_path": np.zeros((2,2,2)), "sample_area_mm2": np.array([10.,10.]), "sample_facing_cosine_by_path": np.ones((2,2)), "sample_face_ids": np.array([0,1]), "trajectory_time_s": np.array([0.,1.]), "spray_on_mask": np.array([False,True]), "hit_sample_indices_by_path": [np.array([],dtype=int),np.array([0,1])], "fluid_flow_ml_min":60., "transfer_efficiency_percent":50., "volume_solids_percent":40., "footprint_width_mm":10., "footprint_thickness_mm":10.}
     def test_uniform_kernel_integrates_to_one(self):
