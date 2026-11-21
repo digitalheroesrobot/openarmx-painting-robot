@@ -11,10 +11,6 @@ import trimesh
 
 from core.result_manager import ResultManager
 from core.coating_process import validate_coating_process
-from stages.trajectory_safety import (
-    build_spray_gun_config_from_profile,
-    evaluate_spray_gun_clearance,
-)
 
 
 # ============================================================
@@ -4822,21 +4818,11 @@ def execute_stage3(
         product_transform=product_transform,
     )
 
-    # Safety is evaluated in the unchanged PRODUCT_CAD coordinate frame.
-    # nozzle_points are already nozzle-tip positions; TCP offset is retained
-    # as profile metadata but must not be applied a second time here.
-    profile_data = trajectory["parameters"].get("sprayer_profile", {})
-    safety_config = build_spray_gun_config_from_profile(
-        profile_data,
-        minimum_surface_clearance_mm=standoff_mm,
-    )
-    trajectory["trajectory_safety"] = evaluate_spray_gun_clearance(
-        mesh=mesh,
-        nozzle_points=trajectory["nozzle_points"],
-        nozzle_frames=trajectory["nozzle_frames"],
-        config=safety_config,
-        coordinate_unit=trajectory["parameters"]["coordinate_unit"],
-    )
+    # This first Stage 3 action is a spray-point / circular-footprint
+    # visualization preview. Do not run the expensive gun-envelope
+    # clearance analysis in this UI worker: it can take substantially
+    # longer than point generation and prevents the preview from appearing.
+    # Safety remains a separate follow-up operation and is not implied here.
 
     stage_directory = result_manager.stage_dir(
         stl_path,
