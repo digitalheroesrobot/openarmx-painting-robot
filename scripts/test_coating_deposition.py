@@ -5,7 +5,11 @@ from pathlib import Path
 import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
-from core.coating_deposition import (\n    accumulate_double_beta_deposition_step,\n    double_beta_spatial_density,\n    simulate_double_beta_deposition,\n)
+from core.coating_deposition import (
+    accumulate_double_beta_deposition_step,
+    double_beta_spatial_density,
+    simulate_double_beta_deposition,
+)
 class DoubleBetaDepositionTests(unittest.TestCase):
     def test_sparse_step_doubles_with_flow_and_duration(self):
         args = {"normalized_xy": np.array([[0.,0.]]), "sample_area_mm2": np.array([1.]),
