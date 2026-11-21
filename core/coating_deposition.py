@@ -185,3 +185,45 @@ def simulate_double_beta_deposition(*, sample_normalized_xy_by_path: np.ndarray,
     face_thickness = np.divide(face_volume * 1000.0, face_area, out=np.zeros(face_count), where=face_area > 0.0)
     total_input, total_deposited = float(np.sum(input_by_path)), float(np.sum(deposited_by_path))
     return {"sample_thickness_um": sample_thickness, "sample_deposited_volume_mm3": sample_volume, "face_thickness_um": face_thickness, "face_deposited_volume_mm3": face_volume, "input_dry_volume_by_path_mm3": input_by_path, "deposited_volume_by_path_mm3": deposited_by_path, "total_input_dry_volume_mm3": total_input, "total_deposited_volume_mm3": total_deposited, "deposition_fraction": total_deposited / total_input if total_input > 0.0 else 0.0, "model_status": "PREDICTED_UNCALIBRATED"}
+
+def calculate_film_thickness_statistics(
+    face_thickness_um: np.ndarray,
+    face_area_mm2: np.ndarray,
+    target_thickness_um: float,
+) -> dict:
+    """Return area-weighted dry-film statistics over all target faces.
+
+    Faces with zero deposition remain in the distribution. P95 is the
+    area-weighted 95th percentile, not the percentile of face count.
+    """
+    thickness = np.asarray(face_thickness_um, dtype=np.float64)
+    area = np.asarray(face_area_mm2, dtype=np.float64)
+    target = float(target_thickness_um)
+    if thickness.ndim != 1 or area.shape != thickness.shape:
+        raise ValueError("Thickness and face-area arrays must be matching 1-D arrays.")
+    if not np.all(np.isfinite(thickness)) or not np.all(np.isfinite(area)):
+        raise ValueError("Thickness and face areas must be finite.")
+    if np.any(thickness < 0.0) or np.any(area <= 0.0):
+        raise ValueError("Thickness must be non-negative and face areas positive.")
+    if not math.isfinite(target) or target <= 0.0:
+        raise ValueError("Target thickness must be finite and positive.")
+    if thickness.size == 0:
+        raise ValueError("At least one target face is required.")
+
+    total_area = float(np.sum(area))
+    mean = float(np.sum(thickness * area) / total_area)
+    order = np.argsort(thickness, kind="stable")
+    sorted_thickness = thickness[order]
+    cumulative_area = np.cumsum(area[order])
+    p95_index = int(np.searchsorted(cumulative_area, 0.95 * total_area, side="left"))
+    p95 = float(sorted_thickness[min(p95_index, len(sorted_thickness) - 1)])
+    at_or_above = float(np.sum(area[thickness >= target]) / total_area * 100.0)
+    return {
+        "min_um": float(np.min(thickness)),
+        "mean_um": mean,
+        "p95_um": p95,
+        "max_um": float(np.max(thickness)),
+        "area_at_or_above_target_percent": at_or_above,
+        "area_below_target_percent": 100.0 - at_or_above,
+        "total_area_mm2": total_area,
+    }
