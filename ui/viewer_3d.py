@@ -59,6 +59,8 @@ def _build_spray_footprint_overlay(
         0.10, 0.20, 0.30, 0.40, 0.50,
         0.60, 0.70, 0.80, 0.90, 1.0,
     ),
+    surface=None,
+    locator=None,
 ):
     """Intersect each spray cone with the actual product mesh.
 
@@ -81,29 +83,30 @@ def _build_spray_footprint_overlay(
     if int(rays_per_ring) < 8:
         raise ValueError("rays_per_ring must be at least 8.")
 
-    # The application stores the product as a trimesh.Trimesh. Convert
-    # its triangular faces explicitly before using PyVista/VTK intersection.
-    if not hasattr(mesh, "vertices") or not hasattr(mesh, "faces"):
-        raise TypeError("Product mesh must expose trimesh-style vertices and faces.")
-    mesh_vertices = np.asarray(mesh.vertices, dtype=np.float64)
-    mesh_faces = np.asarray(mesh.faces, dtype=np.int64)
-    if (
-        mesh_vertices.ndim != 2 or mesh_vertices.shape[1] != 3
-        or mesh_faces.ndim != 2 or mesh_faces.shape[1] != 3
-        or len(mesh_vertices) == 0 or len(mesh_faces) == 0
-    ):
-        return []
-    if (
-        not np.all(np.isfinite(mesh_vertices))
-        or np.any(mesh_faces < 0)
-        or np.any(mesh_faces >= len(mesh_vertices))
-    ):
-        raise ValueError("Product mesh contains invalid vertices or triangle indices.")
-    packed_faces = np.column_stack((
-        np.full(len(mesh_faces), 3, dtype=np.int64),
-        mesh_faces,
-    )).ravel()
-    surface = pv.PolyData(mesh_vertices, packed_faces).clean()
+    # Reuse a prepared PyVista surface and VTK locator for interactive
+    # cursor updates; building the spatial index on every mouse event is costly.
+    if surface is None:
+        if not hasattr(mesh, "vertices") or not hasattr(mesh, "faces"):
+            raise TypeError("Product mesh must expose trimesh-style vertices and faces.")
+        mesh_vertices = np.asarray(mesh.vertices, dtype=np.float64)
+        mesh_faces = np.asarray(mesh.faces, dtype=np.int64)
+        if (
+            mesh_vertices.ndim != 2 or mesh_vertices.shape[1] != 3
+            or mesh_faces.ndim != 2 or mesh_faces.shape[1] != 3
+            or len(mesh_vertices) == 0 or len(mesh_faces) == 0
+        ):
+            return []
+        if (
+            not np.all(np.isfinite(mesh_vertices))
+            or np.any(mesh_faces < 0)
+            or np.any(mesh_faces >= len(mesh_vertices))
+        ):
+            raise ValueError("Product mesh contains invalid vertices or triangle indices.")
+        packed_faces = np.column_stack((
+            np.full(len(mesh_faces), 3, dtype=np.int64),
+            mesh_faces,
+        )).ravel()
+        surface = pv.PolyData(mesh_vertices, packed_faces).clean()
     if surface.n_cells == 0:
         return []
     bounds = np.asarray(surface.bounds, dtype=np.float64).reshape(3, 2)
@@ -111,9 +114,10 @@ def _build_spray_footprint_overlay(
     if not np.isfinite(diagonal) or diagonal <= 1e-9:
         return []
 
-    locator = vtkOBBTree()
-    locator.SetDataSet(surface)
-    locator.BuildLocator()
+    if locator is None:
+        locator = vtkOBBTree()
+        locator.SetDataSet(surface)
+        locator.BuildLocator()
     half_angle = math.radians(float(cone_angle_deg)) * 0.5
     ray_length = diagonal * 4.0
     ray_count = int(rays_per_ring)
@@ -386,6 +390,8 @@ class ProductViewer(QWidget):
         self._interactive_spray_latest_pose = None
         self._interactive_spray_records = []
         self._interactive_spray_stroke_id = -1
+        self._interactive_spray_surface = None
+        self._interactive_spray_locator = None
         self._interactive_spray_painted_actors = []
         self._interactive_spray_live_actors = []
         self._interactive_spray_path_actor = None
@@ -2153,6 +2159,10 @@ class ProductViewer(QWidget):
         self._interactive_spray_standoff = float(standoff)
         self._interactive_spray_cone_angle_deg = float(cone_angle_deg)
         self._interactive_spray_transform = self._actor_matrix_array().copy()
+        self._interactive_spray_surface = self._to_polydata(self.current_mesh).clean()
+        self._interactive_spray_locator = vtkOBBTree()
+        self._interactive_spray_locator.SetDataSet(self._interactive_spray_surface)
+        self._interactive_spray_locator.BuildLocator()
         self._interactive_spray_latest_pose = None
         self._interactive_spray_records = []
         self._interactive_spray_painted_actors = []
@@ -2274,6 +2284,8 @@ class ProductViewer(QWidget):
             self._interactive_spray_cone_angle_deg,
             rays_per_ring=16,
             radial_rings=(0.25, 0.50, 0.75, 1.0),
+            surface=self._interactive_spray_surface,
+            locator=self._interactive_spray_locator,
         )
         recorded_new_pose = False
         if footprints and footprints[0][0].n_cells:
