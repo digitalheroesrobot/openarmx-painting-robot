@@ -800,7 +800,7 @@ def _triangle_sample_points(
 
     # First sub-triangle centroid for every triangular lattice cell.
     first = (
-        (1.0 - i - j / 3.0)[:, None] * a
+        (1.0 - i - j - 2.0 / (3.0 * n))[:, None] * a
         + (i + 1.0 / (3.0 * n))[:, None] * b
         + (j + 1.0 / (3.0 * n))[:, None] * c
     )
@@ -811,7 +811,7 @@ def _triangle_sample_points(
         i2 = i_grid[second_mask].astype(np.float64) / n
         j2 = j_grid[second_mask].astype(np.float64) / n
         second = (
-            (1.0 - i2 - j2 - 2.0 / (3.0 * n))[:, None] * a
+            (1.0 - i2 - j2 - 4.0 / (3.0 * n))[:, None] * a
             + (i2 + 2.0 / (3.0 * n))[:, None] * b
             + (j2 + 2.0 / (3.0 * n))[:, None] * c
         )
