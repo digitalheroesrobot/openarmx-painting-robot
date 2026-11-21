@@ -40,6 +40,87 @@ def double_beta_spatial_density(normalized_xy: np.ndarray, alpha_x: float = 2.0,
     x, y = (points[:, 0] + 1.0) * 0.5, (points[:, 1] + 1.0) * 0.5
     return (0.5 * _beta_pdf_unit_interval(x, alpha_x, beta_x)) * (0.5 * _beta_pdf_unit_interval(y, alpha_y, beta_y))
 
+
+def accumulate_double_beta_deposition_step(
+    *,
+    normalized_xy: np.ndarray,
+    sample_area_mm2: np.ndarray,
+    sample_facing_cosine: np.ndarray,
+    sample_footprint_area_mm2: np.ndarray,
+    duration_s: float,
+    fluid_flow_ml_min: float,
+    transfer_efficiency_percent: float,
+    volume_solids_percent: float,
+    number_of_coats: int = 1,
+    spray_on: bool = True,
+    alpha_x: float = 2.0,
+    beta_x: float = 2.0,
+    alpha_y: float = 2.0,
+    beta_y: float = 2.0,
+) -> dict:
+    """Calculate one time interval's sparse surface deposition increment.
+
+    All arrays refer only to visible samples returned by the viewer's
+    footprint and first-hit ray-casting stage. The caller accumulates the
+    returned sample thickness into its persistent per-mesh-sample array.
+    """
+    xy = np.asarray(normalized_xy, dtype=np.float64)
+    areas = np.asarray(sample_area_mm2, dtype=np.float64)
+    facing = np.asarray(sample_facing_cosine, dtype=np.float64)
+    footprint_areas = np.asarray(sample_footprint_area_mm2, dtype=np.float64)
+    if xy.ndim != 2 or xy.shape[1] != 2:
+        raise ValueError("normalized_xy must have shape (N, 2).")
+    count = len(xy)
+    if any(a.shape != (count,) for a in (areas, facing, footprint_areas)):
+        raise ValueError("Sparse deposition arrays must have matching sample counts.")
+    if not all(np.all(np.isfinite(a)) for a in (xy, areas, facing, footprint_areas)):
+        raise ValueError("Sparse deposition arrays must be finite.")
+    if np.any(areas <= 0.0) or np.any(footprint_areas <= 0.0):
+        raise ValueError("Sample and footprint areas must be positive.")
+    dt, flow = float(duration_s), float(fluid_flow_ml_min)
+    efficiency = float(transfer_efficiency_percent) / 100.0
+    solids = float(volume_solids_percent) / 100.0
+    coats = int(number_of_coats)
+    if not all(math.isfinite(v) for v in (dt, flow, efficiency, solids)):
+        raise ValueError("Process values must be finite.")
+    if dt < 0.0 or flow < 0.0:
+        raise ValueError("Duration and flow must be non-negative.")
+    if not 0.0 <= efficiency <= 1.0 or not 0.0 <= solids <= 1.0:
+        raise ValueError("Efficiency and solids must be in [0,100] percent.")
+    if coats < 1 or coats > 20 or coats != number_of_coats:
+        raise ValueError("number_of_coats must be an integer from 1 to 20.")
+    for name, value in (("alpha_x", alpha_x), ("beta_x", beta_x),
+                        ("alpha_y", alpha_y), ("beta_y", beta_y)):
+        _validate_beta_shape(value, name)
+    input_dry = (
+        flow * dt / 60.0 * 1000.0 * efficiency * solids * coats
+        if spray_on else 0.0
+    )
+    increments = np.zeros(count, dtype=np.float64)
+    deposited = np.zeros(count, dtype=np.float64)
+    if input_dry > 0.0 and count:
+        density = double_beta_spatial_density(
+            xy, alpha_x, beta_x, alpha_y, beta_y
+        )
+        fractions = np.clip(
+            density * 4.0 * areas / footprint_areas
+            * np.clip(facing, 0.0, 1.0),
+            0.0, 1.0,
+        )
+        deposited = input_dry * fractions
+        total = float(np.sum(deposited))
+        if total > input_dry and total > 0.0:
+            deposited *= input_dry / total
+        increments = deposited / areas * 1000.0
+    return {
+        "sample_thickness_increment_um": increments,
+        "sample_deposited_volume_mm3": deposited,
+        "input_dry_volume_mm3": float(input_dry),
+        "deposited_volume_mm3": float(np.sum(deposited)),
+        "deposition_fraction": float(np.sum(deposited) / input_dry) if input_dry > 0 else 0.0,
+    }
+
+
 def simulate_double_beta_deposition(*, sample_normalized_xy_by_path: np.ndarray, sample_area_mm2: np.ndarray, sample_facing_cosine_by_path: np.ndarray, sample_face_ids: np.ndarray, trajectory_time_s: np.ndarray, spray_on_mask: np.ndarray, hit_sample_indices_by_path: Iterable[np.ndarray], fluid_flow_ml_min: float, transfer_efficiency_percent: float, volume_solids_percent: float, footprint_width_mm: float, footprint_thickness_mm: float, number_of_coats: int = 1, alpha_x: float = 2.0, beta_x: float = 2.0, alpha_y: float = 2.0, beta_y: float = 2.0) -> dict:
     """Accumulate predicted dry film; visible hit IDs must already include occlusion tests.
 
