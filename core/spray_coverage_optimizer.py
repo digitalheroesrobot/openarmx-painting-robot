@@ -19,6 +19,36 @@ def _as_vector(values, name, dtype=np.float64):
     return result
 
 
+def world_samples_to_product_cad_mm(*, points_world, normals_world, product_transform_4x4, mm_per_unit):
+    """Convert Viewer-world surface samples into PRODUCT_CAD millimeters."""
+    points = np.asarray(points_world, dtype=np.float64)
+    normals = np.asarray(normals_world, dtype=np.float64)
+    transform = np.asarray(product_transform_4x4, dtype=np.float64)
+    scale = float(mm_per_unit)
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("points_world must have shape (N, 3).")
+    if normals.shape != points.shape:
+        raise ValueError("normals_world must have shape (N, 3).")
+    if transform.shape != (4, 4) or not np.all(np.isfinite(transform)):
+        raise ValueError("product_transform_4x4 must be a finite 4x4 matrix.")
+    if not np.allclose(transform[3], [0.0, 0.0, 0.0, 1.0], atol=1e-9):
+        raise ValueError("Product transform must be affine.")
+    rotation = transform[:3, :3]
+    if not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-6):
+        raise ValueError("Product transform rotation must be orthonormal.")
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("mm_per_unit must be finite and positive.")
+    if not np.all(np.isfinite(points)) or not np.all(np.isfinite(normals)):
+        raise ValueError("World points and normals must be finite.")
+    cad_points_mm = ((points - transform[:3, 3]) @ rotation) * scale
+    cad_normals = normals @ rotation
+    lengths = np.linalg.norm(cad_normals, axis=1)
+    if np.any(lengths <= 1e-12):
+        raise ValueError("World normals must be non-zero.")
+    cad_normals /= lengths[:, None]
+    return cad_points_mm, cad_normals
+
+
 def analyze_surface_deficits(
     *,
     sample_area_mm2,
