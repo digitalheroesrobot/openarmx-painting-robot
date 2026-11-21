@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""Integration checks for VTK OBB-tree spray line-of-sight queries."""
+"""Integration checks for VTK static-cell-locator spray line-of-sight queries."""
 from __future__ import annotations
 
 import numpy as np
 import pyvista as pv
+import sys
+from pathlib import Path
+
+# Support direct execution: python scripts/test_spray_occlusion_vtk.py
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
-from vtkmodules.vtkFiltersGeneral import vtkOBBTree
+from vtkmodules.vtkFiltersGeneral import vtkStaticCellLocator
 
 from core.spray_coverage import is_line_of_sight_occluded
 
@@ -42,7 +49,7 @@ def main() -> None:
 
     # An open triangle at z=4 must occlude the target at z=10.
     blocker = build_triangle_plane(4.0)
-    locator = vtkOBBTree()
+    locator = vtkStaticCellLocator()
     locator.SetDataSet(blocker)
     locator.BuildLocator()
     hits = intersect(locator, origin, target)
@@ -51,7 +58,7 @@ def main() -> None:
     
     # A triangle only at the target endpoint is not an earlier occluder.
     endpoint = build_triangle_plane(10.0)
-    endpoint_locator = vtkModifiedBSPTree()
+    endpoint_locator = vtkStaticCellLocator()
     endpoint_locator.SetDataSet(endpoint)
     endpoint_locator.BuildLocator()
     endpoint_hits = intersect(endpoint_locator, origin, target)
@@ -62,7 +69,7 @@ def main() -> None:
     # An off-axis triangle must not intersect the nozzle-to-target segment.
     off_axis = build_triangle_plane(4.0)
     off_axis.points = off_axis.points + np.asarray([5.0, 0.0, 0.0])
-    off_axis_locator = vtkModifiedBSPTree()
+    off_axis_locator = vtkStaticCellLocator()
     off_axis_locator.SetDataSet(off_axis)
     off_axis_locator.BuildLocator()
     off_axis_hits = intersect(off_axis_locator, origin, target)
