@@ -2339,7 +2339,9 @@ class ProductViewer(QWidget):
             self.face_surface_types = None
 
         self.display_mode = "trajectory"
-        self._set_trajectory_controls_visible(True)
+        # Keep the interface at the trajectory-generation endpoint. The 3D
+        # trajectory remains visible, but post-generation controls are hidden.
+        self._set_trajectory_controls_visible(False)
         self.pose_control_panel.hide()
 
         self._render_product(reset_camera=True)
