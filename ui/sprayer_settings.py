@@ -30,14 +30,14 @@ DEFAULT_SPRAYER_PROFILE = {
     "manufacturer": "Unspecified",
     "model": "Generic HVLP starting profile",
     "technology": "HVLP air spray",
-    "pattern_type": "flat_fan",
+    "pattern_type": "round_cone",
     "nozzle_orifice_mm": 1.4,
     "nozzle_length_mm": 25.0,
     "gun_body_length_mm": 220.0,
     "gun_body_diameter_mm": 45.0,
     "tcp_to_nozzle_tip_mm": 0.0,
     "standoff_mm": 180.0,
-    "spray_cone_angle_deg": 74.0,
+    "spray_cone_angle_deg": 45.0,
     "fan_reference_distance_mm": 200.0,
     "fan_thickness_at_reference_mm": 0.0,
     "overlap_percent": 50.0,
@@ -86,6 +86,11 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
                 continue
             merged = deepcopy(DEFAULT_SPRAYER_PROFILE)
             merged.update(deepcopy(item))
+            # This simplified workflow supports circular cone spray only.
+            # A legacy flat-fan angle is not a measured cone angle.
+            if str(item.get("pattern_type", "round_cone")) != "round_cone":
+                merged["spray_cone_angle_deg"] = 45.0
+            merged["pattern_type"] = "round_cone"
 
             # Older local profiles stored these dimensions as 0.0 ("not
             # specified"). Upgrade only missing/zero values; preserve every
@@ -208,7 +213,7 @@ class SprayPatternPreview(QWidget):
         sample_spacing = max(
             0.1, float(profile.get("sampling_spacing_mm", 20.0))
         )
-        pattern_type = str(profile.get("pattern_type", "flat_fan"))
+        pattern_type = "round_cone"
 
         spray_width_mm = (
             2.0 * standoff * math.tan(math.radians(angle * 0.5))
@@ -421,9 +426,8 @@ class SprayerSettingsDialog(QDialog):
         self.pattern_combo.addItem(
             "Round cone — circular footprint", "round_cone"
         )
-        self.pattern_combo.addItem(
-            "Flat fan — narrow rectangular footprint", "flat_fan"
-        )
+        self.pattern_combo.setEnabled(False)
+
         self.pattern_description = QLabel()
         self.pattern_description.setWordWrap(True)
         self.pattern_description.setStyleSheet(
@@ -434,16 +438,6 @@ class SprayerSettingsDialog(QDialog):
             "The choice controls trajectory spacing, surface footprint preview "
             "and geometric coverage estimation."
         )
-        self.round_cone_preset = QComboBox()
-        self.round_cone_preset.addItem("Custom angle", None)
-        self.round_cone_preset.addItem("Narrow test — 30°", 30.0)
-        self.round_cone_preset.addItem("Medium test — 45° (recommended start)", 45.0)
-        self.round_cone_preset.addItem("Wide test — 60°", 60.0)
-        self.round_cone_preset.setToolTip(
-            "Engineering test presets only, not universal nozzle standards. "
-            "Select the actual manufacturer's full included angle when known."
-        )
-
         # Put the parameters most often adjusted for trajectory generation
         # at the top of the left-hand form for quick access.
         self.fields = {}
@@ -457,8 +451,6 @@ class SprayerSettingsDialog(QDialog):
             ("gun_body_length_mm", "Gun body length (mm)", 0.0, 600.0, 1),
             ("gun_body_diameter_mm", "Gun body diameter (mm)", 0.0, 200.0, 1),
             ("tcp_to_nozzle_tip_mm", "TCP to nozzle tip (mm)", 0.0, 500.0, 1),
-            ("fan_reference_distance_mm", "Reference distance (mm)", 10.0, 2000.0, 1),
-            ("fan_thickness_at_reference_mm", "Fan thickness at reference distance (mm)", 0.0, 1000.0, 1),
             ("travel_speed_mm_s", "Base gun travel speed (mm/s)", 1.0, 2000.0, 1),
             ("min_travel_speed_mm_s", "Minimum curved/corner speed (mm/s)", 1.0, 2000.0, 1),
             ("max_travel_acceleration_mm_s2", "Maximum travel acceleration (mm/s²)", 1.0, 10000.0, 1),
@@ -473,8 +465,6 @@ class SprayerSettingsDialog(QDialog):
             "spray_cone_angle_deg",
             "overlap_percent",
             "sampling_spacing_mm",
-            "fan_reference_distance_mm",
-            "fan_thickness_at_reference_mm",
         }
         # These fields existed in early sprayer-profile files. They remain
         # in the stored JSON for backward compatibility, but are now edited
@@ -580,10 +570,6 @@ class SprayerSettingsDialog(QDialog):
             if key in trajectory_keys:
                 add_profile_field(key, label, minimum, maximum, decimals)
 
-        form.addRow("Round-cone test preset", self.round_cone_preset)
-        self.round_cone_preset.currentIndexChanged.connect(
-            self._on_round_cone_preset_changed
-        )
         self.fields["spray_cone_angle_deg"].valueChanged.connect(
             self._on_spray_angle_edited
         )
@@ -671,7 +657,6 @@ class SprayerSettingsDialog(QDialog):
         for widget in (self.name_edit, self.manufacturer_edit, self.model_edit):
             widget.textChanged.connect(self._refresh_preview)
         self.technology_combo.currentTextChanged.connect(self._refresh_preview)
-        self.pattern_combo.currentIndexChanged.connect(self._on_pattern_changed)
         self.fields["standoff_mm"].valueChanged.connect(self._update_pattern_controls)
         self.fields["spray_cone_angle_deg"].valueChanged.connect(self._update_pattern_controls)
 
@@ -705,93 +690,28 @@ class SprayerSettingsDialog(QDialog):
         self.manufacturer_edit.setText(str(data.get("manufacturer", "")))
         self.model_edit.setText(str(data.get("model", "")))
         self.technology_combo.setCurrentText(str(data.get("technology", "Other / unspecified")))
-        pattern_index = self.pattern_combo.findData(data.get("pattern_type", "flat_fan"))
-        self.pattern_combo.setCurrentIndex(max(0, pattern_index))
+        self.pattern_combo.setCurrentIndex(0)
         for key, spin in self.fields.items():
             spin.setValue(float(data.get(key, 0.0) or 0.0))
         self.profile_notes.setText(str(data.get("profile_notes", "")))
         self._loading = False
-        if data.get("pattern_type", "flat_fan") == "round_cone":
-            self._set_round_cone_angle(
-                float(data.get("spray_cone_angle_deg", 45.0))
-            )
         self._update_pattern_controls()
-        self._refresh_preview()
-
-    def _on_pattern_changed(self, *_):
-        if self._loading:
-            return
-        if self.pattern_combo.currentData() == "round_cone":
-            # The old 74-degree value was an estimated flat-fan equivalent,
-            # not a measured round-cone nozzle angle. Start round-cone tests
-            # at the explicit 45-degree medium preset instead.
-            self._set_round_cone_angle(45.0)
-        self._update_pattern_controls()
-        self._refresh_preview()
-
-    def _set_round_cone_angle(self, angle):
-        spin = self.fields["spray_cone_angle_deg"]
-        spin.blockSignals(True)
-        spin.setValue(float(angle))
-        spin.blockSignals(False)
-        preset_index = self.round_cone_preset.findData(float(angle))
-        self.round_cone_preset.blockSignals(True)
-        self.round_cone_preset.setCurrentIndex(
-            preset_index if preset_index >= 0 else 0
-        )
-        self.round_cone_preset.blockSignals(False)
-
-    def _on_round_cone_preset_changed(self, index):
-        if self._loading:
-            return
-        angle = self.round_cone_preset.currentData()
-        if angle is not None:
-            self._set_round_cone_angle(float(angle))
-            self._update_pattern_controls()
-            self._refresh_preview()
-
-    def _on_spray_angle_edited(self, *_):
-        if self._loading:
-            return
-        if self.pattern_combo.currentData() == "round_cone":
-            angle = float(self.fields["spray_cone_angle_deg"].value())
-            preset_index = self.round_cone_preset.findData(angle)
-            self.round_cone_preset.blockSignals(True)
-            self.round_cone_preset.setCurrentIndex(
-                preset_index if preset_index >= 0 else 0
-            )
-            self.round_cone_preset.blockSignals(False)
-            self._update_pattern_controls()
         self._refresh_preview()
 
     def _update_pattern_controls(self):
-        pattern = str(self.pattern_combo.currentData() or "flat_fan")
-        is_flat_fan = pattern == "flat_fan"
-        self.fields["fan_reference_distance_mm"].setEnabled(is_flat_fan)
-        self.fields["fan_thickness_at_reference_mm"].setEnabled(is_flat_fan)
-        self.round_cone_preset.setEnabled(not is_flat_fan)
-        if is_flat_fan:
-            self.pattern_description.setText(
-                "Flat fan: produces a narrow rectangular / fan-shaped footprint. "
-                "Enter the measured fan thickness at the reference distance; "
-                "without it, the footprint cannot be estimated reliably."
-            )
-        else:
-            standoff_mm = float(self.fields["standoff_mm"].value())
-            full_angle_deg = float(self.fields["spray_cone_angle_deg"].value())
-            footprint_diameter_mm = (
-                2.0 * standoff_mm
-                * math.tan(math.radians(full_angle_deg * 0.5))
-            )
-            self.pattern_description.setText(
-                "Round cone: circular target footprint. "
-                f"Calculated diameter at the target: {footprint_diameter_mm:.1f} mm "
-                f"(working distance {standoff_mm:.1f} mm, full included angle "
-                f"{full_angle_deg:.1f}°). "
-                "Verify the angle against the actual nozzle specification; "
-                "an estimated flat-fan angle is not a measured round-cone angle. "
-                "Flat-fan thickness settings are not used."
-            )
+        """Keep round-cone geometry explicit and display its computed footprint."""
+        standoff_mm = float(self.fields["standoff_mm"].value())
+        full_angle_deg = float(self.fields["spray_cone_angle_deg"].value())
+        footprint_diameter_mm = (
+            2.0 * standoff_mm
+            * math.tan(math.radians(full_angle_deg * 0.5))
+        )
+        self.pattern_description.setText(
+            "Round cone only: circular footprint on the target surface. "
+            f"Calculated diameter: {footprint_diameter_mm:.1f} mm "
+            f"(working distance {standoff_mm:.1f} mm, full included angle "
+            f"{full_angle_deg:.1f}°). The angle is read from this saved profile."
+        )
 
     def _collect_profile(self):
         profile = {
@@ -799,7 +719,7 @@ class SprayerSettingsDialog(QDialog):
             "manufacturer": self.manufacturer_edit.text().strip(),
             "model": self.model_edit.text().strip(),
             "technology": self.technology_combo.currentText(),
-            "pattern_type": self.pattern_combo.currentData(),
+            "pattern_type": "round_cone",
             "profile_notes": self.profile_notes.text(),
         }
         profile.update({
