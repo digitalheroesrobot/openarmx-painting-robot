@@ -143,8 +143,9 @@ class ProductViewer(QWidget):
         # Surface filters stay enabled so the complete product remains visible;
         # all trajectory overlays are opt-in and can be enabled one at a time.
         self.trajectory_visibility = {
-            "planar": True,
-            "curved": True,
+            # Start with the clean, unpainted CAD product.
+            "planar": False,
+            "curved": False,
             "nozzle": False,
             "arrows": False,
             "paths": False,
@@ -3435,58 +3436,68 @@ class ProductViewer(QWidget):
             self.display_mode == "trajectory"
             and self.trajectory_data is not None
         ):
-            face_mask = self._get_trajectory_surface_mask()
+            # Render the complete CAD product as an opaque, unpainted base.
+            # Neutral satin-metal gray gives simulated coating good contrast.
+            polydata = self._to_polydata(self.current_mesh)
+            face_count = len(self.current_mesh.faces)
+            base_rgb = np.tile(
+                np.asarray([178, 188, 195], dtype=np.uint8),
+                (face_count, 1),
+            )
+            self._trajectory_surface_face_mask = np.ones(face_count, dtype=bool)
+            self._trajectory_surface_base_rgb = base_rgb.copy()
+            self._trajectory_surface_polydata = polydata
+            polydata.cell_data["Paint Preview RGB"] = base_rgb.copy()
 
-            polydata = self._to_polydata(
-                self.current_mesh,
-                face_mask=face_mask,
+            self._pose_actor = self.plotter.add_mesh(
+                polydata,
+                scalars="Paint Preview RGB",
+                rgb=True,
+                preference="cell",
+                opacity=1.0,
+                show_edges=True,
+                edge_color="#35434B",
+                line_width=0.7,
+                smooth_shading=True,
+                pickable=False,
+            )
+            self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
+            self._pose_actor.SetUserMatrix(
+                self._vtk_matrix_from_numpy(self.trajectory_product_transform)
             )
 
-            if polydata.n_cells > 0:
-                if self.face_surface_types is not None:
-                    type_colors = {
-                        # Muted colors intentionally match the two surface filters.
-                        "planar": (120, 175, 165),   # #78AFA5
-                        "curved": (198, 154, 98),    # #C69A62
-                        "unknown": (167, 139, 250),
-                    }
-                    base_face_rgb = np.asarray([
-                        type_colors.get(str(kind).lower(), type_colors["unknown"])
-                        for kind in self.face_surface_types
-                    ], dtype=np.uint8)
-                else:
-                    base_face_rgb = np.tile(
-                        np.asarray([159, 183, 199], dtype=np.uint8),
-                        (len(self.current_mesh.faces), 1),
+            # Optional surface coating overlays sit on top of the base CAD.
+            # Planar preview is fully opaque; curved preview is translucent.
+            if self.face_surface_types is not None:
+                surface_types = np.char.lower(
+                    np.asarray(self.face_surface_types).astype(str)
+                )
+                for surface_key, color, opacity in (
+                    ("planar", "#38AFA0", 1.0),
+                    ("curved", "#D99A45", 0.55),
+                ):
+                    if not self.trajectory_visibility[surface_key]:
+                        continue
+                    mask = surface_types == surface_key
+                    if not np.any(mask):
+                        continue
+                    overlay_mesh = self._to_polydata(
+                        self.current_mesh, face_mask=mask
                     )
-
-                # Keep a reference to the rendered surface data so playback
-                # can progressively blend covered faces toward the coating color.
-                self._trajectory_surface_face_mask = face_mask.copy()
-                self._trajectory_surface_base_rgb = base_face_rgb[face_mask].copy()
-                self._trajectory_surface_polydata = polydata
-                polydata.cell_data["Paint Preview RGB"] = (
-                    self._trajectory_surface_base_rgb.copy()
-                )
-                self._pose_actor = self.plotter.add_mesh(
-                    polydata,
-                    scalars="Paint Preview RGB",
-                    rgb=True,
-                    preference="cell",
-                    opacity=0.96,
-                    show_edges=False,
-                    smooth_shading=True,
-                    pickable=False,
-                )
-                self._pose_actor.SetOrigin(0.0, 0.0, 0.0)
-                self._pose_actor.SetUserMatrix(
-                    self._vtk_matrix_from_numpy(self.trajectory_product_transform)
-                )
-            else:
-                self._pose_actor = None
-                self._trajectory_surface_polydata = None
-                self._trajectory_surface_face_mask = None
-                self._trajectory_surface_base_rgb = None
+                    if overlay_mesh.n_cells == 0:
+                        continue
+                    overlay_actor = self.plotter.add_mesh(
+                        overlay_mesh,
+                        color=color,
+                        opacity=opacity,
+                        show_edges=False,
+                        smooth_shading=True,
+                        pickable=False,
+                    )
+                    overlay_actor.SetOrigin(0.0, 0.0, 0.0)
+                    overlay_actor.SetUserMatrix(
+                        self._vtk_matrix_from_numpy(self.trajectory_product_transform)
+                    )
 
             self._add_trajectory_visualization()
 
