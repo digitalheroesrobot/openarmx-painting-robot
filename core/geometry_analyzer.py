@@ -2307,6 +2307,14 @@ def _detect_holes_from_step_brep(mesh: trimesh.Trimesh) -> list[dict]:
                 "radius": radius,
                 "centroid": centroid,
                 "area": max(float(face.get("area_mm2", 0.0)), 0.0),
+                "axial_v_bounds": (
+                    [float(face["parameter_bounds"]["v"][0]),
+                     float(face["parameter_bounds"]["v"][1])]
+                    if isinstance(face.get("parameter_bounds"), dict)
+                    and isinstance(face["parameter_bounds"].get("v"), list)
+                    and len(face["parameter_bounds"]["v"]) == 2
+                    else None
+                ),
                 "orientation": str(face.get("orientation", "UNKNOWN")),
                 "adjacent_face_ids": [int(v) for v in face.get("adjacent_face_ids", [])],
             })
@@ -2371,8 +2379,22 @@ def _detect_holes_from_step_brep(mesh: trimesh.Trimesh) -> list[dict]:
         wall_centroid = np.average(
             face_centroids, axis=0, weights=face_weights
         )
-        axial_position = float(np.dot(wall_centroid - location, axis))
-        axis_center = location + axial_position * axis
+        # OCC cylindrical surface V is the signed axial coordinate.
+        axial_bounds = [
+            sorted(v["axial_v_bounds"])
+            for v in group
+            if v.get("axial_v_bounds") is not None
+            and np.all(np.isfinite(v["axial_v_bounds"]))
+        ]
+        if not axial_bounds:
+            continue
+        axial_min = min(bounds[0] for bounds in axial_bounds)
+        axial_max = max(bounds[1] for bounds in axial_bounds)
+        bore_length = float(axial_max - axial_min)
+        if not np.isfinite(bore_length) or bore_length <= 1e-6:
+            continue
+        axial_midpoint = 0.5 * (axial_min + axial_max)
+        axis_center = location + axial_midpoint * axis
         closest_axis_point = location - float(np.dot(location, axis)) * axis
         axis_distance = float(np.linalg.norm(closest_axis_point))
         center_distance = float(np.linalg.norm(axis_center))
@@ -2395,6 +2417,10 @@ def _detect_holes_from_step_brep(mesh: trimesh.Trimesh) -> list[dict]:
             "adjacent_face_ids": adjacent_ids,
             "cylindrical_face_count": len(group),
             "axis_center_coordinate_units": axis_center.tolist(),
+            "opening_center_coordinate_units": axis_center.tolist(),
+            "hole_length_coordinate_units": bore_length,
+            "axial_start_coordinate_units": (location + axial_min * axis).tolist(),
+            "axial_end_coordinate_units": (location + axial_max * axis).tolist(),
             "axis_direction": axis.tolist(),
             "closest_axis_point_to_origin_coordinate_units": closest_axis_point.tolist(),
             "radius_coordinate_units": radius,
