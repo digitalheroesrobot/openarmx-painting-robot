@@ -948,7 +948,9 @@ def load_step(
         "source_unit": "mm",
         "unit_detection": "opencascade_target_unit_mm",
         "step_geometry_report": report,
-        "triangle_face_ids": triangle_face_ids,
+        # Share the compact runtime array with mesh metadata instead of
+        # retaining a second Python list of one integer per triangle.
+        "triangle_face_ids": brep_context["triangle_face_ids"],
         "source_geometry_preserved": True,
         "source_coordinates_modified": False,
     })
