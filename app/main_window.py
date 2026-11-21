@@ -2514,6 +2514,13 @@ class MainWindow(QMainWindow):
         if self._operation_running:
             return
 
+        # Keep the visible nozzle-point stand-off synchronized with the
+        # saved sprayer profile without rerunning Stage 3.
+        if self.current_stage3_result is not None:
+            self.viewer.update_spray_standoff_preview(
+                float(self.sprayer_profile["standoff_mm"])
+            )
+
         if self.current_stage3_result is None:
             if self.active_stage == STAGE_SPRAY_TRAJECTORY:
                 self._show_stage3_ready_summary()
