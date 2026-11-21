@@ -401,12 +401,6 @@ class ProductViewer(QWidget):
         self._interactive_mouse_move_observer_id = interactor.AddObserver(
             "MouseMoveEvent", self._on_interactive_spray_mouse_move, 2.0
         )
-        self._interactive_left_press_observer_id = interactor.AddObserver(
-            "LeftButtonPressEvent", self._on_interactive_spray_left_press, 2.0
-        )
-        self._interactive_left_release_observer_id = interactor.AddObserver(
-            "LeftButtonReleaseEvent", self._on_interactive_spray_left_release, 2.0
-        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -2169,7 +2163,10 @@ class ProductViewer(QWidget):
         self._interactive_spray_painted_actors = []
         self._interactive_spray_live_actors = []
         self._interactive_spray_active = True
-        self._interactive_spray_recording = False
+        # Record every valid surface-following mouse sample without requiring
+        # a mouse-button hold. Leaving the surface ends the current stroke.
+        self._interactive_spray_recording = True
+        self._interactive_spray_stroke_id = 0
         self._interactive_last_record_time = 0.0
 
         interactor = self.plotter.iren.interactor
@@ -2182,7 +2179,7 @@ class ProductViewer(QWidget):
             (
                 f"SPRAY CURSOR ACTIVE  |  STANDOFF {self._interactive_spray_standoff:.3f} "
                 f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
-                "MOVE: AIM  |  HOLD LEFT MOUSE: RECORD  |  RELEASE: PAUSE"
+                "MOVE OVER PRODUCT: AUTO RECORD  |  FINISH IN RIGHT PANEL"
             ),
             position="upper_left",
             font_size=10,
@@ -2392,10 +2389,14 @@ class ProductViewer(QWidget):
         if pose is None:
             self._interactive_remove_live_actors()
             self._interactive_spray_latest_pose = None
-            # Do not bridge a recorded stroke across an off-surface gap.
+            # A later re-entry starts a new stroke, preventing a false
+            # spray-on segment across a region with no valid surface hit.
             self._interactive_spray_recording = False
             self.plotter.render()
             return
+        if not self._interactive_spray_recording:
+            self._interactive_spray_stroke_id += 1
+            self._interactive_spray_recording = True
         self._interactive_update_cursor(pose)
 
     def _on_interactive_spray_left_press(self, interactor, event):
@@ -2437,22 +2438,50 @@ class ProductViewer(QWidget):
                 pass
             self._interactive_hud_actor = None
 
-        records = self._interactive_spray_records
+        records = list(self._interactive_spray_records)
+        route_length = 0.0
         if len(records) >= 2:
+            # Reorder complete strokes (never individual surface samples) so
+            # the spray-off transitions between strokes are as short as the
+            # orientation-aware route heuristic can find.
+            from stages.spray_stroke_route_optimizer import optimize_stroke_order
+            candidate = {
+                "nozzle_points": np.asarray(
+                    [item["nozzle_point_product"] for item in records], dtype=float
+                ),
+                "spray_directions": np.asarray(
+                    [item["spray_direction_product"] for item in records], dtype=float
+                ),
+                "segment_ids": np.asarray(
+                    [item["stroke_id"] for item in records], dtype=np.int64
+                ),
+            }
+            optimized = optimize_stroke_order(
+                candidate,
+                orientation_weight_coordinate_units_per_rad=0.0,
+                max_2opt_passes=1,
+            )
+            ordered_indices = []
+            ordered_segments = optimized["segment_ids"]
+            source_ids = np.asarray(candidate["segment_ids"], dtype=np.int64)
+            for segment_id in np.unique(ordered_segments):
+                source_id = optimized["route_optimization"]["strokes"][int(segment_id)]["source_segment_id"]
+                indices = np.flatnonzero(source_ids == source_id)
+                if optimized["route_optimization"]["strokes"][int(segment_id)]["reversed"]:
+                    indices = indices[::-1]
+                ordered_indices.extend(indices.tolist())
+            records = [records[index] for index in ordered_indices]
             points = np.asarray([item["nozzle_point_world"] for item in records])
-            line_cells = []
-            stroke_ids = np.asarray([item["stroke_id"] for item in records], dtype=np.int64)
-            for stroke_id in np.unique(stroke_ids):
-                indices = np.flatnonzero(stroke_ids == stroke_id)
-                if len(indices) >= 2:
-                    line_cells.extend([len(indices), *indices.tolist()])
+            line_cells = [len(points), *range(len(points))]
             path = pv.PolyData(points)
-            if line_cells:
-                path.lines = np.asarray(line_cells, dtype=np.int64)
+            path.lines = np.asarray(line_cells, dtype=np.int64)
             self._interactive_spray_path_actor = self.plotter.add_mesh(
                 path, color="#00E5FF", line_width=3.0,
                 lighting=False, pickable=False,
             )
+            route_length = float(np.linalg.norm(np.diff(
+                np.asarray([item["nozzle_point_product"] for item in records]), axis=0
+            ), axis=1).sum())
 
         inverse = np.linalg.inv(self._interactive_spray_transform)
         result = {
@@ -2486,6 +2515,11 @@ class ProductViewer(QWidget):
             ),
             "stroke_ids": np.asarray(
                 [item["stroke_id"] for item in records], dtype=np.int64
+            ),
+            "route_length_product_units": route_length,
+            "route_optimization": (
+                optimized.get("route_optimization")
+                if len(records) >= 2 else None
             ),
             "product_transform_4x4": self._interactive_spray_transform.copy(),
         }
@@ -5418,10 +5452,10 @@ class ProductViewer(QWidget):
             # geometry is rendered separately and remains fixed.
             self._pose_actor = self.plotter.add_mesh(
                 self.current_mesh,
-                color="#9FB7C7",
-                opacity=0.42,
+                color="#A8A8A8",
+                opacity=1.0,
                 show_edges=True,
-                edge_color="#263E4D",
+                edge_color="#555555",
                 line_width=1.0,
                 smooth_shading=False,
                 specular=0.35,
