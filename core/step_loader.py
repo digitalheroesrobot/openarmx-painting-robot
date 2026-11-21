@@ -976,11 +976,23 @@ END-ISO-10303-21;
         "faces": fake_faces,
         "face_records": ({"face_id": 1}, {"face_id": 2}),
         "triangle_face_ids": np.asarray([1, 2], dtype=np.int64),
+        "triangle_uvs": np.asarray([
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            [[2.0, 2.0], [3.0, 2.0], [2.0, 3.0]],
+        ], dtype=np.float64),
+        "triangle_uv_valid": np.asarray([True, True], dtype=bool),
         "face_adjacency": {"1": [2], "2": [1]},
         "schema_identifier": "AUTOMOTIVE_DESIGN",
     }
     fake_mesh._step_brep_context = fake_context
     assert get_step_brep_context(fake_mesh) is fake_context
+    uv_sample = get_step_triangle_surface_coordinates(
+        fake_mesh, 0, [0.25, 0.25, 0.50]
+    )
+    assert uv_sample["face_id"] == 1
+    assert np.allclose(uv_sample["uv"], [0.25, 0.50], atol=1e-12)
+    print("[PASS] STEP triangle-to-Face UV mapping")
+    print("[PASS] Barycentric mesh-sample to CAD UV conversion")
 
     # The ordinary Trimesh metadata remains deepcopy-safe for the viewer.
     from copy import deepcopy
