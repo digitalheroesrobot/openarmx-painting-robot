@@ -4221,12 +4221,18 @@ class MainWindow(QMainWindow):
             if isinstance(self.current_stage2_result, dict)
             else None
         )
+        patch_labels = (
+            self.current_stage1_result.get("patch_labels")
+            if isinstance(self.current_stage1_result, dict)
+            else None
+        )
 
         self.viewer.show_spray_trajectory(
             self.current_mesh,
             trajectory,
             face_surface_types=face_surface_types,
             face_status_labels=face_status_labels,
+            patch_labels=patch_labels,
         )
 
         if hasattr(self, "spray_playback_section"):
