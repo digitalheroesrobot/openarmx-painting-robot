@@ -3076,6 +3076,11 @@ class ProductViewer(QWidget):
         # Include every Stage 2 target face, including zero-film faces.
         # Statistics are weighted by physical triangle area, not face count.
         target_areas = cache["face_areas"][cache["target_face_ids"]]
+        if len(face_values) == 0:
+            self.trajectory_thickness_label.setText(
+                "PREDICTED DRY FILM [µm] | N/A — NO STAGE 2 TARGET FACES"
+            )
+            return
         stats = calculate_film_thickness_statistics(face_values, target_areas, target)
         self.trajectory_thickness_label.setText(
             "PREDICTED DRY FILM [µm] | "
@@ -3219,14 +3224,19 @@ class ProductViewer(QWidget):
                     target = float(cache["coating_process"]["target_dry_film_thickness_um"])
                     face_values = cache["deposition_face_thickness_um"][cache["target_face_ids"]]
                     target_areas = cache["face_areas"][cache["target_face_ids"]]
-                    stats = calculate_film_thickness_statistics(face_values, target_areas, target)
-                    self.trajectory_thickness_label.setText(
-                        "PREDICTED DRY FILM [µm] | "
-                        f"MIN {stats['min_um']:.1f}  MEAN {stats['mean_um']:.1f}  "
-                        f"P95 {stats['p95_um']:.1f}  MAX {stats['max_um']:.1f}  "
-                        f"AREA ≥ TARGET {stats['area_at_or_above_target_percent']:.1f}% "
-                        f"(TARGET {target:.1f}) | UNCALIBRATED"
-                    )
+                    if len(face_values) == 0:
+                        self.trajectory_thickness_label.setText(
+                            "PREDICTED DRY FILM [µm] | N/A — NO STAGE 2 TARGET FACES"
+                        )
+                    else:
+                        stats = calculate_film_thickness_statistics(face_values, target_areas, target)
+                        self.trajectory_thickness_label.setText(
+                            "PREDICTED DRY FILM [µm] | "
+                            f"MIN {stats['min_um']:.1f}  MEAN {stats['mean_um']:.1f}  "
+                            f"P95 {stats['p95_um']:.1f}  MAX {stats['max_um']:.1f}  "
+                            f"AREA ≥ TARGET {stats['area_at_or_above_target_percent']:.1f}% "
+                            f"(TARGET {target:.1f}) | UNCALIBRATED"
+                        )
                 else:
                     missing = ", ".join(cache["deposition_missing_inputs"])
                     self.trajectory_thickness_label.setText(
