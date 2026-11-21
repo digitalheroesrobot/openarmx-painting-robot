@@ -108,6 +108,27 @@ class DoubleBetaDepositionTests(unittest.TestCase):
         self.assertIn("self._playback_wall_started_at = time.monotonic()", source)
         self.assertIn("self._update_trajectory_time_label(index)", source)
 
+    def test_live_coating_process_update_refreshes_legend_and_resets_preview(self):
+        viewer_path = ROOT / "ui" / "viewer_3d.py"
+        source = viewer_path.read_text(encoding="utf-8")
+        self.assertIn("def update_coating_process_preview(self, coating_process, timing_stale=False):", source)
+        self.assertIn('parameters["coating_process"] = dict(coating_process)', source)
+        self.assertIn("self._stop_trajectory_playback(reset=True)", source)
+        self.assertIn("self._update_film_thickness_legend(", source)
+        self.assertIn("self._update_film_thickness_visualization()", source)
+        self.assertIn('path_text += " (STALE — REGENERATE)"', source)
+
+    def test_main_window_supports_live_process_edits_and_explicit_regeneration(self):
+        main_path = ROOT / "app" / "main_window.py"
+        source = main_path.read_text(encoding="utf-8")
+        compile(source, str(main_path), "exec")
+        self.assertIn('"REGENERATE SPRAY TRAJECTORY"', source)
+        self.assertIn("self.run_spray_trajectory(force=True)", source)
+        self.assertIn("def run_spray_trajectory(self, force=False):", source)
+        self.assertIn("self.viewer.update_coating_process_preview(", source)
+        self.assertIn('"max_travel_acceleration_mm_s2"', source)
+        self.assertIn("if not force", source)
+
     def _args(self):
         return {"sample_normalized_xy_by_path": np.zeros((2,2,2)), "sample_area_mm2": np.array([10.,10.]), "sample_facing_cosine_by_path": np.ones((2,2)), "sample_face_ids": np.array([0,1]), "trajectory_time_s": np.array([0.,1.]), "spray_on_mask": np.array([False,True]), "hit_sample_indices_by_path": [np.array([],dtype=int),np.array([0,1])], "fluid_flow_ml_min":60., "transfer_efficiency_percent":50., "volume_solids_percent":40., "footprint_width_mm":10., "footprint_thickness_mm":10.}
     def test_uniform_kernel_integrates_to_one(self):
