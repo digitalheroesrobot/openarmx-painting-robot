@@ -432,9 +432,15 @@ class SprayerSettingsDialog(QDialog):
             "sampling_spacing_mm",
             "fan_reference_distance_mm",
             "fan_thickness_at_reference_mm",
+        }
+        # These fields existed in early sprayer-profile files. They remain
+        # in the stored JSON for backward compatibility, but are now edited
+        # only in the independent Coating Process Parameters dialog.
+        process_only_keys = {
             "travel_speed_mm_s",
             "min_travel_speed_mm_s",
             "max_travel_acceleration_mm_s2",
+            "fluid_flow_ml_min",
         }
 
         def add_profile_field(key, label, minimum, maximum, decimals):
@@ -539,7 +545,7 @@ class SprayerSettingsDialog(QDialog):
         form.addRow("Atomization technology", self.technology_combo)
 
         for key, label, minimum, maximum, decimals in field_specs:
-            if key not in trajectory_keys:
+            if key not in trajectory_keys and key not in process_only_keys:
                 add_profile_field(key, label, minimum, maximum, decimals)
 
         self.profile_notes = QLabel()
