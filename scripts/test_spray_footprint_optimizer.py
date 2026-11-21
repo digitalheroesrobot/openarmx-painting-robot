@@ -8,7 +8,7 @@ from stages.spray_footprint_optimizer import optimize_redundant_spray_points
 
 class SprayFootprintOptimizerTests(unittest.TestCase):
     def _run_grid(self, size=5):
-        x, y = np.meshgrid(np.arange(size, dtype=float) * 0.5, np.arange(size, dtype=float))
+        x, y = np.meshgrid(np.arange(size, dtype=float) * 0.25, np.arange(size, dtype=float))
         points = np.column_stack((x.ravel(), y.ravel(), np.zeros(x.size)))
         nozzles = points + np.array([0.0, 0.0, 1.0])
         directions = np.tile([0.0, 0.0, -1.0], (len(points), 1))
@@ -22,7 +22,7 @@ class SprayFootprintOptimizerTests(unittest.TestCase):
             standoff_coordinate_units=1.0,
             cone_angle_deg=90.0,
             overlap_percent=50.0,
-            sample_spacing_coordinate_units=0.5,
+            sample_spacing_coordinate_units=0.25,
         )
 
     def test_redundant_interior_points_are_removed_without_coverage_loss(self):
@@ -50,7 +50,8 @@ class SprayFootprintOptimizerTests(unittest.TestCase):
                 surface_points=points,
                 nozzle_points=points + [0.0, 0.0, 1.0],
                 spray_directions=np.array([[0.0, 0.0, -1.0]]),
-                sample_area_weights=np.array([1.0]),
+                probe_points=points,
+                probe_area_weights=np.array([1.0]),
                 standoff_coordinate_units=1.0,
                 cone_angle_deg=0.0,
                 overlap_percent=50.0,
