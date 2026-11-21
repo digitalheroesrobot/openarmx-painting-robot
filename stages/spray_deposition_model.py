@@ -81,7 +81,8 @@ def evaluate_pose_deposition(
     incidence_weight = incidence ** config.incidence_exponent
     inside_cone = ((axial > config.minimum_axial_distance)
                    & (radial_distance <= cone_radius))
-    valid = inside_cone & (distance > config.minimum_axial_distance)
+    valid = (inside_cone & (distance > config.minimum_axial_distance)
+             & (incidence > _EPS))
     relative_flux = np.zeros(len(points), dtype=np.float64)
     relative_flux[valid] = (
         radial_weight[valid] * incidence_weight[valid]
