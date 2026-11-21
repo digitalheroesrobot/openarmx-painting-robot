@@ -67,6 +67,12 @@ class DoubleBetaDepositionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             calculate_film_thickness_statistics(np.array([1.0]), np.array([1.0]), 0.0)
 
+    def test_viewer_module_has_valid_python_syntax(self):
+        # Catch syntax errors in the GUI integration without importing Qt/VTK.
+        viewer_path = ROOT / "ui" / "viewer_3d.py"
+        source = viewer_path.read_text(encoding="utf-8")
+        compile(source, str(viewer_path), "exec")
+
     def _args(self):
         return {"sample_normalized_xy_by_path": np.zeros((2,2,2)), "sample_area_mm2": np.array([10.,10.]), "sample_facing_cosine_by_path": np.ones((2,2)), "sample_face_ids": np.array([0,1]), "trajectory_time_s": np.array([0.,1.]), "spray_on_mask": np.array([False,True]), "hit_sample_indices_by_path": [np.array([],dtype=int),np.array([0,1])], "fluid_flow_ml_min":60., "transfer_efficiency_percent":50., "volume_solids_percent":40., "footprint_width_mm":10., "footprint_thickness_mm":10.}
     def test_uniform_kernel_integrates_to_one(self):
