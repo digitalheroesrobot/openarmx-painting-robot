@@ -27,7 +27,7 @@ class RelativeDepositionPathOptimizerTests(unittest.TestCase):
             "face_indices": self.face_ids,
             "nozzle_points": nozzle,
             "spray_directions": directions,
-            "segment_ids": np.arange(len(self.face_ids)),
+            "segment_ids": np.zeros(len(self.face_ids), dtype=np.int64),
         }
         report = evaluate_raster_candidate(
             self.mesh, candidate, self.config, spray_speed=100.
