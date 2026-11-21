@@ -2492,8 +2492,13 @@ def _barycentric_coordinates_on_triangle(
     d20 = float(np.dot(offset, edge_a))
     d21 = float(np.dot(offset, edge_b))
     denominator = d00 * d11 - d01 * d01
-    scale = max(d00 * d11, 1.0)
-    if not math.isfinite(denominator) or abs(denominator) <= 1e-14 * scale:
+    scale = d00 * d11
+    if (
+        not math.isfinite(denominator)
+        or not math.isfinite(scale)
+        or scale <= np.finfo(float).tiny
+        or abs(denominator) <= 1e-14 * scale
+    ):
         return None
 
     weight_b = (d11 * d20 - d01 * d21) / denominator
@@ -4773,6 +4778,16 @@ def run_stage3_numerical_tests() -> dict:
     )
     assert barycentric_test is not None
     assert np.allclose(barycentric_test, [0.5, 0.25, 0.25], atol=1e-9)
+    tiny_triangle_test = _barycentric_coordinates_on_triangle(
+        np.asarray([2.5e-5, 2.5e-5, 0.0], dtype=np.float64),
+        np.asarray([
+            [0.0, 0.0, 0.0],
+            [1e-4, 0.0, 0.0],
+            [0.0, 1e-4, 0.0],
+        ], dtype=np.float64),
+    )
+    assert tiny_triangle_test is not None
+    assert np.allclose(tiny_triangle_test, [0.5, 0.25, 0.25], atol=1e-9)
     assert _barycentric_coordinates_on_triangle(
         np.asarray([1.5, 1.5, 0.0], dtype=np.float64),
         np.asarray([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64),
