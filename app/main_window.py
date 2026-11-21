@@ -4189,10 +4189,21 @@ class MainWindow(QMainWindow):
     def _on_optimized_spray_preview_complete(self, candidate):
         try:
             self.optimized_spray_preview = candidate
+            parameters = self._get_current_spray_parameters()
+            mm_per_unit = float(MM_PER_UNIT[self.coordinate_unit])
+            footprint = _calculate_spray_footprint(
+                parameters["sprayer_profile"],
+                float(parameters["standoff_mm"]),
+            )
             self.viewer.show_spray_point_preview(
                 self.current_mesh,
                 candidate["nozzle_points"],
-                self.viewer.get_product_transform(),
+                surface_points=candidate["surface_points"],
+                surface_normals=candidate["surface_normals"],
+                spray_directions=candidate["spray_directions"],
+                standoff=float(parameters["standoff_mm"]) / mm_per_unit,
+                cone_angle_deg=float(footprint["included_angle_deg"]),
+                product_transform=self.viewer.get_product_transform(),
             )
             metadata = candidate.get("preview_metadata", {})
             evaluation = metadata.get("evaluation", {})
@@ -4215,7 +4226,8 @@ class MainWindow(QMainWindow):
                 f"RELATIVE COVERAGE: "
                 f"{100.0 * evaluation.get('area_weighted_relative_coverage', 0.0):.2f}%\n"
                 f"SELECTION: {metadata.get('selection_status', 'UNKNOWN')}\n\n"
-                "GREEN SPHERES SHOW NOZZLE SPRAY LOCATIONS ONLY.\n"
+                "GREEN SPHERES: NOZZLE SPRAY LOCATIONS.\n"
+                "FAINT AMBER ELLIPSES: APPROXIMATE SPRAY FOOTPRINTS.\n"
                 "NO TRAVEL PATH OR CONNECTOR IS DISPLAYED.\n"
                 "RELATIVE DEPOSITION MODEL IS NOT CALIBRATED."
             )
