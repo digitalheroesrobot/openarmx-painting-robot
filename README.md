@@ -2,7 +2,7 @@
 
 ## STEP CAD product import
 
-The product-loading screen accepts STEP files (`.step`, `.stp`). STEP is read as an Open CASCADE B-Rep. Exact CAD topology and geometric properties are extracted before a tessellated display mesh is created for the existing PyVista viewer.
+The product-loading screen accepts **STEP AP214 only** (`.step`, `.stp`). The loader validates the Part 21 `FILE_SCHEMA` declaration and accepts the AP214 schema identifiers `AUTOMOTIVE_DESIGN` and the legacy `AUTOMOTIVE_DESIGN_CC2`. AP203, AP242, STL and other formats are not accepted as product inputs. STEP is read as an Open CASCADE B-Rep. Exact CAD topology and geometric properties are extracted before a tessellated display mesh is created for the existing PyVista viewer.
 
 Install the project dependencies:
 
