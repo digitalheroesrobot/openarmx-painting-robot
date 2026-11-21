@@ -181,8 +181,8 @@ def optimize_stroke_order(
                 # The preceding chosen stroke's orientation is tracked explicitly.
                 if len(order) > 1:
                     current_reverse = chosen_reversals[-1]
-                    current_exit = positions[current][-1 if current_reverse else 0]
-                    current_exit_dir = directions[current][-1 if current_reverse else 0]
+                    current_exit = positions[current][0 if current_reverse else -1]
+                    current_exit_dir = directions[current][0 if current_reverse else -1]
                 choices = []
                 for nxt in remaining:
                     for reverse in (False, True):
