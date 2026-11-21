@@ -19,10 +19,15 @@ from core.coating_process import (
 
 
 class CoatingProcessTests(unittest.TestCase):
-    def test_default_process_is_incomplete_and_never_claims_prediction_ready(self):
+    def test_default_process_is_complete_but_explicitly_uncalibrated(self):
         status, missing = coating_model_readiness(DEFAULT_COATING_PROCESS)
-        self.assertEqual(status, "INPUTS_INCOMPLETE")
-        self.assertIn("fluid flow rate", missing)
+        self.assertEqual(status, "INPUTS_READY_UNCALIBRATED")
+        self.assertEqual(missing, [])
+        self.assertEqual(DEFAULT_COATING_PROCESS["target_dry_film_thickness_um"], 50.0)
+        self.assertEqual(DEFAULT_COATING_PROCESS["fluid_flow_ml_min"], 300.0)
+        self.assertEqual(DEFAULT_COATING_PROCESS["transfer_efficiency_percent"], 50.0)
+        self.assertEqual(DEFAULT_COATING_PROCESS["volume_solids_percent"], 50.0)
+        self.assertEqual(DEFAULT_COATING_PROCESS["base_travel_speed_mm_s"], 500.0)
 
     def test_uniform_film_volume_conservation_reference(self):
         # 60 ml/min for 1 second, 50% transfer, 40% solids, over 100,000 mm².
