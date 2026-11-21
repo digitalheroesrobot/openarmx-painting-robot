@@ -4413,15 +4413,64 @@ def generate_spray_trajectory(
             sample_face_areas[valid_area_samples]
             / sample_face_counts[valid_area_samples]
         )
+        # Use a finer independent mesh-probe set for footprint-area integration.
+        # This prevents point pruning from relying only on the coarse candidate
+        # centers and missing uncovered regions between them.
+        probe_spacing_coordinate_units = max(
+            spacing_coordinate_units * 0.25, 1e-6
+        )
+        try:
+            probe_sampling_result = _sample_candidate_faces(
+                mesh=mesh,
+                face_status_labels=face_status_labels,
+                patch_labels=patch_labels,
+                normals=normals,
+                spacing_coordinate_units=probe_spacing_coordinate_units,
+            )
+        except RuntimeError as exc:
+            if "more than" not in str(exc):
+                raise
+            probe_spacing_coordinate_units = spacing_coordinate_units * 0.5
+            try:
+                probe_sampling_result = _sample_candidate_faces(
+                    mesh=mesh,
+                    face_status_labels=face_status_labels,
+                    patch_labels=patch_labels,
+                    normals=normals,
+                    spacing_coordinate_units=probe_spacing_coordinate_units,
+                )
+            except RuntimeError as retry_exc:
+                if "more than" not in str(retry_exc):
+                    raise
+                probe_sampling_result = sampling_result
+                probe_spacing_coordinate_units = spacing_coordinate_units
+
+        probe_face_counts = np.bincount(
+            probe_sampling_result["face_indices"], minlength=len(mesh.faces)
+        )
+        probe_face_indices = probe_sampling_result["face_indices"]
+        probe_face_areas = face_areas[probe_face_indices]
+        probe_face_sample_counts = probe_face_counts[probe_face_indices]
+        probe_area_weights = np.zeros(len(probe_face_indices), dtype=np.float64)
+        valid_probe_areas = (
+            np.isfinite(probe_face_areas)
+            & (probe_face_areas > 0.0)
+            & (probe_face_sample_counts > 0)
+        )
+        probe_area_weights[valid_probe_areas] = (
+            probe_face_areas[valid_probe_areas]
+            / probe_face_sample_counts[valid_probe_areas]
+        )
         footprint_optimization = optimize_redundant_spray_points(
             surface_points=ordered["surface_points"],
             nozzle_points=ordered["nozzle_points"],
             spray_directions=ordered["spray_directions"],
-            sample_area_weights=sample_area_weights,
+            probe_points=probe_sampling_result["surface_points"],
+            probe_area_weights=probe_area_weights,
             standoff_coordinate_units=standoff_coordinate_units,
             cone_angle_deg=cone_angle_for_optimization,
             overlap_percent=float(spray_footprint["overlap_percent"]),
-            sample_spacing_coordinate_units=spacing_coordinate_units,
+            sample_spacing_coordinate_units=probe_spacing_coordinate_units,
         )
         keep_indices = footprint_optimization.pop("keep_indices")
         removed_count = len(ordered["surface_points"]) - len(keep_indices)
