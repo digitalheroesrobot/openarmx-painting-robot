@@ -190,11 +190,15 @@ def calculate_film_thickness_statistics(
     face_thickness_um: np.ndarray,
     face_area_mm2: np.ndarray,
     target_thickness_um: float,
+    lower_band_ratio: float = 0.90,
+    upper_band_ratio: float = 1.10,
 ) -> dict:
     """Return area-weighted dry-film statistics over all target faces.
 
     Faces with zero deposition remain in the distribution. P95 is the
     area-weighted 95th percentile, not the percentile of face count.
+    The in-band metric counts only area within the inclusive target-thickness
+    interval [lower_band_ratio * target, upper_band_ratio * target].
     """
     thickness = np.asarray(face_thickness_um, dtype=np.float64)
     area = np.asarray(face_area_mm2, dtype=np.float64)
@@ -207,6 +211,15 @@ def calculate_film_thickness_statistics(
         raise ValueError("Thickness must be non-negative and face areas positive.")
     if not math.isfinite(target) or target <= 0.0:
         raise ValueError("Target thickness must be finite and positive.")
+    lower_ratio = float(lower_band_ratio)
+    upper_ratio = float(upper_band_ratio)
+    if (
+        not math.isfinite(lower_ratio)
+        or not math.isfinite(upper_ratio)
+        or lower_ratio < 0.0
+        or upper_ratio <= lower_ratio
+    ):
+        raise ValueError("Film-thickness band ratios must be finite, non-negative, and increasing.")
     if thickness.size == 0:
         raise ValueError("At least one target face is required.")
 
@@ -218,6 +231,11 @@ def calculate_film_thickness_statistics(
     p95_index = int(np.searchsorted(cumulative_area, 0.95 * total_area, side="left"))
     p95 = float(sorted_thickness[min(p95_index, len(sorted_thickness) - 1)])
     at_or_above = float(np.sum(area[thickness >= target]) / total_area * 100.0)
+    lower_um = target * lower_ratio
+    upper_um = target * upper_ratio
+    in_band = (thickness >= lower_um) & (thickness <= upper_um)
+    below_band = thickness < lower_um
+    above_band = thickness > upper_um
     return {
         "min_um": float(np.min(thickness)),
         "mean_um": mean,
@@ -225,5 +243,10 @@ def calculate_film_thickness_statistics(
         "max_um": float(np.max(thickness)),
         "area_at_or_above_target_percent": at_or_above,
         "area_below_target_percent": 100.0 - at_or_above,
+        "area_in_target_band_percent": float(np.sum(area[in_band]) / total_area * 100.0),
+        "area_below_target_band_percent": float(np.sum(area[below_band]) / total_area * 100.0),
+        "area_above_target_band_percent": float(np.sum(area[above_band]) / total_area * 100.0),
+        "lower_band_thickness_um": lower_um,
+        "upper_band_thickness_um": upper_um,
         "total_area_mm2": total_area,
     }
