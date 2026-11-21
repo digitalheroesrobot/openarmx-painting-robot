@@ -2789,6 +2789,13 @@ class ProductViewer(QWidget):
             "profile": dict(profile),
             "mm_per_unit": mm_per_unit,
         }
+        if (
+            hasattr(self, "trajectory_thickness_legend_label")
+            and deposition_readiness == "INPUTS_READY_UNCALIBRATED"
+        ):
+            self._update_film_thickness_legend(
+                coating_process["target_dry_film_thickness_um"]
+            )
         return self._playback_cache
 
     def _set_trajectory_surface_rgb(self, rgb):
@@ -3084,7 +3091,6 @@ class ProductViewer(QWidget):
         entries = []
         for ratio, rgb, color_hex, meaning in zip(
             FILM_THICKNESS_COLOR_STOPS,
-            FILM_THICKNESS_COLOR_RGB,
             FILM_THICKNESS_COLOR_HEX,
             labels,
         ):
