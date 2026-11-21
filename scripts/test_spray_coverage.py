@@ -132,5 +132,21 @@ class SprayCoverageTests(unittest.TestCase):
         )
 
 
+    def test_viewer_ray_loop_hoists_frame_invariant_vtk_setup(self):
+        viewer_path = PROJECT_ROOT / "ui" / "viewer_3d.py"
+        source = viewer_path.read_text(encoding="utf-8")
+        method_start = source.index("    def _get_surface_sample_hits_from_spray(")
+        method_end = source.index("    def _mark_surface_samples_from_spray(", method_start)
+        method = source[method_start:method_end]
+        loop_start = method.index("            for sample_index in footprint_candidates:")
+        loop_body = method[loop_start:]
+        self.assertLess(method.index('ray_origin = tuple(float(v) for v in nozzle)'), loop_start)
+        self.assertLess(method.index('intersection_points = cache["ray_intersection_points"]'), loop_start)
+        self.assertLess(method.index('intersection_cell_ids = cache["ray_intersection_cell_ids"]'), loop_start)
+        self.assertNotIn('cache["ray_intersection_points"]', loop_body)
+        self.assertNotIn('cache["ray_intersection_cell_ids"]', loop_body)
+        self.assertIn("locator.IntersectWithLine(", loop_body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
