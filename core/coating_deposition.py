@@ -250,3 +250,40 @@ def calculate_film_thickness_statistics(
         "upper_band_thickness_um": upper_um,
         "total_area_mm2": total_area,
     }
+
+
+def update_face_thickness_from_changed_samples(
+    sample_thickness_um: np.ndarray,
+    face_thickness_um: np.ndarray,
+    target_face_ids: np.ndarray,
+    changed_sample_ids: np.ndarray,
+    sample_count_per_face: int,
+) -> np.ndarray:
+    """Update only target faces touched by newly deposited samples.
+
+    Samples are stored contiguously per target face. The returned IDs are
+    global mesh face IDs whose area-independent sample mean was refreshed.
+    Unchanged face values are deliberately left untouched.
+    """
+    samples = np.asarray(sample_thickness_um, dtype=np.float64)
+    face_values = np.asarray(face_thickness_um, dtype=np.float64)
+    target_ids = np.asarray(target_face_ids, dtype=np.int64)
+    changed_ids = np.asarray(changed_sample_ids, dtype=np.int64)
+    count = int(sample_count_per_face)
+    if count <= 0:
+        raise ValueError("sample_count_per_face must be positive.")
+    if samples.ndim != 1 or samples.size != len(target_ids) * count:
+        raise ValueError("Sample thickness must contain a fixed number of samples per target face.")
+    if face_values.ndim != 1:
+        raise ValueError("Face thickness must be a one-dimensional array.")
+    if target_ids.ndim != 1 or np.any(target_ids < 0) or np.any(target_ids >= len(face_values)):
+        raise ValueError("Target face IDs are outside the face-thickness array.")
+    if changed_ids.ndim != 1 or np.any(changed_ids < 0) or np.any(changed_ids >= len(samples)):
+        raise ValueError("Changed sample IDs are outside the sample-thickness array.")
+    if changed_ids.size == 0:
+        return np.empty(0, dtype=np.int64)
+    local_face_ids = np.unique(changed_ids // count)
+    global_face_ids = target_ids[local_face_ids]
+    per_face_samples = samples.reshape(len(target_ids), count)
+    face_values[global_face_ids] = np.mean(per_face_samples[local_face_ids], axis=1)
+    return global_face_ids
