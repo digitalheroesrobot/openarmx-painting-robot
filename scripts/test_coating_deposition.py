@@ -88,7 +88,7 @@ class DoubleBetaDepositionTests(unittest.TestCase):
         self.assertIn("stops = np.asarray(FILM_THICKNESS_COLOR_STOPS", source)
         self.assertIn("self._update_film_thickness_legend(target)", source)
         self.assertIn(
-            'coating_process["target_dry_film_thickness_um"]',
+            'coating_process.get(\n                    "target_dry_film_thickness_um"',
             source,
         )
         self.assertIn("playback_layout.addWidget(self.trajectory_thickness_legend_label)", source)
