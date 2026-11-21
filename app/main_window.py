@@ -165,10 +165,6 @@ PIPELINE_ITEMS = [
     "Product loading",
     "Geometry inspection",
     "Paintable surface identification",
-    "Spray trajectory generation",
-    "Robot task allocation",
-    "Collision verification",
-    "Simulation and execution",
 ]
 
 
@@ -419,6 +415,13 @@ class MainWindow(QMainWindow):
         }
 
         self._build_ui()
+
+        # Keep the application focused on the first three workflow stages.
+        # Trajectory display and playback controls stay hidden until reopened.
+        self.viewer.display_control_panel.hide()
+        if hasattr(self, "spray_playback_section"):
+            self.spray_playback_section.hide()
+
         self._refresh_workflow_ui()
 
         models_dir = self.project_root / "models"
@@ -816,7 +819,11 @@ class MainWindow(QMainWindow):
                 self._select_workflow_stage(i)
             )
 
-            layout.addWidget(button, 1)
+            # Later workflow stages are intentionally hidden for now.
+            if index >= STAGE_SPRAY_TRAJECTORY:
+                button.hide()
+            else:
+                layout.addWidget(button, 1)
             self.workflow_buttons.append(button)
 
         return panel
@@ -2661,6 +2668,9 @@ class MainWindow(QMainWindow):
             )
 
         if stage_index == STAGE_SPRAY_TRAJECTORY:
+            return False
+
+        if stage_index == STAGE_SPRAY_TRAJECTORY:
 
             all_patches_inspected = (
                 self.current_stage2_result is not None
@@ -2836,16 +2846,9 @@ class MainWindow(QMainWindow):
             elif all_patches_inspected:
 
                 self.start_analysis_button.setText(
-                    "SPRAY TRAJECTORY"
+                    "SURFACE IDENTIFICATION COMPLETE"
                 )
-
-                self.start_analysis_button.setEnabled(
-                    self._stage_available(
-                        STAGE_SPRAY_TRAJECTORY
-                    )
-                    and not self._operation_running
-                    and not self.viewer.is_trajectory_playing()
-                )
+                self.start_analysis_button.setEnabled(False)
 
             else:
 
@@ -3053,21 +3056,11 @@ class MainWindow(QMainWindow):
         if all_inspected:
 
             self.patch_inspection_status_label.hide()
-
-            self.start_analysis_button.setVisible(
-                True
-            )
-
+            self.start_analysis_button.setVisible(True)
             self.start_analysis_button.setText(
-                "SPRAY TRAJECTORY"
+                "SURFACE IDENTIFICATION COMPLETE"
             )
-
-            self.start_analysis_button.setEnabled(
-                not self._operation_running
-                and self._stage_available(
-                    STAGE_SPRAY_TRAJECTORY
-                )
-            )
+            self.start_analysis_button.setEnabled(False)
 
         else:
 
@@ -3130,21 +3123,7 @@ class MainWindow(QMainWindow):
         else:
             pipeline_states.append("WAITING")
 
-        if (
-            self.stage_completed[STAGE_SPRAY_TRAJECTORY]
-            and self._stage3_parameters_match()
-        ):
-            pipeline_states.append("COMPLETE")
-        elif self._stage_available(STAGE_SPRAY_TRAJECTORY):
-            pipeline_states.append("ACTIVE")
-        else:
-            pipeline_states.append("WAITING")
-
-        pipeline_states.extend([
-            "LOCKED",
-            "LOCKED",
-            "LOCKED",
-        ])
+        # The visible pipeline intentionally ends at surface identification.
 
         for label, state, item in zip(
             self.pipeline_labels,
@@ -3240,29 +3219,14 @@ class MainWindow(QMainWindow):
                 STAGE_SURFACE_IDENTIFICATION
             ] = True
 
-            # Switch to Stage 3.
-            if not self._stage_available(
-                STAGE_SPRAY_TRAJECTORY
-            ):
-
-                QMessageBox.warning(
-                    self,
-                    "Stage 3 Not Available",
-                    "Spray trajectory generation is not available.",
-                )
-
-                return
-
-            self._select_workflow_stage(
-                STAGE_SPRAY_TRAJECTORY
+            # Stop after surface identification. Trajectory generation
+            # and all later stages remain locked for now.
+            self._refresh_workflow_ui()
+            self._set_workflow_status(
+                "STATUS: SURFACE IDENTIFICATION COMPLETE - "
+                "TRAJECTORY GENERATION LOCKED",
+                "#00E676",
             )
-
-            # Collapse the Patch Inspection accordion.
-            self._collapse_patch_inspection_section()
-
-            # Start Stage 3 immediately.
-            self.run_spray_trajectory()
-            self._set_patch_inspection_readonly(True)
             return
 
         # ----------------------------------------------------
@@ -4132,8 +4096,13 @@ class MainWindow(QMainWindow):
     # ========================================================
 
     def run_spray_trajectory(self, force=False):
-        if self.current_mesh is None or self._operation_running:
-            return
+        # Hard execution gate: trajectory generation and downstream work
+        # remain disabled while the workflow is simplified.
+        self._set_workflow_status(
+            "STATUS: TRAJECTORY GENERATION TEMPORARILY LOCKED",
+            "#FFD740",
+        )
+        return
         if self.viewer.is_trajectory_playing():
             return
 
