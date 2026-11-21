@@ -2236,7 +2236,6 @@ class MainWindow(QMainWindow):
         self.current_report = None
         self.current_stage2_result = None
         self.current_stage3_result = None
-        self.optimized_spray_preview = None
 
         self.current_stage3_parameters = None
         self.pending_stage3_parameters = None
@@ -2828,32 +2827,10 @@ class MainWindow(QMainWindow):
                 "#FFD740",
             )
 
-        elif (
-            self.active_stage == STAGE_SPRAY_TRAJECTORY
-            and self.current_stage3_result is not None
-            and not self._stage3_parameters_match()
-        ):
-
-            self._set_workflow_status(
-                "STATUS: PARAMETERS CHANGED - REGENERATION REQUIRED",
-                "#FFD740",
-            )
-
-        elif (
-            self.active_stage == STAGE_SPRAY_TRAJECTORY
-            and self.stage_completed[STAGE_SPRAY_TRAJECTORY]
-            and self._stage3_parameters_match()
-        ):
-
-            self._set_workflow_status(
-                "STATUS: TRAJECTORY GENERATED - ENGINEERING REVIEW",
-                "#FFD740",
-            )
-
         elif self.active_stage == STAGE_SPRAY_TRAJECTORY:
 
             self._set_workflow_status(
-                "STATUS: READY FOR TRAJECTORY GENERATION",
+                "STATUS: READY FOR INTERACTIVE SPRAY PATH",
                 "#00E5FF",
             )
 
