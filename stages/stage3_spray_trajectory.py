@@ -2135,6 +2135,24 @@ def _order_trajectory_with_planar_raster(
         coordinate_unit=coordinate_unit,
     )
     result["step_surface_refinement"] = step_surface_refinement
+    if step_surface_refinement["status"] == "PASS":
+        print(
+            "STEP B-REP PATH REFINEMENT | "
+            f"{step_surface_refinement['evaluated_sample_count']:,}/"
+            f"{step_surface_refinement['sample_count']:,} samples | "
+            f"position correction median/P95/max "
+            f"{step_surface_refinement['median_position_correction_mm']:.6f}/"
+            f"{step_surface_refinement['p95_position_correction_mm']:.6f}/"
+            f"{step_surface_refinement['maximum_position_correction_mm']:.6f} mm | "
+            f"max normal correction "
+            f"{step_surface_refinement['maximum_mesh_to_brep_normal_change_deg']:.3f} deg"
+        )
+    elif step_surface_refinement["status"] not in {"NOT_APPLICABLE"}:
+        print(
+            "STEP B-REP PATH REFINEMENT | "
+            f"{step_surface_refinement['status']} | "
+            f"{step_surface_refinement.get('failure_reason', step_surface_refinement.get('reason', 'unknown'))}"
+        )
     step_geometry_report = mesh.metadata.get("step_geometry_report", {})
     step_topology = (
         step_geometry_report.get("topology", {})
