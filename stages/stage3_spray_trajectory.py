@@ -2178,8 +2178,14 @@ def _order_trajectory_with_planar_raster(
             f"{step_surface_refinement['p95_position_correction_mm']:.6f}/"
             f"{step_surface_refinement['maximum_position_correction_mm']:.6f} mm | "
             f"max normal correction "
-            f"{step_surface_refinement['maximum_mesh_to_brep_normal_change_deg']:.3f} deg"
+            f"{step_surface_refinement['maximum_mesh_to_brep_normal_change_deg']:.3f} deg "
+            f"at sample {step_surface_refinement['maximum_normal_change_sample_index']} "
+            f"STEP Face {step_surface_refinement['maximum_normal_change_step_face_id']} "
+            f"({step_surface_refinement['maximum_normal_change_step_surface_type']})"
         )
+        print(
+            "STEP SURFACE TYPE SAMPLE COUNTS | "
+            + ", ".join(f"{key}: {value}" for key, value in step_surface_refinement['step_surface_type_sample_counts'].items())
     elif step_surface_refinement["status"] not in {"NOT_APPLICABLE"}:
         print(
             "STEP B-REP PATH REFINEMENT | "
@@ -2635,6 +2641,8 @@ def _refine_trajectory_with_step_brep(
     exact_normals = np.empty_like(normals)
     position_corrections = np.empty(len(points), dtype=np.float64)
     normal_changes = np.empty(len(points), dtype=np.float64)
+    step_face_ids = np.empty(len(points), dtype=np.int64)
+    step_surface_types = np.empty(len(points), dtype=object)
 
     for sample_index, (point, triangle_index) in enumerate(zip(points, triangle_indices)):
         triangle_index = int(triangle_index)
@@ -2690,6 +2698,8 @@ def _refine_trajectory_with_step_brep(
             exact_normal *= -1.0
         exact_points[sample_index] = exact_point
         exact_normals[sample_index] = exact_normal
+        step_face_ids[sample_index] = int(evaluated["face_id"])
+        step_surface_types[sample_index] = str(evaluated["surface_type"])
         position_corrections[sample_index] = float(np.linalg.norm(exact_point - point))
         normal_changes[sample_index] = math.degrees(math.acos(float(np.clip(
             np.dot(exact_normal, reference_normal), -1.0, 1.0
@@ -2712,6 +2722,8 @@ def _refine_trajectory_with_step_brep(
     refined = dict(trajectory)
     refined["surface_points"] = exact_points
     refined["source_surface_normals"] = exact_normals
+    refined["step_face_ids"] = step_face_ids
+    refined["step_surface_types"] = step_surface_types
     refined["surface_normals"] = smoothed_normals
     refined["spray_directions"] = -smoothed_normals
     refined["nozzle_points"] = (
@@ -2726,6 +2738,13 @@ def _refine_trajectory_with_step_brep(
         "p95_position_correction_mm": float(np.percentile(position_corrections, 95)),
         "maximum_position_correction_mm": float(np.max(position_corrections)),
         "maximum_mesh_to_brep_normal_change_deg": float(np.max(normal_changes)),
+        "maximum_normal_change_sample_index": int(np.argmax(normal_changes)),
+        "maximum_normal_change_step_face_id": int(step_face_ids[int(np.argmax(normal_changes))]),
+        "maximum_normal_change_step_surface_type": str(step_surface_types[int(np.argmax(normal_changes))]),
+        "step_surface_type_sample_counts": {
+            str(surface_type): int(np.count_nonzero(step_surface_types == surface_type))
+            for surface_type in sorted(set(step_surface_types.tolist()))
+        },
         "mean_mesh_to_brep_normal_change_deg": float(np.mean(normal_changes)),
         "maximum_normal_smoothing_deviation_deg": float(maximum_smoothing_deviation),
         "normal_source": "EXACT_STEP_BREP_FIRST_DERIVATIVES",
@@ -3544,6 +3563,8 @@ def _inspect_generated_trajectory(
         dtype=np.float64,
     )
     source_face_normals = np.asarray(mesh.face_normals, dtype=np.float64)
+    step_face_ids_for_inspection = np.asarray(trajectory.get("step_face_ids", np.full(len(points), -1)), dtype=np.int64)
+    step_surface_types_for_inspection = np.asarray(trajectory.get("step_surface_types", np.full(len(points), "unknown", dtype=object)), dtype=object)
     if len(segments):
         starts = np.r_[0, np.flatnonzero(np.diff(segments) != 0) + 1]
         ends = np.r_[starts[1:], len(segments)]
@@ -3644,6 +3665,10 @@ def _inspect_generated_trajectory(
                         cause = "source_face_normal_unavailable"
                     segment_meta = segment_metadata_by_id.get(int(segments[sample_index]), {})
                     orientation_outlier_details.append({
+                        "step_face_id_from": int(step_face_ids_for_inspection[sample_index]) if len(step_face_ids_for_inspection) == len(points) else -1,
+                        "step_face_id_to": int(step_face_ids_for_inspection[next_index]) if len(step_face_ids_for_inspection) == len(points) else -1,
+                        "step_surface_type_from": str(step_surface_types_for_inspection[sample_index]) if len(step_surface_types_for_inspection) == len(points) else "unknown",
+                        "step_surface_type_to": str(step_surface_types_for_inspection[next_index]) if len(step_surface_types_for_inspection) == len(points) else "unknown",
                         "sample_index_from": sample_index,
                         "sample_index_to": next_index,
                         "segment_id": int(segments[sample_index]),
@@ -3883,7 +3908,9 @@ def _inspect_generated_trajectory(
                 f"  samples {item['sample_index_from']}->{item['sample_index_to']} | "
                 f"segment {item['segment_id']} | "
                 f"patch {item['patch_id_from']}->{item['patch_id_to']} | "
-                f"faces {item['face_index_from']}->{item['face_index_to']} | "
+                f"mesh faces {item['face_index_from']}->{item['face_index_to']} | "
+                f"STEP faces {item['step_face_id_from']}->{item['step_face_id_to']} "
+                f"({item['step_surface_type_from']}->{item['step_surface_type_to']}) | "
                 f"axis {item['spray_axis_change_deg']:.2f} deg | "
                 f"source-face normals {source_angle} | "
                 f"step {item['point_step_mm']:.2f} mm | "
