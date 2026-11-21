@@ -4095,13 +4095,7 @@ class MainWindow(QMainWindow):
     # ========================================================
 
     def run_spray_trajectory(self, force=False):
-        # Hard execution gate: trajectory generation and downstream work
-        # remain disabled while the workflow is simplified.
-        self._set_workflow_status(
-            "STATUS: TRAJECTORY GENERATION TEMPORARILY LOCKED",
-            "#FFD740",
-        )
-        return
+        """Generate the first circular-footprint coverage trajectory."""
         if self.viewer.is_trajectory_playing():
             return
 
@@ -4203,9 +4197,10 @@ class MainWindow(QMainWindow):
             patch_labels=patch_labels,
         )
 
+        # Keep playback, coverage correction and downstream controls closed.
+        # This first reopening step is a static circular-footprint preview only.
         if hasattr(self, "spray_playback_section"):
-            self.spray_playback_section.show()
-            self._right_section_buttons["spray_playback"].setChecked(True)
+            self.spray_playback_section.hide()
 
         self._update_viewer_display_unit()
 
