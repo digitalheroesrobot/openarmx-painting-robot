@@ -2512,6 +2512,10 @@ class ProductViewer(QWidget):
                 self.trajectory_coverage_bar.setValue(0)
             if hasattr(self, "trajectory_coverage_label"):
                 self.trajectory_coverage_label.setText("0.0% | 0.000 / 0.000 area")
+            if hasattr(self, "trajectory_thickness_label"):
+                self.trajectory_thickness_label.setText(
+                    "PREDICTED DRY FILM THICKNESS | 0.00 µm — RESET"
+                )
             if hasattr(self, "trajectory_spray_state_label"):
                 self.trajectory_spray_state_label.setText("● SPRAY OFF")
             self._restore_trajectory_surface_base_colors()
