@@ -4079,6 +4079,9 @@ class MainWindow(QMainWindow):
             self.viewer.start_interactive_spray_path(
                 standoff=float(parameters["standoff_mm"]) / mm_per_unit,
                 cone_angle_deg=float(footprint["included_angle_deg"]),
+                sampling_spacing=float(parameters["sampling_spacing_mm"]) / mm_per_unit,
+                sprayer_profile=parameters["sprayer_profile"],
+                coating_process=parameters["coating_process"],
             )
         except Exception as exc:
             QMessageBox.critical(self, "Interactive Spray Path Error", str(exc))
