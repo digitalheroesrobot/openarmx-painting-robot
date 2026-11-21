@@ -3080,7 +3080,7 @@ class ProductViewer(QWidget):
             return
         if self._playback_timer.isActive():
             self._playback_timer.stop()
-            self.trajectory_play_button.setText("Play")
+            self.trajectory_play_button.setText("▶")
             return
         if self._playback_finished or self._playback_index >= total - 1:
             self._playback_finished = False
