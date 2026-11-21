@@ -5,8 +5,40 @@ from pathlib import Path
 import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
-from core.coating_deposition import double_beta_spatial_density, simulate_double_beta_deposition
+from core.coating_deposition import (\n    accumulate_double_beta_deposition_step,\n    double_beta_spatial_density,\n    simulate_double_beta_deposition,\n)
 class DoubleBetaDepositionTests(unittest.TestCase):
+    def test_sparse_step_doubles_with_flow_and_duration(self):
+        args = {"normalized_xy": np.array([[0.,0.]]), "sample_area_mm2": np.array([1.]),
+                "sample_facing_cosine": np.array([1.]), "sample_footprint_area_mm2": np.array([100.]),
+                "duration_s": 1., "fluid_flow_ml_min": 60., "transfer_efficiency_percent": 50.,
+                "volume_solids_percent": 40.}
+        base = accumulate_double_beta_deposition_step(**args)
+        twice_flow = accumulate_double_beta_deposition_step(**{**args, "fluid_flow_ml_min": 120.})
+        twice_time = accumulate_double_beta_deposition_step(**{**args, "duration_s": 2.})
+        np.testing.assert_allclose(twice_flow["sample_thickness_increment_um"], 2 * base["sample_thickness_increment_um"])
+        np.testing.assert_allclose(twice_time["sample_thickness_increment_um"], 2 * base["sample_thickness_increment_um"])
+
+    def test_sparse_step_spray_off_and_empty_hits_deposit_zero(self):
+        args = {"normalized_xy": np.empty((0,2)), "sample_area_mm2": np.empty(0),
+                "sample_facing_cosine": np.empty(0), "sample_footprint_area_mm2": np.empty(0),
+                "duration_s": 1., "fluid_flow_ml_min": 60., "transfer_efficiency_percent": 50.,
+                "volume_solids_percent": 40.}
+        result = accumulate_double_beta_deposition_step(**args)
+        self.assertEqual(result["deposited_volume_mm3"], 0.)
+        args["normalized_xy"] = np.zeros((1,2)); args["sample_area_mm2"] = np.ones(1)
+        args["sample_facing_cosine"] = np.ones(1); args["sample_footprint_area_mm2"] = np.ones(1)*100
+        result = accumulate_double_beta_deposition_step(**args, spray_on=False)
+        self.assertEqual(result["input_dry_volume_mm3"], 0.)
+        self.assertEqual(result["sample_thickness_increment_um"][0], 0.)
+
+    def test_sparse_step_conserves_supplied_dry_volume(self):
+        args = {"normalized_xy": np.zeros((10,2)), "sample_area_mm2": np.ones(10)*100.,
+                "sample_facing_cosine": np.ones(10), "sample_footprint_area_mm2": np.ones(10)*10.,
+                "duration_s": 1., "fluid_flow_ml_min": 60., "transfer_efficiency_percent": 100.,
+                "volume_solids_percent": 100.}
+        result = accumulate_double_beta_deposition_step(**args)
+        self.assertLessEqual(result["deposited_volume_mm3"], result["input_dry_volume_mm3"] + 1e-12)
+
     def _args(self):
         return {"sample_normalized_xy_by_path": np.zeros((2,2,2)), "sample_area_mm2": np.array([10.,10.]), "sample_facing_cosine_by_path": np.ones((2,2)), "sample_face_ids": np.array([0,1]), "trajectory_time_s": np.array([0.,1.]), "spray_on_mask": np.array([False,True]), "hit_sample_indices_by_path": [np.array([],dtype=int),np.array([0,1])], "fluid_flow_ml_min":60., "transfer_efficiency_percent":50., "volume_solids_percent":40., "footprint_width_mm":10., "footprint_thickness_mm":10.}
     def test_uniform_kernel_integrates_to_one(self):
