@@ -129,6 +129,26 @@ class SprayGunEnvelopeTests(unittest.TestCase):
         )
         self.assertEqual(result["sample_status"], ["YELLOW"])
 
+    def test_nozzle_geometry_not_checked_never_claims_green(self):
+        mesh = trimesh.creation.box(extents=[100.0, 100.0, 100.0])
+        config = SprayGunEnvelopeConfig(
+            gun_body_length_mm=220.0,
+            gun_body_diameter_mm=45.0,
+            nozzle_length_mm=25.0,
+            minimum_surface_clearance_mm=180.0,
+            nozzle_outer_diameter_mm=12.0,
+            dimensions_are_estimate=False,
+        )
+        result = evaluate_spray_gun_clearance(
+            mesh,
+            np.array([[0.0, 0.0, 230.0]]),
+            _downward_frame()[None, :, :],
+            config,
+            "mm",
+        )
+        self.assertEqual(result["status"], "UNCERTAIN")
+        self.assertEqual(result["sample_status"], ["YELLOW"])
+
     def test_invalid_frame_is_rejected(self):
         with self.assertRaises(ValueError):
             build_gun_body_centerline(
