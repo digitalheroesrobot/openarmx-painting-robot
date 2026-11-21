@@ -7,6 +7,7 @@ from stages.human_like_spray_planner import (
     SweepPlanningConfig,
     build_nozzle_frames,
     plan_human_like_sweeps,
+    _split_lane,
 )
 
 
@@ -71,6 +72,33 @@ class HumanLikeSweepPlannerTests(unittest.TestCase):
         np.testing.assert_allclose(
             frames[:, :, 2], np.tile([0.0, 0.0, -1.0], (len(frames), 1))
         )
+
+    def test_spatial_gap_is_measured_in_3d_not_only_in_projection(self):
+        projected = np.column_stack((np.arange(4.0), np.zeros(4)))
+        spatial = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 20.0],
+        ])
+        chunks = _split_lane(
+            np.arange(4, dtype=np.int64),
+            projected,
+            spatial,
+            max_gap=5.0,
+        )
+        self.assertEqual([chunk.tolist() for chunk in chunks], [[0, 1, 2], [3]])
+
+    def test_lane_metadata_is_aligned_with_ordered_samples(self):
+        result = plan_human_like_sweeps(
+            self.points, self.normals, self.faces, self.patches, self.config
+        )
+        self.assertEqual(result["lane_ids"].shape, (len(self.points),))
+        self.assertEqual(result["segment_ids"].shape, (len(self.points),))
+        self.assertEqual(len(np.unique(result["lane_ids"])), result["lane_count"])
+        for segment_id in np.unique(result["segment_ids"]):
+            lane_ids = np.unique(result["lane_ids"][result["segment_ids"] == segment_id])
+            self.assertEqual(len(lane_ids), 1)
 
     def test_invalid_input_is_rejected(self):
         with self.assertRaises(ValueError):
