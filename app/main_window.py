@@ -1887,54 +1887,6 @@ class MainWindow(QMainWindow):
 
     
     
-    def _refresh_stage2_action_visibility(self):
-        """Control trajectory generation based on painting selection."""
-
-        if not hasattr(self, "start_analysis_button"):
-            return
-
-        if not hasattr(self, "patch_inspection_status_label"):
-            return
-
-        if self.active_stage != STAGE_SURFACE_IDENTIFICATION:
-            self.patch_inspection_status_label.hide()
-            return
-
-        if self.current_stage2_result is None:
-            self.patch_inspection_status_label.hide()
-            return
-
-        total = len(self.patch_inspection)
-
-        selected = sum(
-            1
-            for state in self.patch_inspection.values()
-            if state.get("inspected", True)
-        )
-
-        all_selected = total > 0 and selected == total
-
-        self.stage_completed[
-            STAGE_SURFACE_IDENTIFICATION
-        ] = all_selected
-
-        self.start_analysis_button.setText("SPRAY TRAJECTORY")
-        self.start_analysis_button.setVisible(True)
-
-        if all_selected:
-            self.patch_inspection_status_label.hide()
-            self.start_analysis_button.setEnabled(
-                not self._operation_running
-                and self._stage_available(STAGE_SPRAY_TRAJECTORY)
-            )
-        else:
-            self.patch_inspection_status_label.setText(
-                "PAINTING SELECTION INCOMPLETE — "
-                "select all patches to enable spray trajectory."
-            )
-            self.patch_inspection_status_label.show()
-            self.start_analysis_button.setEnabled(False)
-
     # ========================================================
     # STAGE 2 MANUAL DECISION APPLICATION
     # ========================================================
@@ -3221,13 +3173,12 @@ class MainWindow(QMainWindow):
                 STAGE_SURFACE_IDENTIFICATION
             ] = True
 
-            # Move to the visible Stage 3 entry screen. The trajectory
-            # generator itself remains locked until the simplified
-            # circular-footprint implementation is connected.
+            # Open Stage 3. The main action on that screen generates
+            # the circular-footprint trajectory preview.
             self._select_workflow_stage(STAGE_SPRAY_TRAJECTORY)
             self._set_workflow_status(
-                "STATUS: SURFACES READY - TRAJECTORY PREVIEW NOT YET ENABLED",
-                "#FFD740",
+                "STATUS: READY TO GENERATE CIRCULAR SPRAY TRAJECTORY",
+                "#00E5FF",
             )
             return
 
