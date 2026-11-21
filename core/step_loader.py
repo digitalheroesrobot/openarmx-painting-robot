@@ -316,7 +316,7 @@ def _surface_normal_from_derivatives(du, dv, reversed_face=False):
     normal = np.cross(du, dv)
     magnitude = float(np.linalg.norm(normal))
     scale = float(np.linalg.norm(du) * np.linalg.norm(dv))
-    if not math.isfinite(magnitude) or magnitude <= max(1e-14, scale * 1e-12):
+    if not math.isfinite(magnitude) or scale <= np.finfo(float).tiny or magnitude <= scale * 1e-12:
         raise ValueError("STEP surface normal is undefined at this UV location.")
     normal /= magnitude
     if reversed_face:
