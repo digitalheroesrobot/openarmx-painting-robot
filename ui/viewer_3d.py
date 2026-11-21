@@ -2091,6 +2091,57 @@ class ProductViewer(QWidget):
 
         self._render_product(reset_camera=True)
 
+    def show_spray_point_preview(self, mesh, nozzle_points, product_transform=None):
+        """Show optimized nozzle locations only, without activating trajectory playback."""
+        points = np.asarray(nozzle_points, dtype=np.float64)
+        if points.ndim != 2 or points.shape[1] != 3 or len(points) == 0:
+            raise ValueError("nozzle_points must be a non-empty (N, 3) array.")
+        if not np.all(np.isfinite(points)):
+            raise ValueError("nozzle_points contains NaN or infinite values.")
+
+        transform = np.eye(4, dtype=np.float64) if product_transform is None else np.asarray(
+            product_transform, dtype=np.float64
+        )
+        if transform.shape != (4, 4) or not np.all(np.isfinite(transform)):
+            raise ValueError("Product transform must be a finite 4x4 matrix.")
+        rotation = transform[:3, :3]
+        if (
+            not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-5)
+            or not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-5)
+            or not np.allclose(transform[3], [0.0, 0.0, 0.0, 1.0], atol=1e-8)
+        ):
+            raise ValueError("Product transform must be a rigid homogeneous transform.")
+
+        self.current_mesh = self._prepare_product_mesh(mesh)
+        self.trajectory_data = None
+        self.patch_labels = None
+        self.face_status_labels = None
+        self.face_surface_types = None
+        self.trajectory_safety = {}
+        self.display_mode = "spray_point_preview"
+        self.trajectory_product_transform = transform.copy()
+        self._last_product_transform = transform.copy()
+        self._set_trajectory_controls_visible(False)
+        self.pose_control_panel.hide()
+        self._render_product(reset_camera=False)
+
+        world_points = points @ rotation.T + transform[:3, 3]
+        self.plotter.add_points(
+            world_points,
+            color="#00E676",
+            point_size=8,
+            render_points_as_spheres=True,
+            pickable=False,
+        )
+        self.plotter.add_text(
+            f"OPTIMIZED SPRAY POINTS | {len(points)} NOZZLE LOCATIONS",
+            position="upper_left",
+            font_size=10,
+            color="#00E676",
+            shadow=True,
+        )
+        self.plotter.render()
+
     def show_spray_trajectory(
         self,
         mesh,
@@ -4835,7 +4886,7 @@ class ProductViewer(QWidget):
             except Exception:
                 self._set_standard_camera()
         elif (
-            self.display_mode in ("product", "classification", "trajectory")
+            self.display_mode in ("product", "classification", "trajectory", "spray_point_preview")
             and self._pose_actor is not None
         ):
             self._set_product_camera()
