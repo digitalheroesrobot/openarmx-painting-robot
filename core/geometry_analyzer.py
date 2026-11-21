@@ -2306,6 +2306,7 @@ def _detect_holes_from_step_brep(mesh: trimesh.Trimesh) -> list[dict]:
                 "axis": axis,
                 "radius": radius,
                 "centroid": centroid,
+                "area": max(float(face.get("area_mm2", 0.0)), 0.0),
                 "orientation": str(face.get("orientation", "UNKNOWN")),
                 "adjacent_face_ids": [int(v) for v in face.get("adjacent_face_ids", [])],
             })
@@ -2356,10 +2357,22 @@ def _detect_holes_from_step_brep(mesh: trimesh.Trimesh) -> list[dict]:
         ref = group[0]
         axis = ref["axis"].copy()
         location = ref["location"].copy()
-        axial_positions = [
-            float(np.dot(v["centroid"] - location, axis)) for v in group
-        ]
-        axis_center = location + float(np.mean(axial_positions)) * axis
+        # Use the area-weighted centroid of the exact B-Rep cylindrical
+        # faces. This gives a stable representative point on the finite
+        # cylindrical wall, rather than averaging face centroids equally.
+        face_weights = np.asarray(
+            [v["area"] for v in group], dtype=np.float64
+        )
+        face_centroids = np.asarray(
+            [v["centroid"] for v in group], dtype=np.float64
+        )
+        if not np.all(np.isfinite(face_weights)) or float(face_weights.sum()) <= 1e-12:
+            face_weights = np.ones(len(group), dtype=np.float64)
+        wall_centroid = np.average(
+            face_centroids, axis=0, weights=face_weights
+        )
+        axial_position = float(np.dot(wall_centroid - location, axis))
+        axis_center = location + axial_position * axis
         closest_axis_point = location - float(np.dot(location, axis)) * axis
         axis_distance = float(np.linalg.norm(closest_axis_point))
         center_distance = float(np.linalg.norm(axis_center))
