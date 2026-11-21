@@ -1478,7 +1478,15 @@ def _generate_surface_following_raster_for_patch(
         & (source_areas > 1e-10)
         & np.isfinite(projected_areas)
     )
-    if np.count_nonzero(usable) < max(2, int(math.ceil(len(face_indices) * 0.5))):
+    # A patch containing exactly one source triangle is still a valid
+    # raster domain: its three vertices define a non-degenerate 2-D region.
+    # Requiring two usable triangles unconditionally rejects every
+    # single-triangle patch and sends it to nearest-neighbor fallback.
+    minimum_usable_triangles = (
+        1 if len(face_indices) == 1
+        else max(2, int(math.ceil(len(face_indices) * 0.5)))
+    )
+    if np.count_nonzero(usable) < minimum_usable_triangles:
         return reject("too_many_degenerate_projected_triangles")
 
     projected_triangles = projected_triangles[usable]
@@ -6322,6 +6330,52 @@ def run_stage3_numerical_tests() -> dict:
     assert force_curved_plane is False
     assert plane_types == ("PLANE",)
 
+    # --------------------------------------------------------
+    # Test 24H: A single non-degenerate source triangle is a valid
+    # curved-raster domain; it must not be rejected for having fewer
+    # than two projected triangles.
+    # --------------------------------------------------------
+    single_triangle_mesh = trimesh.Trimesh(
+        vertices=np.asarray([
+            [0.0, 0.0, 0.0],
+            [100.0, 0.0, 0.0],
+            [0.0, 100.0, 0.0],
+        ], dtype=np.float64),
+        faces=np.asarray([[0, 1, 2]], dtype=np.int64),
+        process=False,
+    )
+    single_triangle_normals = np.asarray(
+        single_triangle_mesh.face_normals, dtype=np.float64
+    )
+    single_triangle_raster = _generate_surface_following_raster_for_patch(
+        mesh=single_triangle_mesh,
+        face_indices=np.asarray([0], dtype=np.int64),
+        normals=single_triangle_normals,
+        standoff_coordinate_units=100.0,
+        sample_spacing_coordinate_units=10.0,
+        track_spacing_coordinate_units=20.0,
+        diagnostics={},
+    )
+    assert single_triangle_raster is not None
+    assert len(single_triangle_raster["surface_points"]) >= 2
+    assert np.all(single_triangle_raster["face_indices"] == 0)
+    assert len(single_triangle_raster["surface_points"]) == len(
+        single_triangle_raster["segment_ids"]
+    )
+    source_triangle = single_triangle_mesh.vertices[
+        single_triangle_mesh.faces[0]
+    ]
+    for raster_point in single_triangle_raster["surface_points"]:
+        weights = _barycentric_coordinates_on_triangle(
+            raster_point, source_triangle, tolerance=1e-7
+        )
+        assert weights is not None
+        assert np.allclose(weights @ source_triangle, raster_point, atol=1e-8)
+    assert np.allclose(
+        single_triangle_raster["surface_normals"],
+        np.tile(single_triangle_normals[0], (len(single_triangle_raster["surface_points"]), 1)),
+    )
+
     return {
         "status": "PASS",
         "tests": {
@@ -6361,6 +6415,7 @@ def run_stage3_numerical_tests() -> dict:
             "surface_discontinuity_spray_off_splitting": "PASS",
             "step_brep_refinement_failure_diagnostics": "PASS",
             "step_surface_type_aware_raster_selection": "PASS",
+            "single_triangle_surface_raster": "PASS",
         },
         "sample_count": int(sample_count),
         "unit_standoff_tests": unit_test_results,
