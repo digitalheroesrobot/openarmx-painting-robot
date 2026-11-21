@@ -183,7 +183,7 @@ def execute_stage1(
 
     if not stl_path.exists():
         raise FileNotFoundError(
-            f"STL file not found: {stl_path}"
+            f"STEP file not found: {stl_path}"
         )
 
     # --------------------------------------------------------
@@ -206,7 +206,7 @@ def execute_stage1(
             "Please select the actual coordinate unit "
             "in the application before running Geometry "
             "Inspection.\n\n"
-            "The original STL coordinates have not been "
+            "The original CAD coordinates have not been "
             "modified."
         )
 
@@ -295,14 +295,13 @@ def execute_stage1(
 
     warnings = [
         "The selected coordinate unit defines the physical "
-        "interpretation of the original STL coordinates.",
+        "interpretation of the original CAD coordinates.",
 
         "Changing the coordinate unit does not rescale "
-        "the original mesh vertices.",
+        "the imported CAD mesh vertices.",
 
-        "STL does not universally define a standardized "
-        "physical length unit. Confirm manually selected "
-        "units against the original CAD model when necessary.",
+        "The imported STEP geometry is translated to millimetres. "
+        "Confirm the originating CAD units for critical manufacturing measurements.",
     ]
 
     report["measurement_warnings"] = warnings
