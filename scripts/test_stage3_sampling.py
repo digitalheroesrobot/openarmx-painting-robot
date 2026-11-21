@@ -35,11 +35,6 @@ def reference_triangle_samples(triangle, spacing):
     return np.asarray(result)
 
 
-def sorted_rows(values):
-    values = np.asarray(values)
-    return values[np.lexsort((values[:, 2], values[:, 1], values[:, 0]))]
-
-
 class TriangleSamplingTests(unittest.TestCase):
     def test_vectorized_sampler_matches_original_sample_locations(self):
         triangles = [
@@ -53,9 +48,9 @@ class TriangleSamplingTests(unittest.TestCase):
                     actual = _triangle_sample_points(triangle, spacing)
                     expected = reference_triangle_samples(triangle, spacing)
                     self.assertEqual(len(actual), len(expected))
+                    # Preserve exact legacy ordering as well as coordinates.
                     np.testing.assert_allclose(
-                        sorted_rows(actual), sorted_rows(expected),
-                        rtol=1e-12, atol=1e-12,
+                        actual, expected, rtol=1e-12, atol=1e-12
                     )
 
     def test_sample_count_is_square_of_subdivision_count(self):
