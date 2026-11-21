@@ -2508,272 +2508,32 @@ class ProductViewer(QWidget):
         )
 
     def _add_trajectory_visualization(self):
+        """Display independent spray target points only; never connect samples."""
         data = self.trajectory_data
-
         if data is None:
             return
 
         transform = self.trajectory_product_transform
         rotation = transform[:3, :3]
         translation = transform[:3, 3]
-        surface_points = data["surface_points"] @ rotation.T + translation
-        nozzle_points = data["nozzle_points"] @ rotation.T + translation
-        spray_directions = data["spray_directions"] @ rotation.T
-        nozzle_frames = (
-            np.einsum("ij,njk->nik", rotation, data["nozzle_frames"])
-            if "nozzle_frames" in data else None
+
+        # Render target locations on the product surface as independent points.
+        # Do not draw paths, lane links, travel connectors, footprints, arrows,
+        # orientation frames, or gun geometry in this initial simple preview.
+        spray_points = (
+            np.asarray(data["surface_points"], dtype=float) @ rotation.T
+            + translation
         )
-        segment_ids = data["segment_ids"]
-        sample_indices = data["sample_indices"]
+        if len(spray_points) == 0:
+            return
 
-        count = len(surface_points)
-
-        if self.trajectory_visibility["samples"]:
-            self.plotter.add_points(
-                surface_points,
-                color="#00E676",
-                point_size=6,
-                render_points_as_spheres=True,
-            )
-
-        # Draw the circular cone footprint on each sampled target point.
-        # The radius is derived from the exact saved profile and CAD-unit
-        # standoff; no second set of UI/default parameters is introduced.
-        if self.trajectory_visibility.get("footprints", True):
-            parameters = data.get("parameters", {})
-            profile = parameters.get("sprayer_profile", {})
-            angle_deg = float(profile.get("spray_cone_angle_deg", 0.0) or 0.0)
-            standoff_units = float(
-                parameters.get("standoff_coordinate_units", 0.0) or 0.0
-            )
-            if (
-                str(profile.get("pattern_type", "round_cone")).lower() == "round_cone"
-                and 0.0 < angle_deg < 179.0
-                and standoff_units > 0.0
-            ):
-                radius = standoff_units * np.tan(np.deg2rad(angle_deg * 0.5))
-                stride = max(1, int(np.ceil(count / 1800)))
-                disk_indices = np.arange(0, count, stride, dtype=np.int64)
-                ring_count = 20
-                disk_points = []
-                disk_faces = []
-                for sample_index in disk_indices:
-                    normal = data["surface_normals"][sample_index].astype(float)
-                    normal /= max(float(np.linalg.norm(normal)), 1e-12)
-                    reference = np.array([1.0, 0.0, 0.0])
-                    if abs(float(np.dot(reference, normal))) > 0.90:
-                        reference = np.array([0.0, 1.0, 0.0])
-                    tangent_x = np.cross(normal, reference)
-                    tangent_x /= max(float(np.linalg.norm(tangent_x)), 1e-12)
-                    tangent_y = np.cross(normal, tangent_x)
-                    center = data["surface_points"][sample_index]
-                    base = len(disk_points)
-                    disk_points.append(center.tolist())
-                    for ring_index in range(ring_count):
-                        theta = 2.0 * np.pi * ring_index / ring_count
-                        point = center + radius * (
-                            np.cos(theta) * tangent_x + np.sin(theta) * tangent_y
-                        )
-                        disk_points.append(point.tolist())
-                    for ring_index in range(ring_count):
-                        a = base + 1 + ring_index
-                        b = base + 1 + ((ring_index + 1) % ring_count)
-                        disk_faces.extend((3, base, a, b))
-                if disk_points:
-                    source_points = np.asarray(disk_points, dtype=float)
-                    world_points = source_points @ rotation.T + translation
-                    footprint_mesh = pv.PolyData(
-                        world_points, np.asarray(disk_faces, dtype=np.int64)
-                    )
-                    self.plotter.add_mesh(
-                        footprint_mesh,
-                        color="#36C5D8",
-                        opacity=0.20,
-                        show_edges=True,
-                        edge_color="#58D9E8",
-                        line_width=0.6,
-                        lighting=False,
-                        pickable=False,
-                    )
-
-        if self.trajectory_visibility["nozzle"]:
-            self.plotter.add_points(
-                nozzle_points,
-                color="#00E5FF",
-                point_size=6,
-                render_points_as_spheres=True,
-            )
-
-        if self.trajectory_visibility["arrows"]:
-            stride = max(
-                1,
-                int(np.ceil(count / MAX_DIRECTION_ARROWS)),
-            )
-
-            arrow_indices = np.arange(
-                0, count, stride, dtype=np.int64
-            )
-
-            arrow_cloud = pv.PolyData(
-                nozzle_points[arrow_indices]
-            )
-            arrow_cloud["spray_vectors"] = (
-                spray_directions[arrow_indices]
-            )
-
-            arrow_source = pv.Arrow(
-                tip_length=0.25,
-                tip_radius=0.08,
-                shaft_radius=0.025,
-            )
-
-            arrow_glyphs = arrow_cloud.glyph(
-                orient="spray_vectors",
-                scale=False,
-                factor=self._trajectory_arrow_length(),
-                geom=arrow_source,
-            )
-
-            self.plotter.add_mesh(
-                arrow_glyphs,
-                color="#FFD740",
-                lighting=False,
-            )
-
-        if (
-            self.trajectory_visibility.get("frames", False)
-            and nozzle_frames is not None
-            and count > 0
-        ):
-            frame_stride = max(1, int(np.ceil(count / 40)))
-            frame_indices = np.arange(0, count, frame_stride, dtype=np.int64)
-            frame_length = max(
-                float(np.median(np.linalg.norm(
-                    nozzle_points[frame_indices] - surface_points[frame_indices],
-                    axis=1,
-                ))) * 0.12,
-                1.0,
-            )
-            for axis_index, axis_color in (
-                (0, "#FF6464"),
-                (1, "#55E69A"),
-                (2, "#55A8FF"),
-            ):
-                starts = nozzle_points[frame_indices]
-                ends = starts + nozzle_frames[frame_indices, :, axis_index] * frame_length
-                line_vertices = np.stack((starts, ends), axis=1).reshape(-1, 3)
-                line_cells = np.column_stack((
-                    np.full(len(frame_indices), 2, dtype=np.int64),
-                    np.arange(0, len(frame_indices) * 2, 2, dtype=np.int64),
-                    np.arange(1, len(frame_indices) * 2, 2, dtype=np.int64),
-                )).reshape(-1)
-                frame_polydata = pv.PolyData(line_vertices)
-                frame_polydata.lines = line_cells
-                self.plotter.add_mesh(
-                    frame_polydata,
-                    color=axis_color,
-                    line_width=2.5,
-                    render_lines_as_tubes=True,
-                    lighting=False,
-                    pickable=False,
-                )
-
-        if self.trajectory_visibility["paths"]:
-            line_points = []
-            line_cells = []
-
-            for segment_id in np.unique(segment_ids):
-                indices = np.where(
-                    segment_ids == segment_id
-                )[0]
-
-                if len(indices) < 2:
-                    continue
-
-                order = np.argsort(
-                    sample_indices[indices],
-                    kind="stable",
-                )
-                indices = indices[order]
-
-                start = len(line_points)
-                line_points.extend(
-                    nozzle_points[indices].tolist()
-                )
-
-                local_indices = np.arange(
-                    start,
-                    start + len(indices),
-                    dtype=np.int64,
-                )
-
-                line_cells.extend([
-                    len(local_indices),
-                    *local_indices.tolist(),
-                ])
-
-            if line_points:
-                path_polydata = pv.PolyData(
-                    np.asarray(line_points, dtype=float)
-                )
-                path_polydata.lines = np.asarray(
-                    line_cells, dtype=np.int64
-                )
-
-                self.plotter.add_mesh(
-                    path_polydata,
-                    color="#00E676",
-                    line_width=3,
-                    lighting=False,
-                )
-
-            # Direct links between consecutive strokes are shown separately
-            # in amber. They are spray-OFF visualization estimates only.
-            travel_plan = data.get("inter_segment_travel_plan", {})
-            transitions = travel_plan.get("transitions", [])
-            if transitions:
-                travel_points = []
-                travel_cells = []
-                for transition in transitions:
-                    start = np.asarray(
-                        transition.get("start_point_coordinate_units", []),
-                        dtype=float,
-                    )
-                    end = np.asarray(
-                        transition.get("end_point_coordinate_units", []),
-                        dtype=float,
-                    )
-                    if (
-                        start.shape != (3,) or end.shape != (3,)
-                        or not np.all(np.isfinite(start))
-                        or not np.all(np.isfinite(end))
-                    ):
-                        continue
-                    start_world = start @ rotation.T + translation
-                    end_world = end @ rotation.T + translation
-                    point_index = len(travel_points)
-                    travel_points.extend((start_world.tolist(), end_world.tolist()))
-                    travel_cells.extend((2, point_index, point_index + 1))
-                if travel_points:
-                    travel_polydata = pv.PolyData(
-                        np.asarray(travel_points, dtype=float)
-                    )
-                    travel_polydata.lines = np.asarray(
-                        travel_cells, dtype=np.int64
-                    )
-                    self.plotter.add_mesh(
-                        travel_polydata,
-                        color="#FFB454",
-                        line_width=2,
-                        opacity=0.9,
-                        lighting=False,
-                        pickable=False,
-                    )
-
-        self._add_trajectory_safety_overlay()
-
-        # Keep the 3D viewport free of diagnostic text. Stage 3 metrics
-        # belong in the Summary panel, not over the product geometry.
+        self.plotter.add_points(
+            spray_points,
+            color="#00E676",
+            point_size=7,
+            render_points_as_spheres=True,
+            pickable=False,
+        )
 
     @staticmethod
     def _format_playback_duration(seconds):
