@@ -5,6 +5,12 @@ import math
 import numpy as np
 import pyvista as pv
 
+from core.spray_coverage import (
+    build_paintable_face_mask,
+    calculate_area_weighted_coverage,
+    mark_sample_hits,
+)
+
 from PySide6.QtCore import QEvent, Qt, Signal, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -1919,6 +1925,7 @@ class ProductViewer(QWidget):
         mesh,
         trajectory_data,
         face_surface_types=None,
+        face_status_labels=None,
     ):
         if not isinstance(trajectory_data, dict):
             raise TypeError(
@@ -2077,7 +2084,19 @@ class ProductViewer(QWidget):
         self.current_mesh = self._prepare_product_mesh(mesh)
 
         self.patch_labels = None
-        self.face_status_labels = None
+        if face_status_labels is None:
+            self.face_status_labels = None
+        else:
+            status_labels = np.asarray(face_status_labels)
+            if (
+                status_labels.ndim != 1
+                or len(status_labels) != len(mesh.faces)
+                or not np.all(np.isin(status_labels, [0, 1, 2, 3]))
+            ):
+                raise ValueError(
+                    "face_status_labels must contain one valid Stage 2 status per mesh face."
+                )
+            self.face_status_labels = status_labels.astype(np.uint8, copy=True)
         self.selected_patch_id = None
         self.trajectory_data = data
         self._update_trajectory_path_statistics_label()
@@ -2500,7 +2519,18 @@ class ProductViewer(QWidget):
                 y_axis /= max(float(np.linalg.norm(y_axis)), 1e-12)
                 nozzle_frames[index] = np.column_stack((x_axis, y_axis, z_axis))
 
-        target_face_ids = np.unique(np.asarray(data["face_indices"], dtype=np.int64))
+        face_count = len(self.current_mesh.faces)
+        if self.face_status_labels is None:
+            # Fail closed: trajectory-referenced faces are NOT a valid substitute
+            # for the complete Stage 2-approved target surface.
+            target_face_mask = np.zeros(face_count, dtype=bool)
+            target_mask_status = "MISSING_STAGE2_FACE_STATUS"
+        else:
+            target_face_mask = build_paintable_face_mask(
+                self.face_status_labels, face_count
+            )
+            target_mask_status = "READY"
+        target_face_ids = np.flatnonzero(target_face_mask)
         faces = np.asarray(self.current_mesh.faces, dtype=np.int64)
         vertices = np.asarray(self.current_mesh.vertices, dtype=float)
         triangles = vertices[faces[target_face_ids]]
@@ -2608,6 +2638,7 @@ class ProductViewer(QWidget):
             "target_face_ids": target_face_ids,
             "target_display_indices": target_display_indices,
             "target_area": target_area,
+            "target_mask_status": target_mask_status,
             "area_display_scale": (
                 mm_per_unit ** 2 / 1_000_000.0
                 if source_unit in MM_PER_UNIT else 1.0
@@ -2727,7 +2758,9 @@ class ProductViewer(QWidget):
             return
         hit_samples = self._get_surface_sample_hits_from_spray(path_index)
         if len(hit_samples):
-            cache["coverage_sample_hits"][hit_samples] = True
+            mark_sample_hits(
+                cache["coverage_sample_hits"], hit_samples, spray_on=True
+            )
 
     def _update_current_spray_footprint(self, path_index):
         """Illuminate only target mesh triangles reached by the current spray sample."""
@@ -2783,14 +2816,20 @@ class ProductViewer(QWidget):
 
         # Samples are stored face-contiguously; reshape avoids a full-mesh
         # bincount allocation on every coverage refresh.
-        face_coverage = cache["coverage_sample_hits"].reshape(
-            -1, cache["sample_count_per_face"]
-        ).mean(axis=1)
-        painted_area = float(np.sum(cache["face_areas"] * face_coverage))
-        coverage_percent = (
-            100.0 * painted_area / cache["target_area"]
-            if cache["target_area"] > 1e-12 else 0.0
+        (
+            face_coverage,
+            painted_area,
+            target_area,
+            coverage_percent,
+        ) = calculate_area_weighted_coverage(
+            cache["face_areas"],
+            cache["coverage_sample_hits"],
+            cache["sample_count_per_face"],
         )
+        # Keep the denominator immutable and explicit: every Stage 2 paintable
+        # candidate face, including faces never referenced by the trajectory.
+        if not np.isclose(target_area, cache["target_area"], rtol=1e-10, atol=1e-12):
+            raise RuntimeError("Spray coverage target area changed during playback.")
 
         if (
             self._trajectory_surface_polydata is not None
@@ -2825,12 +2864,21 @@ class ProductViewer(QWidget):
                 )
             else:
                 model_label = "ROUND CONE"
-            self.trajectory_coverage_label.setText(
-                f"{coverage_percent:.1f}% {model_label} | "
-                f"{painted_area * cache['area_display_scale']:.3f} / "
-                f"{cache['target_area'] * cache['area_display_scale']:.3f} "
-                f"{cache['area_display_unit']}"
-            )
+            if cache["target_mask_status"] != "READY":
+                self.trajectory_coverage_label.setText(
+                    "N/A — STAGE 2 TARGET MASK REQUIRED"
+                )
+            elif cache["target_area"] <= 1e-12:
+                self.trajectory_coverage_label.setText(
+                    "N/A — NO STAGE 2 PAINTABLE TARGET AREA"
+                )
+            else:
+                self.trajectory_coverage_label.setText(
+                    f"{coverage_percent:.1f}% SAMPLED REACH | "
+                    f"{painted_area * cache['area_display_scale']:.3f} / "
+                    f"{cache['target_area'] * cache['area_display_scale']:.3f} "
+                    f"{cache['area_display_unit']}"
+                )
             if (
                 cache["pattern_type"] == "flat_fan"
                 and cache["fan_thickness_units"] <= 0.0
@@ -2842,8 +2890,9 @@ class ProductViewer(QWidget):
                 )
             else:
                 self.trajectory_coverage_label.setToolTip(
-                    "Estimated geometric area reached by the configured spray envelope. "
-                    "This is not measured coating thickness or paint mass."
+                    "Sampled geometric reach estimate over the complete Stage 2 paintable "
+                    "candidate area. Four test points per mesh triangle are used. This "
+                    "does not yet model occlusion, deposited paint mass, or coating thickness."
                 )
 
     def _create_spray_gun_actors(self):
