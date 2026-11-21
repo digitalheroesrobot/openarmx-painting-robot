@@ -33,8 +33,8 @@ DEFAULT_SPRAYER_PROFILE = {
     "pattern_type": "flat_fan",
     "nozzle_orifice_mm": 1.4,
     "nozzle_length_mm": 25.0,
-    "gun_body_length_mm": 0.0,
-    "gun_body_diameter_mm": 0.0,
+    "gun_body_length_mm": 220.0,
+    "gun_body_diameter_mm": 45.0,
     "tcp_to_nozzle_tip_mm": 0.0,
     "standoff_mm": 180.0,
     "spray_cone_angle_deg": 74.0,
@@ -50,6 +50,7 @@ DEFAULT_SPRAYER_PROFILE = {
     "fluid_pressure_bar": 0.0,
     "fluid_flow_ml_min": 0.0,
     "nozzle_length_is_estimate": True,
+    "gun_body_dimensions_are_estimate": True,
     "profile_notes": (
         "Generic starting values, not a certified sprayer specification. "
         "Nozzle length, fluid pressure, fluid flow and travel speed must be "
@@ -454,9 +455,20 @@ class SprayerSettingsDialog(QDialog):
                     "This is a mechanical dimension. The default is illustrative; "
                     "replace it with the actual sprayer drawing."
                 )
+            elif key == "gun_body_length_mm":
+                spin.setToolTip(
+                    "Approximate mechanical length of the gun body, excluding "
+                    "the separately configured nozzle length. Initial generic "
+                    "estimate: 220 mm. Replace with the actual sprayer dimension "
+                    "before relying on collision results."
+                )
+            elif key == "gun_body_diameter_mm":
+                spin.setToolTip(
+                    "Approximate maximum outer diameter of the gun body. "
+                    "Initial generic estimate: 45 mm. Replace with the actual "
+                    "sprayer dimension before relying on collision results."
+                )
             elif key in (
-                "gun_body_length_mm",
-                "gun_body_diameter_mm",
                 "tcp_to_nozzle_tip_mm",
                 "fluid_pressure_bar",
                 "fluid_flow_ml_min",
