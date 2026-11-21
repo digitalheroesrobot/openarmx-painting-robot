@@ -54,14 +54,18 @@ def _build_spray_footprint_overlay(
     nozzle_points,
     spray_directions,
     cone_angle_deg,
-    rays_per_ring=24,
-    radial_rings=(0.35, 0.70, 1.0),
+    rays_per_ring=72,
+    radial_rings=(
+        0.10, 0.20, 0.30, 0.40, 0.50,
+        0.60, 0.70, 0.80, 0.90, 1.0,
+    ),
 ):
     """Intersect each spray cone with the actual product mesh.
 
-    Only first-hit mesh triangles are returned. Each footprint consists of
-    its real surface cells plus the outer feature boundary; no tangent-plane
-    ellipse or free-space polygon is drawn.
+    The cone interior is sampled with dense concentric angular rings. Only
+    first-hit mesh triangles are returned, so each overlay is a filled
+    footprint on the product surface, not a free-space cone projection.
+    The orange outline follows the boundary of the intersected mesh cells.
     """
     nozzles = np.asarray(nozzle_points, dtype=np.float64)
     directions = np.asarray(spray_directions, dtype=np.float64)
