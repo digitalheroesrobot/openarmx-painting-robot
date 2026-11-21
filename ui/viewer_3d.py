@@ -654,6 +654,24 @@ class ProductViewer(QWidget):
                         border: none;
                     }
                     QCheckBox:disabled { color: #DCE8EF; }
+                    QCheckBox::indicator {
+                        width: 17px; height: 17px;
+                        border: 2px solid #8FA7B5;
+                        border-radius: 3px;
+                        background-color: #263945;
+                    }
+                    QCheckBox::indicator:checked {
+                        background-color: #00A878;
+                        border: 2px solid #62E6B5;
+                    }
+                    QCheckBox::indicator:disabled {
+                        border: 2px solid #A9BBC5;
+                        background-color: #344B59;
+                    }
+                    QCheckBox::indicator:checked:disabled {
+                        background-color: #00A878;
+                        border: 2px solid #62E6B5;
+                    }
                 """)
             checkbox.setChecked(self.trajectory_visibility[key])
             checkbox.toggled.connect(
