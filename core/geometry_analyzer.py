@@ -262,9 +262,11 @@ def _build_topology_mesh(
         unique_coordinates, inverse = np.unique(
             finite_coordinates, axis=0, return_inverse=True
         )
+        unique_coordinate_count = len(unique_coordinates)
         topology_vertices = np.asarray(unique_coordinates, dtype=np.float64).copy()
         source_to_topology[finite_ids] = inverse
     else:
+        unique_coordinate_count = 0
         topology_vertices = np.empty((0, 3), dtype=np.float64)
 
     # Keep invalid source vertices isolated, but append them in one allocation.
@@ -325,7 +327,7 @@ def _build_topology_mesh(
         "topology_vertex_count": int(len(topology_vertices)),
         "source_triangle_count": int(face_count),
         "topology_triangle_count": int(len(topology_mesh.faces)),
-        "exact_duplicate_vertices_merged": int(len(finite_ids) - len(np.unique(finite_coordinates, axis=0))),
+        "exact_duplicate_vertices_merged": int(len(finite_ids) - unique_coordinate_count),
         "invalid_source_faces": int(np.count_nonzero(~valid_source_faces)),
         "welding_method": "exact_coordinate_equality",
         "welding_tolerance_coordinate_units": 0.0,
