@@ -11,14 +11,16 @@ from copy import deepcopy
 from pathlib import Path
 
 DEFAULT_COATING_PROCESS = {
-    "name": "default coating process",
-    "target_dry_film_thickness_um": 60.0,
-    "fluid_flow_ml_min": 0.0,
-    "transfer_efficiency_percent": 0.0,
-    "volume_solids_percent": 0.0,
-    "base_travel_speed_mm_s": 150.0,
-    "min_travel_speed_mm_s": 40.0,
-    "max_travel_acceleration_mm_s2": 500.0,
+    # Provisional engineering baseline only. Replace with site TDS/gun data
+    # and measured coupon results when the production values arrive.
+    "name": "generic industrial spray baseline (uncalibrated)",
+    "target_dry_film_thickness_um": 50.0,
+    "fluid_flow_ml_min": 300.0,
+    "transfer_efficiency_percent": 50.0,
+    "volume_solids_percent": 50.0,
+    "base_travel_speed_mm_s": 500.0,
+    "min_travel_speed_mm_s": 300.0,
+    "max_travel_acceleration_mm_s2": 1000.0,
     "number_of_coats": 1,
     "spray_on_delay_ms": 0.0,
     "spray_off_delay_ms": 0.0,
