@@ -20,13 +20,14 @@
       "fluid_pressure_bar": 0,
       "fluid_flow_ml_min": 0,
       "nozzle_length_is_estimate": true,
-      "profile_notes": "Generic starting values, not a certified sprayer specification. The 1.4 mm nozzle, 150-200 mm working distance and 1.7 bar air starting pressure are based on manufacturer guidance examples. The 74 degree equivalent fan angle is estimated from a 275-330 mm fan width at 200 mm. Nozzle length is an illustrative placeholder. Confirm all settings against the actual sprayer and coating.",
-      "gun_body_length_mm": 0,
-      "gun_body_diameter_mm": 0,
+      "profile_notes": "Generic starting values, not a certified sprayer specification or a verified specification for a particular Chinese product. Gun body length 220 mm and maximum body diameter 45 mm are provisional collision-envelope estimates; measure the actual purchased sprayer and replace both values before relying on collision results. Confirm all settings against the actual sprayer and coating.",
+      "gun_body_length_mm": 220,
+      "gun_body_diameter_mm": 45,
       "tcp_to_nozzle_tip_mm": 0,
       "fan_thickness_at_reference_mm": 0,
       "min_travel_speed_mm_s": 40,
-      "max_travel_acceleration_mm_s2": 500
+      "max_travel_acceleration_mm_s2": 500,
+      "gun_body_dimensions_are_estimate": true
     }
   ],
   "active_profile": "default sprayer"
