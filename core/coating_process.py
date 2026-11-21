@@ -149,6 +149,16 @@ def load_coating_process(config_path: str | Path, legacy_sprayer_profile: dict |
                 "volume_solids_percent",
             ):
                 values[key] = DEFAULT_COATING_PROCESS[key]
+            # Update motion values only when they still equal the previous
+            # untouched factory defaults; retain any customized legacy values.
+            old_motion_defaults = {
+                "base_travel_speed_mm_s": 150.0,
+                "min_travel_speed_mm_s": 40.0,
+                "max_travel_acceleration_mm_s2": 500.0,
+            }
+            for key, old_value in old_motion_defaults.items():
+                if values[key] == old_value:
+                    values[key] = DEFAULT_COATING_PROCESS[key]
             save_coating_process(path, values)
         return values
     except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
