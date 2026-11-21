@@ -2842,10 +2842,15 @@ class MainWindow(QMainWindow):
 
             elif all_patches_inspected:
 
+                # Keep the original trajectory entry button visible after
+                # every surface patch has been inspected.
                 self.start_analysis_button.setText(
-                    "SURFACE IDENTIFICATION COMPLETE"
+                    "SPRAY TRAJECTORY"
                 )
-                self.start_analysis_button.setEnabled(False)
+                self.start_analysis_button.setEnabled(
+                    not self._operation_running
+                    and self._stage_available(STAGE_SPRAY_TRAJECTORY)
+                )
 
             else:
 
@@ -3213,13 +3218,13 @@ class MainWindow(QMainWindow):
                 STAGE_SURFACE_IDENTIFICATION
             ] = True
 
-            # Stop after surface identification. Trajectory generation
-            # and all later stages remain locked for now.
-            self._refresh_workflow_ui()
+            # Move to the visible Stage 3 entry screen. The trajectory
+            # generator itself remains locked until the simplified
+            # circular-footprint implementation is connected.
+            self._select_workflow_stage(STAGE_SPRAY_TRAJECTORY)
             self._set_workflow_status(
-                "STATUS: SURFACE IDENTIFICATION COMPLETE - "
-                "TRAJECTORY GENERATION LOCKED",
-                "#00E676",
+                "STATUS: SURFACES READY - TRAJECTORY PREVIEW NOT YET ENABLED",
+                "#FFD740",
             )
             return
 
