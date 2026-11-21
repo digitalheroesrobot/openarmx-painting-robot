@@ -223,25 +223,32 @@ class SprayPatternPreview(QWidget):
                 else fallback_sample_spacing
             )
 
-            # Use a consistent physical-to-screen scale. The old 0.32 px/mm
-            # scale made a 149 mm footprint only ~48 px in radius, visually
-            # understating the spray area. The cap prevents clipping.
-            preview_pixels_per_mm = 2.0
-            max_half_width_px = max(12.0, width * 0.42)
-            visual_half_width = max(
-                6.0,
-                min(
-                    0.5 * spray_width_mm * preview_pixels_per_mm,
-                    max_half_width_px,
-                ),
-            )
-            pitch_px = visual_half_width * 2.0 * (1.0 - overlap / 100.0)
+            # Use ONE physical-to-screen scale for both the cone width and
+            # nozzle-to-target distance. Independent horizontal/vertical
+            # scales distort the spray angle and make the schematic misleading.
+            # The 0.75 px/mm nominal scale keeps normal operating distances
+            # visually responsive; reduce it only when the current geometry
+            # would exceed the available preview area.
+            pitch_mm = track_pitch_mm
+            horizontal_extent_mm = spray_width_mm + 2.0 * pitch_mm
+            available_width_px = max(1.0, float(width - 28))
+            available_height_px = max(1.0, float(height - 112) - tip_y)
+            scale_candidates = [0.75]
+            if horizontal_extent_mm > 0.0:
+                scale_candidates.append(
+                    available_width_px / horizontal_extent_mm
+                )
+            if standoff > 0.0:
+                scale_candidates.append(available_height_px / standoff)
+            preview_pixels_per_mm = max(0.01, min(scale_candidates))
 
-            # Working distance also changes the visible nozzle-to-surface gap.
-            # Keep enough room for the labels and clamp only at the widget edge.
-            vertical_gap_px = max(70.0, standoff * 0.75)
-            surface_y = min(tip_y + vertical_gap_px, float(height - 112))
-            surface_y = max(tip_y + 70.0, surface_y)
+            visual_half_width = 0.5 * spray_width_mm * preview_pixels_per_mm
+            pitch_px = pitch_mm * preview_pixels_per_mm
+
+            # Both dimensions now use the same scale, so the cone angle shown
+            # on screen matches the configured full included angle.
+            vertical_gap_px = standoff * preview_pixels_per_mm
+            surface_y = tip_y + vertical_gap_px
 
             # Adjacent pass boundaries, cone edges and target footprint.
             painter.setPen(QPen(QColor("#4C9EAE"), 1.4, Qt.DashLine))
