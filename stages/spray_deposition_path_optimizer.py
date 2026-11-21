@@ -120,11 +120,29 @@ def evaluate_raster_candidate(
     if segments.ndim != 1:
         raise ValueError("segment_ids must be one-dimensional.")
 
-    # All source-mesh face centroids are probes, including faces not sampled
-    # directly by the path. Areas make the coverage/dose statistics area-aware.
-    probe_points = np.asarray(mesh.triangles_center, dtype=np.float64)
-    probe_normals = np.asarray(mesh.face_normals, dtype=np.float64)
-    areas = np.asarray(mesh.area_faces, dtype=np.float64)
+    # Evaluate the complete intended paintable region, not the entire mesh
+    # (which may include fixtures, hidden backsides, or non-paintable faces).
+    # Raster candidates retain their full component face membership; manually
+    # constructed candidates fall back to their supplied face_indices.
+    component_records = candidate.get("components", [])
+    if component_records:
+        evaluation_faces = np.unique(np.concatenate([
+            np.asarray(record.get("source_face_indices", []), dtype=np.int64)
+            for record in component_records
+            if len(record.get("source_face_indices", [])) > 0
+        ])) if any(
+            len(record.get("source_face_indices", [])) > 0
+            for record in component_records
+        ) else np.unique(faces)
+    else:
+        evaluation_faces = np.unique(faces)
+    if len(evaluation_faces) == 0 or np.any(evaluation_faces < 0) or np.any(
+        evaluation_faces >= len(mesh.faces)
+    ):
+        return {"valid": False, "reason": "empty_or_invalid_evaluation_region"}
+    probe_points = np.asarray(mesh.triangles_center[evaluation_faces], dtype=np.float64)
+    probe_normals = np.asarray(mesh.face_normals[evaluation_faces], dtype=np.float64)
+    areas = np.asarray(mesh.area_faces[evaluation_faces], dtype=np.float64)
     valid_area = np.isfinite(areas) & (areas > 0.0)
     if not np.any(valid_area):
         return {"valid": False, "reason": "mesh_has_no_positive_finite_face_area"}
@@ -317,7 +335,10 @@ def select_track_spacing_by_relative_deposition(
                 -(
                     item["evaluation"].get(
                         "area_weighted_dose_coefficient_of_variation"
-                    ) or float("inf")
+                    )
+                    if item["evaluation"].get(
+                        "area_weighted_dose_coefficient_of_variation"
+                    ) is not None else float("inf")
                 ),
                 -item["evaluation"].get(
                     "total_trajectory_length_coordinate_units", float("inf")
