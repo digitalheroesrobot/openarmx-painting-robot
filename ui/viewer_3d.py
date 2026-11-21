@@ -11,7 +11,7 @@ from core.spray_coverage import (
     is_line_of_sight_occluded,
     mark_sample_hits,
 )
-from core.coating_deposition import accumulate_double_beta_deposition_step
+from core.coating_deposition import (\n    accumulate_double_beta_deposition_step,\n    calculate_film_thickness_statistics,\n)
 from core.coating_process import coating_model_readiness
 
 from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
@@ -3073,15 +3073,16 @@ class ProductViewer(QWidget):
             np.rint(mapped[valid]), 0, 255
         ).astype(np.uint8)
         self._set_trajectory_surface_rgb(base)
-        # Include unreached target faces as zero-thickness areas in the mean.
-        mean_value = float(np.mean(face_values)) if len(face_values) else 0.0
-        max_value = float(np.max(face_values)) if len(face_values) else 0.0
-        reached = float(np.count_nonzero(face_values > 0.0)) / max(len(face_values), 1) * 100.0
+        # Include every Stage 2 target face, including zero-film faces.
+        # Statistics are weighted by physical triangle area, not face count.
+        target_areas = cache["face_areas"][cache["target_face_ids"]]
+        stats = calculate_film_thickness_statistics(face_values, target_areas, target)
         self.trajectory_thickness_label.setText(
-            "PREDICTED DRY FILM THICKNESS | "
-            f"MEAN {mean_value:.2f} µm  MAX {max_value:.2f} µm  "
-            f"REACHED FACES {reached:.1f}% / TARGET {target:.1f} µm  "
-            "| UNCALIBRATED"
+            "PREDICTED DRY FILM [µm] | "
+            f"MIN {stats['min_um']:.1f}  MEAN {stats['mean_um']:.1f}  "
+            f"P95 {stats['p95_um']:.1f}  MAX {stats['max_um']:.1f}  "
+            f"AREA ≥ TARGET {stats['area_at_or_above_target_percent']:.1f}% "
+            f"(TARGET {target:.1f}) | UNCALIBRATED"
         )
         self.trajectory_thickness_label.setToolTip(
             "Predicted dry-film thickness from the time-integrated Double-Beta "
@@ -3215,10 +3216,16 @@ class ProductViewer(QWidget):
                 self.trajectory_thickness_checkbox.blockSignals(False)
             if hasattr(self, "trajectory_thickness_label"):
                 if ready:
+                    target = float(cache["coating_process"]["target_dry_film_thickness_um"])
+                    face_values = cache["deposition_face_thickness_um"][cache["target_face_ids"]]
+                    target_areas = cache["face_areas"][cache["target_face_ids"]]
+                    stats = calculate_film_thickness_statistics(face_values, target_areas, target)
                     self.trajectory_thickness_label.setText(
-                        "PREDICTED DRY FILM THICKNESS | "
-                        f"MAX {float(np.max(cache['deposition_face_thickness_um'])):.2f} µm "
-                        "| UNCALIBRATED"
+                        "PREDICTED DRY FILM [µm] | "
+                        f"MIN {stats['min_um']:.1f}  MEAN {stats['mean_um']:.1f}  "
+                        f"P95 {stats['p95_um']:.1f}  MAX {stats['max_um']:.1f}  "
+                        f"AREA ≥ TARGET {stats['area_at_or_above_target_percent']:.1f}% "
+                        f"(TARGET {target:.1f}) | UNCALIBRATED"
                     )
                 else:
                     missing = ", ".join(cache["deposition_missing_inputs"])
