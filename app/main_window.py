@@ -1075,6 +1075,34 @@ class MainWindow(QMainWindow):
         layout.addWidget(summary_section)
 
         # ----------------------------------------------------
+        # STAGE 3 SPRAY PLAYBACK AND DIAGNOSTICS
+        # The controls are hosted here rather than above the 3D viewport.
+        # ----------------------------------------------------
+        spray_playback_content = QWidget()
+        spray_playback_layout = QVBoxLayout(spray_playback_content)
+        spray_playback_layout.setContentsMargins(5, 3, 5, 5)
+        spray_playback_layout.setSpacing(6)
+
+        spray_playback_layout.addWidget(
+            self.viewer.trajectory_playback_panel
+        )
+        spray_playback_layout.addWidget(
+            self.viewer.trajectory_path_stats_label
+        )
+        spray_playback_layout.addWidget(
+            self.viewer.trajectory_validation_label
+        )
+
+        self.spray_playback_section = self._make_collapsible_section(
+            "SPRAY PLAYBACK",
+            "spray_playback",
+            spray_playback_content,
+        )
+        self._right_section_buttons["spray_playback"].setChecked(False)
+        self.spray_playback_section.hide()
+        layout.addWidget(self.spray_playback_section)
+
+        # ----------------------------------------------------
         # EXACT CAD FACE INVENTORY
         # ----------------------------------------------------
         cad_face_content = QWidget()
@@ -2266,6 +2294,9 @@ class MainWindow(QMainWindow):
         self.current_stage2_result = None
         self.current_stage3_result = None
 
+        if hasattr(self, "spray_playback_section"):
+            self.spray_playback_section.hide()
+
         self.current_stage3_parameters = None
         self.pending_stage3_parameters = None
 
@@ -2602,6 +2633,11 @@ class MainWindow(QMainWindow):
     def _refresh_workflow_ui(self):
 
         stage = WORKFLOW_STAGES[self.active_stage]
+
+        if hasattr(self, "spray_playback_section"):
+            self.spray_playback_section.setVisible(
+                self.current_stage3_result is not None
+            )
 
         self.current_stage_label.setText(stage["name"])
         self.workflow_description.setText(stage["description"])
@@ -4082,6 +4118,9 @@ class MainWindow(QMainWindow):
             trajectory,
             face_surface_types=face_surface_types,
         )
+
+        if hasattr(self, "spray_playback_section"):
+            self.spray_playback_section.show()
 
         self._update_viewer_display_unit()
 
