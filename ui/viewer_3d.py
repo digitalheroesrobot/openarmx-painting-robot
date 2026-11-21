@@ -49,6 +49,90 @@ from pyvistaqt import QtInteractor
 from vtkmodules.vtkRenderingCore import vtkCellPicker
 
 
+def _build_spray_footprint_overlay(
+    surface_points,
+    surface_normals,
+    spray_directions,
+    standoff,
+    cone_angle_deg,
+    sides=24,
+    max_ellipse_ratio=4.0,
+):
+    """Create translucent tangent-plane spray footprints for preview only.
+
+    Each footprint is a local cone/plane intersection approximation. The
+    ellipse is widened along the projected spray direction for oblique
+    incidence. It is a visualization aid, not a ray-traced occlusion model.
+    """
+    points = np.asarray(surface_points, dtype=np.float64)
+    normals = np.asarray(surface_normals, dtype=np.float64)
+    directions = np.asarray(spray_directions, dtype=np.float64)
+    if (
+        points.ndim != 2 or points.shape[1] != 3
+        or normals.shape != points.shape or directions.shape != points.shape
+        or len(points) == 0
+    ):
+        raise ValueError("Footprint inputs must be matching non-empty (N, 3) arrays.")
+    if not all(np.all(np.isfinite(a)) for a in (points, normals, directions)):
+        raise ValueError("Footprint inputs must be finite.")
+    if not np.isfinite(standoff) or standoff <= 0.0:
+        raise ValueError("standoff must be finite and positive.")
+    if not np.isfinite(cone_angle_deg) or not 0.0 < cone_angle_deg < 179.0:
+        raise ValueError("cone_angle_deg must be in (0, 179).")
+    if int(sides) < 8 or not np.isfinite(max_ellipse_ratio) or max_ellipse_ratio < 1.0:
+        raise ValueError("Invalid footprint polygon resolution or ellipse ratio.")
+
+    base_radius = float(standoff) * math.tan(math.radians(float(cone_angle_deg)) * 0.5)
+    vertices = []
+    faces = []
+    angles = np.linspace(0.0, 2.0 * math.pi, int(sides), endpoint=False)
+    for center, normal, direction in zip(points, normals, directions):
+        normal_length = np.linalg.norm(normal)
+        direction_length = np.linalg.norm(direction)
+        if normal_length <= 1e-12 or direction_length <= 1e-12:
+            continue
+        n = normal / normal_length
+        d = direction / direction_length
+        incidence = float(np.clip(np.dot(n, -d), 0.0, 1.0))
+        if incidence <= 1e-4:
+            continue
+
+        major_axis = d - np.dot(d, n) * n
+        major_length = np.linalg.norm(major_axis)
+        if major_length <= 1e-10:
+            axis_u = np.cross(n, [1.0, 0.0, 0.0])
+            if np.linalg.norm(axis_u) <= 1e-10:
+                axis_u = np.cross(n, [0.0, 1.0, 0.0])
+            axis_u /= np.linalg.norm(axis_u)
+        else:
+            axis_u = major_axis / major_length
+        axis_v = np.cross(n, axis_u)
+        axis_v /= max(np.linalg.norm(axis_v), 1e-12)
+
+        ratio = min(1.0 / incidence, float(max_ellipse_ratio))
+        center_index = len(vertices)
+        # Small normal offset prevents z-fighting with the CAD surface.
+        overlay_center = center + n * max(float(standoff) * 1e-3, 1e-7)
+        vertices.append(overlay_center.tolist())
+        ring = (
+            overlay_center[None, :]
+            + (base_radius * ratio * np.cos(angles))[:, None] * axis_u[None, :]
+            + (base_radius * np.sin(angles))[:, None] * axis_v[None, :]
+        )
+        vertices.extend(ring.tolist())
+        for side in range(int(sides)):
+            a = center_index + 1 + side
+            b = center_index + 1 + ((side + 1) % int(sides))
+            faces.append([3, center_index, a, b])
+
+    if not faces:
+        return pv.PolyData()
+    return pv.PolyData(
+        np.asarray(vertices, dtype=np.float64),
+        np.asarray(faces, dtype=np.int64).ravel(),
+    )
+
+
 # ============================================================
 # UNIT CONFIGURATION
 # ============================================================
@@ -2091,7 +2175,17 @@ class ProductViewer(QWidget):
 
         self._render_product(reset_camera=True)
 
-    def show_spray_point_preview(self, mesh, nozzle_points, product_transform=None):
+    def show_spray_point_preview(
+        self,
+        mesh,
+        nozzle_points,
+        surface_points=None,
+        surface_normals=None,
+        spray_directions=None,
+        standoff=None,
+        cone_angle_deg=None,
+        product_transform=None,
+    ):
         """Show optimized nozzle locations only, without activating trajectory playback."""
         points = np.asarray(nozzle_points, dtype=np.float64)
         if points.ndim != 2 or points.shape[1] != 3 or len(points) == 0:
@@ -2124,6 +2218,30 @@ class ProductViewer(QWidget):
         self._set_trajectory_controls_visible(False)
         self.pose_control_panel.hide()
         self._render_product(reset_camera=False)
+
+        if all(value is not None for value in (
+            surface_points, surface_normals, spray_directions, standoff, cone_angle_deg
+        )):
+            footprint_mesh = _build_spray_footprint_overlay(
+                surface_points,
+                surface_normals,
+                spray_directions,
+                float(standoff),
+                float(cone_angle_deg),
+            )
+            if footprint_mesh.n_cells:
+                footprint_mesh.points = (
+                    np.asarray(footprint_mesh.points) @ rotation.T + transform[:3, 3]
+                )
+                self.plotter.add_mesh(
+                    footprint_mesh,
+                    color="#FFC857",
+                    opacity=0.16,
+                    smooth_shading=False,
+                    lighting=False,
+                    show_edges=False,
+                    pickable=False,
+                )
 
         world_points = points @ rotation.T + transform[:3, 3]
         self.plotter.add_points(
