@@ -72,6 +72,35 @@ class SprayGunEnvelopeConfig:
                 raise ValueError("Tool-envelope sample step must be positive.")
 
 
+def build_spray_gun_config_from_profile(
+    profile: dict | None,
+    minimum_surface_clearance_mm: float,
+) -> SprayGunEnvelopeConfig:
+    """Create a validated envelope config from the active UI sprayer profile."""
+    values = profile if isinstance(profile, dict) else {}
+    config = SprayGunEnvelopeConfig(
+        gun_body_length_mm=float(values.get("gun_body_length_mm", 220.0)),
+        gun_body_diameter_mm=float(values.get("gun_body_diameter_mm", 45.0)),
+        nozzle_length_mm=float(values.get("nozzle_length_mm", 25.0)),
+        minimum_surface_clearance_mm=float(minimum_surface_clearance_mm),
+        nozzle_outer_diameter_mm=(
+            float(values["nozzle_outer_diameter_mm"])
+            if values.get("nozzle_outer_diameter_mm") not in (None, "", 0, 0.0)
+            else None
+        ),
+        tcp_to_nozzle_tip_mm=(
+            float(values["tcp_to_nozzle_tip_mm"])
+            if values.get("tcp_to_nozzle_tip_mm") not in (None, "")
+            else None
+        ),
+        dimensions_are_estimate=bool(
+            values.get("gun_body_dimensions_are_estimate", True)
+        ),
+    )
+    config.validate()
+    return config
+
+
 def _mm_per_coordinate_unit(coordinate_unit: str) -> float:
     key = str(coordinate_unit).strip().lower()
     if key not in MM_PER_UNIT:
