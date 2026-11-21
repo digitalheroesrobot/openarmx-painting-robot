@@ -127,6 +127,30 @@ class RelativeDepositionPathOptimizerTests(unittest.TestCase):
             "FIXED_CALLER_SUPPLIED_REFERENCE_STANDOFF",
         )
 
+
+    def test_coverage_denominator_is_paintable_component_area(self):
+        centers = self.mesh.triangles_center
+        normals = self.mesh.face_normals
+        nozzle = centers + normals * 80.
+        candidate = {
+            "face_indices": self.face_ids,
+            "nozzle_points": nozzle,
+            "spray_directions": -normals,
+            "segment_ids": np.zeros(len(self.face_ids), dtype=np.int64),
+            "components": [{
+                "source_face_indices": [0],
+                "status": "RASTERIZED",
+            }],
+        }
+        report = evaluate_raster_candidate(
+            self.mesh, candidate, self.config, spray_speed=100.,
+            reference_standoff=80.,
+        )
+        self.assertAlmostEqual(
+            report["total_evaluation_area_coordinate_units2"],
+            float(self.mesh.area_faces[0]),
+        )
+
     def test_pose_time_weights_sum_to_stroke_length_over_speed(self):
         points = np.array([
             [0., 0., 0.], [3., 0., 0.], [3., 4., 0.],
