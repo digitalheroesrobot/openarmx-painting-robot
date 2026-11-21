@@ -4398,11 +4398,11 @@ def generate_spray_trajectory(
     cone_angle_for_optimization = float(spray_footprint["included_angle_deg"])
     if cone_angle_for_optimization > 0.0:
         face_areas = np.asarray(mesh.area_faces, dtype=np.float64)
-        # Use a finer independent mesh-probe set for footprint-area integration.
-        # This prevents point pruning from relying only on the coarse candidate
-        # centers and missing uncovered regions between them.
+        # Use an independent mesh-probe set at one-eighth of candidate spacing
+        # for footprint-area integration. This reduces the chance of missing
+        # narrow uncovered regions between the retained candidate centers.
         probe_spacing_coordinate_units = max(
-            spacing_coordinate_units * 0.25, 1e-6
+            spacing_coordinate_units * 0.125, 1e-6
         )
         try:
             probe_sampling_result = _sample_candidate_faces(
