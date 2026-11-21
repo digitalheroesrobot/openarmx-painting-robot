@@ -7,6 +7,7 @@ import trimesh
 from stages.trajectory_safety import (
     SprayGunEnvelopeConfig,
     build_gun_body_centerline,
+    build_spray_gun_config_from_profile,
     evaluate_spray_gun_clearance,
 )
 
@@ -91,6 +92,42 @@ class SprayGunEnvelopeTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "UNSAFE")
         self.assertEqual(result["unsafe_sample_indices"], [0])
+
+    def test_profile_dimensions_are_used_by_safety_config(self):
+        config = build_spray_gun_config_from_profile(
+            {
+                "gun_body_length_mm": 310.0,
+                "gun_body_diameter_mm": 52.0,
+                "nozzle_length_mm": 31.0,
+                "tcp_to_nozzle_tip_mm": 18.0,
+                "gun_body_dimensions_are_estimate": False,
+            },
+            minimum_surface_clearance_mm=205.0,
+        )
+        self.assertEqual(config.gun_body_length_mm, 310.0)
+        self.assertEqual(config.gun_body_diameter_mm, 52.0)
+        self.assertEqual(config.nozzle_length_mm, 31.0)
+        self.assertEqual(config.minimum_surface_clearance_mm, 205.0)
+        self.assertEqual(config.tcp_to_nozzle_tip_mm, 18.0)
+        self.assertFalse(config.dimensions_are_estimate)
+
+    def test_missing_profile_uses_explicit_generic_defaults(self):
+        config = build_spray_gun_config_from_profile(
+            None, minimum_surface_clearance_mm=180.0
+        )
+        self.assertEqual(config.gun_body_length_mm, 220.0)
+        self.assertEqual(config.gun_body_diameter_mm, 45.0)
+        self.assertTrue(config.dimensions_are_estimate)
+
+    def test_sample_status_is_yellow_when_dimensions_are_estimates(self):
+        result = evaluate_spray_gun_clearance(
+            _plane_mesh(),
+            np.array([[0.0, 0.0, 180.0]]),
+            _downward_frame()[None, :, :],
+            self.config,
+            "mm",
+        )
+        self.assertEqual(result["sample_status"], ["YELLOW"])
 
     def test_invalid_frame_is_rejected(self):
         with self.assertRaises(ValueError):
