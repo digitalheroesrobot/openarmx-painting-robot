@@ -160,7 +160,6 @@ def optimize_redundant_spray_points(
         "input_point_count": int(count),
         "removed_point_count": int(len(removed)),
         "retained_point_count": int(len(kept_indices)),
-        "removed_indices_in_preoptimized_order": removed,
         "coverage_preserved": coverage_preserved,
         "sampled_surface_coverage_percent": (
             100.0 * covered_area / total_area if total_area > 0.0 else 0.0
