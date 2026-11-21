@@ -137,6 +137,26 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             100.0,
         )
 
+        # Dense probes over the flat target must lie inside at least one
+        # nominal circular footprint. This is a geometric test, not a paint
+        # deposition or curved-surface certification.
+        gx, gy = np.meshgrid(
+            np.linspace(0.0, 100.0, 21),
+            np.linspace(0.0, 100.0, 21),
+        )
+        probes = np.column_stack((
+            gx.ravel(), gy.ravel(), np.zeros(gx.size)
+        ))
+        sample_points = half_overlap["surface_points"]
+        nearest_distances = np.linalg.norm(
+            probes[:, None, :] - sample_points[None, :, :],
+            axis=2,
+        ).min(axis=1)
+        self.assertLessEqual(
+            float(np.max(nearest_distances)),
+            width * 0.5 + 1e-8,
+        )
+
     def test_legacy_16_column_data_contract_is_unchanged(self):
         result = self._generate([7, 9])
         trajectory = result
