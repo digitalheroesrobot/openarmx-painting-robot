@@ -101,6 +101,43 @@ def build_spray_gun_config_from_profile(
     return config
 
 
+
+def aggregate_sample_safety_by_face(
+    face_indices: np.ndarray,
+    sample_status: list[str] | np.ndarray,
+    face_count: int,
+) -> np.ndarray:
+    """Aggregate trajectory sample safety onto source CAD faces.
+
+    Returns uint8 face labels: 0=UNASSESSED, 1=GREEN, 2=YELLOW, 3=RED.
+    The most severe sample status wins when multiple samples reference a face.
+    """
+    faces = np.asarray(face_indices, dtype=np.int64)
+    statuses = np.asarray(sample_status, dtype=str)
+    count = int(face_count)
+    if count <= 0:
+        raise ValueError("face_count must be positive.")
+    if faces.ndim != 1 or statuses.ndim != 1 or len(faces) != len(statuses):
+        raise ValueError("face_indices and sample_status must be matching 1D arrays.")
+    if len(faces) == 0:
+        raise ValueError("At least one trajectory sample is required.")
+    if np.any(faces < 0) or np.any(faces >= count):
+        raise ValueError("face_indices contain an out-of-range CAD face index.")
+
+    severity = {"GREEN": 1, "YELLOW": 2, "RED": 3}
+    normalized = np.char.upper(np.char.strip(statuses))
+    unknown = sorted(set(normalized.tolist()) - set(severity))
+    if unknown:
+        raise ValueError(f"Unknown trajectory safety status values: {unknown}")
+
+    face_status = np.zeros(count, dtype=np.uint8)
+    sample_severity = np.asarray(
+        [severity[value] for value in normalized], dtype=np.uint8
+    )
+    np.maximum.at(face_status, faces, sample_severity)
+    return face_status
+
+
 def _mm_per_coordinate_unit(coordinate_unit: str) -> float:
     key = str(coordinate_unit).strip().lower()
     if key not in MM_PER_UNIT:
