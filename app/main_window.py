@@ -3113,8 +3113,9 @@ class MainWindow(QMainWindow):
         # ----------------------------------------------------
 
         elif self.active_stage == STAGE_SPRAY_TRAJECTORY:
-
-            self.run_spray_trajectory(force=True)
+            # Stage 3 is interactive-only. Never invoke the legacy
+            # automatic trajectory generator from the main action button.
+            self._start_interactive_spray_path()
             return
 
     # ========================================================
