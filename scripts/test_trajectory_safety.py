@@ -75,8 +75,8 @@ class SprayGunEnvelopeTests(unittest.TestCase):
 
     def test_body_entering_keepout_is_unsafe(self):
         mesh = _plane_mesh()
-        # Flip +Z toward the product: body then extends into the keep-out zone.
-        toward_surface_frame = np.diag([1.0, -1.0, -1.0])
+        # Identity frame points +Z toward the product; the body extends along -Z.
+        toward_surface_frame = np.eye(3)
         tip = np.array([[0.0, 0.0, 400.0]])
         config = SprayGunEnvelopeConfig(
             gun_body_length_mm=220.0,
