@@ -3391,25 +3391,24 @@ class MainWindow(QMainWindow):
         # Detect internal cylindrical surfaces immediately after import so
         # hole locations and CAD-origin distances are visible before Stage 1.
         hole_candidates = []
-        if is_step:
-            try:
-                hole_candidates = detect_hole_candidates(
-                    mesh,
-                    coordinate_unit="mm",
-                )
-            except Exception as exc:
-                traceback.print_exc()
-                self.status_bar.showMessage(
-                    f"STEP loaded, but preliminary hole detection failed: {exc}",
-                    12000,
-                )
+        try:
+            hole_candidates = detect_hole_candidates(
+                mesh,
+                coordinate_unit="mm",
+            )
+        except Exception as exc:
+            traceback.print_exc()
+            self.status_bar.showMessage(
+                f"STEP loaded, but preliminary hole detection failed: {exc}",
+                12000,
+            )
         self.viewer.set_hole_candidates(hole_candidates)
         diagnostics = mesh.metadata.get("hole_detection_diagnostics", {})
         if hole_candidates:
-                self.status_bar.showMessage(
-                    f"STEP hole-axis candidates detected: {len(hole_candidates)}",
-                    10000,
-                )
+            self.status_bar.showMessage(
+                f"STEP hole-axis candidates detected: {len(hole_candidates)}",
+                10000,
+            )
         else:
             self.status_bar.showMessage(
                 "STEP loaded, but no internal-cylinder candidates were classified. "
