@@ -13,7 +13,7 @@ from core.spray_coverage import (
 )
 
 from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
-from vtkmodules.vtkFiltersFlowPaths import vtkModifiedBSPTree
+from vtkmodules.vtkFiltersGeneral import vtkOBBTree
 
 from PySide6.QtCore import QEvent, Qt, Signal, QTimer
 from PySide6.QtGui import QColor
@@ -2588,7 +2588,7 @@ class ProductViewer(QWidget):
         occlusion_polydata = pv.PolyData(
             mesh_vertices_world, mesh_cell_array
         )
-        occlusion_locator = vtkModifiedBSPTree()
+        occlusion_locator = vtkOBBTree()
         occlusion_locator.SetDataSet(occlusion_polydata)
         occlusion_locator.BuildLocator()
         mesh_bounds = np.asarray(self.current_mesh.bounds, dtype=np.float64)
@@ -2738,7 +2738,7 @@ class ProductViewer(QWidget):
     def _get_surface_sample_hits_from_spray(self, path_index):
         """Return visible mesh samples inside the spray footprint.
 
-        The footprint test is only the geometric envelope. A VTK BSP-tree
+        The footprint test is only the geometric envelope. A VTK OBB-tree
         ray query then rejects samples whose nozzle-to-surface segment
         intersects any nearer product triangle, including non-paintable faces.
         """
