@@ -2186,6 +2186,7 @@ def _order_trajectory_with_planar_raster(
         print(
             "STEP SURFACE TYPE SAMPLE COUNTS | "
             + ", ".join(f"{key}: {value}" for key, value in step_surface_refinement['step_surface_type_sample_counts'].items())
+        )
     elif step_surface_refinement["status"] not in {"NOT_APPLICABLE"}:
         print(
             "STEP B-REP PATH REFINEMENT | "
