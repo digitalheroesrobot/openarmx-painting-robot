@@ -18,7 +18,10 @@ from core.coating_deposition import (
 )
 from core.coating_process import coating_model_readiness
 from core.coating_process import DEFAULT_COATING_PROCESS
-from core.spray_coverage_optimizer import build_coverage_correction_plan
+from core.spray_coverage_optimizer import (
+    append_correction_strokes_to_trajectory,
+    build_coverage_correction_plan,
+)
 
 from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
 from vtkmodules.vtkFiltersGeneral import vtkOBBTree
@@ -200,6 +203,7 @@ class ProductViewer(QWidget):
         self._playback_nozzle_actor = None
         self._playback_gun_actors = []
         self._playback_cache = None
+        self._correction_preview_appended = False
         self._trajectory_paint_color_hex = None
         self._trajectory_surface_polydata = None
         self._trajectory_surface_face_mask = None
@@ -992,6 +996,20 @@ class ProductViewer(QWidget):
             "validation are still required."
         )
         playback_layout.addWidget(self.trajectory_correction_label)
+
+        self.trajectory_correction_apply_button = QPushButton(
+            "APPEND CORRECTION STROKES TO PREVIEW"
+        )
+        self.trajectory_correction_apply_button.setEnabled(False)
+        self.trajectory_correction_apply_button.setToolTip(
+            "Append CAD-space deficit candidates to the preview trajectory and "
+            "reset playback. Preview only: visibility, IK, collision and calibrated "
+            "deposition are not validated."
+        )
+        self.trajectory_correction_apply_button.clicked.connect(
+            self._apply_coverage_correction_preview
+        )
+        playback_layout.addWidget(self.trajectory_correction_apply_button)
 
         self.trajectory_path_stats_label = QLabel(
             "PATH SAMPLES | Planar: —  Curved: —  Fallback: —  Total: —"
@@ -2216,7 +2234,17 @@ class ProductViewer(QWidget):
                 )
             self.face_status_labels = status_labels.astype(np.uint8, copy=True)
         self.selected_patch_id = None
+        for key in ("travel_speeds_mm_s", "trajectory_time_s"):
+            if key in trajectory_data:
+                values = np.asarray(trajectory_data[key], dtype=float)
+                if values.shape != (count,) or not np.all(np.isfinite(values)):
+                    raise ValueError(f"{key} must contain {count} finite values.")
+                if key == "trajectory_time_s" and count > 1 and np.any(np.diff(values) < 0.0):
+                    raise ValueError("trajectory_time_s must be monotonic.")
+                data[key] = values.copy()
         self.trajectory_data = data
+        self._correction_preview_appended = False
+        self.trajectory_correction_apply_button.setEnabled(False)
         self._update_trajectory_path_statistics_label()
         self._stop_trajectory_playback(reset=True)
         self.trajectory_playback_slider.blockSignals(True)
@@ -3414,6 +3442,12 @@ class ProductViewer(QWidget):
         strokes = plan["correction_strokes"]
         stroke_count = len(strokes["stroke_ranges"])
         waypoint_count = len(strokes["source_sample_indices"])
+        if hasattr(self, "trajectory_correction_apply_button"):
+            self.trajectory_correction_apply_button.setEnabled(
+                stroke_count > 0
+                and not self._correction_preview_appended
+                and self._playback_finished
+            )
         unreached_area = float(np.sum(
             cache["sample_area_mm2"][analysis["unreached_sample_indices"]]
         ))
@@ -3442,6 +3476,67 @@ class ProductViewer(QWidget):
             "uncalibrated. Do not execute these candidates on a robot."
         )
         return plan
+
+    def _apply_coverage_correction_preview(self):
+        """Append CAD-space deficit strokes to the preview trajectory only."""
+        if self._playback_timer.isActive() or not self._playback_finished:
+            self.trajectory_correction_label.setText(
+                "CORRECTION APPEND | COMPLETE PLAYBACK BEFORE APPLYING"
+            )
+            return
+        cache = self._prepare_trajectory_playback_cache()
+        plan = cache.get("coverage_correction_plan") if cache is not None else None
+        if not isinstance(plan, dict) or self.trajectory_data is None:
+            return
+        strokes = plan.get("correction_strokes", {})
+        if not strokes.get("stroke_ranges") or self._correction_preview_appended:
+            return
+
+        process = cache["coating_process"]
+        base_speed = float(process.get("base_travel_speed_mm_s", 500.0))
+        minimum_speed = float(process.get("min_travel_speed_mm_s", 300.0))
+        source_face_ids = np.repeat(
+            cache["target_face_ids"], cache["sample_count_per_face"]
+        )
+        base_trajectory = dict(self.trajectory_data)
+        base_trajectory["travel_speeds_mm_s"] = cache["travel_speeds_mm_s"].copy()
+        base_trajectory["trajectory_time_s"] = cache["trajectory_time_s"].copy()
+        base_trajectory["nozzle_frames"] = np.asarray(
+            self.trajectory_data["nozzle_frames"], dtype=float
+        )
+        try:
+            updated = append_correction_strokes_to_trajectory(
+                trajectory=base_trajectory,
+                correction_strokes=strokes,
+                source_face_ids=source_face_ids,
+                mm_per_unit=cache["mm_per_unit"],
+                base_speed_mm_s=base_speed,
+                minimum_speed_mm_s=minimum_speed,
+            )
+        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            self.trajectory_correction_label.setText(
+                "CORRECTION APPEND | FAILED — " + str(exc)
+            )
+            return
+
+        added = int(updated["correction_path_metadata"]["added_sample_count"])
+        self.trajectory_data = updated
+        self._correction_preview_appended = True
+        self._playback_cache = None
+        self._render_product(reset_camera=False)
+        total = len(self.trajectory_data["nozzle_points"])
+        self.trajectory_playback_slider.blockSignals(True)
+        self.trajectory_playback_slider.setRange(0, max(0, total - 1))
+        self.trajectory_playback_slider.setValue(0)
+        self.trajectory_playback_slider.blockSignals(False)
+        self.trajectory_playback_label.setText(f"0 / {total}")
+        self.trajectory_correction_apply_button.setEnabled(False)
+        self.trajectory_correction_label.setText(
+            f"CORRECTION PREVIEW APPENDED | {added} SAMPLES | "
+            "PRODUCT_CAD | PREVIEW ONLY — REPLAY FROM RESET"
+        )
+        self._update_trajectory_playback_visuals(0, update_coverage=False)
+        self.plotter.render()
 
     def _on_film_thickness_visibility_changed(self, checked):
         cache = self._prepare_trajectory_playback_cache()
