@@ -269,7 +269,12 @@ class ProductViewer(QWidget):
             self._render_product(reset_camera=False)
 
     def _add_hole_candidate_overlay(self):
-        """Render detected hole axes and CAD-origin distance measurements."""
+        """Render hole-axis representative points with CAD-coordinate labels.
+
+        Coordinates are always reported in the original STEP coordinate
+        system (millimetres). The actor transform affects only marker
+        placement in the viewport; it never changes the reported CAD values.
+        """
         if not self.hole_candidates or self._pose_actor is None:
             return
 
@@ -281,44 +286,38 @@ class ProductViewer(QWidget):
             )
             return homogeneous[:3] / homogeneous[3]
 
-        centers = []
+        centers_view = []
         labels = []
-        line_segments = []
         unit_label = self._display_unit_label()
 
         for item in self.hole_candidates:
             center_source = np.asarray(
                 item["axis_center_coordinate_units"], dtype=float
             )
-            axis_point_source = np.asarray(
-                item["closest_axis_point_to_origin_coordinate_units"],
-                dtype=float,
-            )
-            center_view = transform_point(center_source)
-            axis_point_view = transform_point(axis_point_source)
-            centers.append(center_view)
+            if center_source.shape != (3,) or not np.all(np.isfinite(center_source)):
+                continue
 
-            axis_distance = self._convert_source_length_to_display(
-                item["origin_to_axis_distance_coordinate_units"]
-            )
-            center_distance = self._convert_source_length_to_display(
-                item["origin_to_axis_center_distance_coordinate_units"]
-            )
-            radius = self._convert_source_length_to_display(
-                item["radius_coordinate_units"]
+            centers_view.append(transform_point(center_source))
+
+            # These are original STEP CAD coordinates, not world coordinates
+            # and not distances from the origin.
+            x = self._convert_source_length_to_display(float(center_source[0]))
+            y = self._convert_source_length_to_display(float(center_source[1]))
+            z = self._convert_source_length_to_display(float(center_source[2]))
+            diameter = self._convert_source_length_to_display(
+                float(item["diameter_coordinate_units"])
             )
             hole_id = int(item.get("hole_id", len(labels) + 1))
             labels.append(
-                f"H{hole_id}  R={radius:.2f} {unit_label}\n"
-                f"O-AXIS={axis_distance:.2f} {unit_label}\n"
-                f"O-CENTER={center_distance:.2f} {unit_label}"
+                f"H{hole_id}  X={x:.2f} {unit_label}\n"
+                f"Y={y:.2f} {unit_label}  Z={z:.2f} {unit_label}\n"
+                f"D={diameter:.2f} {unit_label}"
             )
-            line_segments.append((
-                transform_point(np.zeros(3, dtype=float)),
-                axis_point_view,
-            ))
 
-        points = pv.PolyData(np.asarray(centers, dtype=float))
+        if not centers_view:
+            return
+
+        points = pv.PolyData(np.asarray(centers_view, dtype=float))
         self.plotter.add_mesh(
             points,
             color="#FF3DCE",
@@ -328,18 +327,8 @@ class ProductViewer(QWidget):
             lighting=False,
             pickable=False,
         )
-        lines = self._build_line_polydata(line_segments)
-        if lines is not None:
-            self.plotter.add_mesh(
-                lines,
-                color="#FF3DCE",
-                line_width=2.5,
-                render_lines_as_tubes=True,
-                lighting=False,
-                pickable=False,
-            )
         self.plotter.add_point_labels(
-            np.asarray(centers, dtype=float),
+            np.asarray(centers_view, dtype=float),
             labels,
             font_size=10,
             text_color="#FFFFFF",
@@ -352,8 +341,8 @@ class ProductViewer(QWidget):
             pickable=False,
         )
         self.plotter.add_text(
-            f"INTERNAL CYLINDRICAL SURFACE CANDIDATES: {len(labels)}"
-            f"  |  DISTANCES FROM CAD ORIGIN (0,0,0)",
+            f"HOLE AXIS REFERENCE COORDINATES | ORIGINAL STEP FRAME (0,0,0)"
+            f" | {len(labels)} CANDIDATE(S)",
             position="upper_left",
             font_size=10,
             color="#FF78E5",
