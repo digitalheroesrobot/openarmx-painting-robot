@@ -684,14 +684,95 @@ class ProductViewer(QWidget):
         display_row.addStretch()
         root.addLayout(display_row)
 
-        playback_row = QHBoxLayout()
-        playback_row.setSpacing(7)
-        playback_row.addWidget(QLabel("PATH PLAYBACK:"))
+        # Compact media-player style playback console.
+        playback_panel = QFrame()
+        playback_panel.setObjectName("TrajectoryPlaybackPanel")
+        playback_panel.setStyleSheet("""
+            QFrame#TrajectoryPlaybackPanel {
+                background-color: #182A35;
+                border: 1px solid #385260;
+                border-radius: 8px;
+            }
+            QFrame#TrajectoryPlaybackPanel QLabel {
+                background: transparent;
+                border: none;
+                color: #DCE8EF;
+            }
+            QFrame#TrajectoryPlaybackPanel QPushButton {
+                background-color: #263F4D;
+                color: #EAF4FA;
+                border: 1px solid #527080;
+                border-radius: 5px;
+                padding: 5px 10px;
+                min-width: 34px;
+                min-height: 25px;
+                font-weight: 600;
+            }
+            QFrame#TrajectoryPlaybackPanel QPushButton:hover {
+                background-color: #345668;
+                border-color: #79AFC7;
+            }
+            QFrame#TrajectoryPlaybackPanel QPushButton:pressed {
+                background-color: #1D3440;
+            }
+            QFrame#TrajectoryPlaybackPanel QSlider::groove:horizontal {
+                height: 5px;
+                background: #405967;
+                border-radius: 2px;
+            }
+            QFrame#TrajectoryPlaybackPanel QSlider::sub-page:horizontal {
+                background: #35A7D8;
+                border-radius: 2px;
+            }
+            QFrame#TrajectoryPlaybackPanel QSlider::handle:horizontal {
+                background: #EAF7FC;
+                border: 2px solid #35A7D8;
+                width: 13px;
+                margin: -5px 0;
+                border-radius: 7px;
+            }
+            QFrame#TrajectoryPlaybackPanel QDoubleSpinBox {
+                background: #213743;
+                color: #EAF4FA;
+                border: 1px solid #527080;
+                border-radius: 4px;
+                padding: 3px 5px;
+                min-height: 22px;
+            }
+            QFrame#TrajectoryPlaybackPanel QProgressBar {
+                background: #10212B;
+                color: #EAF7FC;
+                border: 1px solid #45616F;
+                border-radius: 4px;
+                text-align: center;
+                min-width: 78px;
+                max-width: 92px;
+                min-height: 17px;
+                max-height: 17px;
+            }
+            QFrame#TrajectoryPlaybackPanel QProgressBar::chunk {
+                background: #D95B43;
+                border-radius: 3px;
+            }
+        """)
+        playback_layout = QVBoxLayout(playback_panel)
+        playback_layout.setContentsMargins(10, 7, 10, 7)
+        playback_layout.setSpacing(5)
+
+        # Main transport row: title/status, transport buttons, and speed.
+        transport_row = QHBoxLayout()
+        transport_row.setSpacing(6)
+
+        playback_title = QLabel("PATH PLAYBACK")
+        playback_title.setStyleSheet(
+            "color: #9FC3D4; font-size: 10px; font-weight: 800; letter-spacing: 1px;"
+        )
+        transport_row.addWidget(playback_title)
 
         self.trajectory_spray_state_label = QLabel("SPRAY: OFF")
-        self.trajectory_spray_state_label.setMinimumWidth(145)
+        self.trajectory_spray_state_label.setMinimumWidth(112)
         self.trajectory_spray_state_label.setStyleSheet(
-            "color: #8FA3B2; font-weight: 700; padding: 2px 6px;"
+            "color: #8FA3B2; font-weight: 700; padding: 2px 5px;"
         )
         self.trajectory_spray_state_label.setToolTip(
             "The translucent spray preview follows the configured pattern and footprint. "
@@ -699,76 +780,90 @@ class ProductViewer(QWidget):
             "Spray is OFF between strokes; orange travel links are straight-line estimates only "
             "and are not collision-checked or robot-reachability validated."
         )
-        playback_row.addWidget(self.trajectory_spray_state_label)
+        transport_row.addWidget(self.trajectory_spray_state_label)
 
-        self.trajectory_play_button = QPushButton("Play")
-        self.trajectory_play_button.setToolTip("Play the nozzle path from start to finish")
+        self.trajectory_play_button = QPushButton("▶ Play")
+        self.trajectory_play_button.setToolTip("Play or pause the nozzle path")
+        self.trajectory_play_button.setMinimumWidth(76)
         self.trajectory_play_button.clicked.connect(self._toggle_trajectory_playback)
-        playback_row.addWidget(self.trajectory_play_button)
+        transport_row.addWidget(self.trajectory_play_button)
 
-        self.trajectory_step_button = QPushButton("Step")
+        self.trajectory_step_button = QPushButton("Step ›")
         self.trajectory_step_button.setToolTip("Advance by one trajectory sample")
+        self.trajectory_step_button.setMinimumWidth(64)
         self.trajectory_step_button.clicked.connect(self._step_trajectory_playback)
-        playback_row.addWidget(self.trajectory_step_button)
+        transport_row.addWidget(self.trajectory_step_button)
 
-        self.trajectory_reset_button = QPushButton("Reset")
+        self.trajectory_reset_button = QPushButton("↺")
+        self.trajectory_reset_button.setToolTip("Return playback to the beginning")
+        self.trajectory_reset_button.setFixedWidth(36)
         self.trajectory_reset_button.clicked.connect(self._reset_trajectory_playback)
-        playback_row.addWidget(self.trajectory_reset_button)
+        transport_row.addWidget(self.trajectory_reset_button)
 
-        self.trajectory_playback_slider = QSlider(Qt.Horizontal)
-        self.trajectory_playback_slider.setRange(0, 0)
-        self.trajectory_playback_slider.setSingleStep(1)
-        self.trajectory_playback_slider.setPageStep(10)
-        self.trajectory_playback_slider.valueChanged.connect(
-            self._on_trajectory_playback_slider_changed
+        transport_row.addStretch(1)
+        speed_label = QLabel("SPEED")
+        speed_label.setStyleSheet(
+            "color: #9FB3BE; font-size: 9px; font-weight: 700;"
         )
-        playback_row.addWidget(self.trajectory_playback_slider, 1)
+        transport_row.addWidget(speed_label)
 
-        self.trajectory_playback_label = QLabel("0 / 0")
-        self.trajectory_playback_label.setMinimumWidth(150)
-        self.trajectory_playback_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        playback_row.addWidget(self.trajectory_playback_label)
-
-        playback_row.addWidget(QLabel("PAINTED"))
-        self.trajectory_coverage_bar = QProgressBar()
-        self.trajectory_coverage_bar.setRange(0, 1000)
-        self.trajectory_coverage_bar.setValue(0)
-        self.trajectory_coverage_bar.setFormat("%p%")
-        self.trajectory_coverage_bar.setFixedWidth(112)
-        self.trajectory_coverage_bar.setFixedHeight(17)
-        self.trajectory_coverage_bar.setStyleSheet("""
-            QProgressBar {
-                background: #172A35;
-                color: #EAF7FC;
-                border: 1px solid #3B5968;
-                border-radius: 4px;
-                text-align: center;
-            }
-            QProgressBar::chunk {
-                background: #D95B43;
-                border-radius: 3px;
-            }
-        """)
-        playback_row.addWidget(self.trajectory_coverage_bar)
-
-        self.trajectory_coverage_label = QLabel("0.0% | 0.000 / 0.000 area")
-        self.trajectory_coverage_label.setMinimumWidth(250)
-        self.trajectory_coverage_label.setToolTip(
-            "Estimated geometric area reached by the spray envelope. "
-            "This is not a measured coating-thickness or paint-mass result."
-        )
-        playback_row.addWidget(self.trajectory_coverage_label)
-
-        playback_row.addWidget(QLabel("Speed"))
         self.trajectory_playback_speed = QDoubleSpinBox()
         self.trajectory_playback_speed.setRange(0.25, 10.0)
         self.trajectory_playback_speed.setSingleStep(0.25)
         self.trajectory_playback_speed.setValue(1.0)
         self.trajectory_playback_speed.setSuffix("x")
-        self.trajectory_playback_speed.setMaximumWidth(76)
-        playback_row.addWidget(self.trajectory_playback_speed)
+        self.trajectory_playback_speed.setFixedWidth(68)
+        transport_row.addWidget(self.trajectory_playback_speed)
+        playback_layout.addLayout(transport_row)
 
-        root.addLayout(playback_row)
+        # Seek row: a long timeline with a compact current/total counter.
+        timeline_row = QHBoxLayout()
+        timeline_row.setSpacing(8)
+        self.trajectory_playback_slider = QSlider(Qt.Horizontal)
+        self.trajectory_playback_slider.setRange(0, 0)
+        self.trajectory_playback_slider.setSingleStep(1)
+        self.trajectory_playback_slider.setPageStep(10)
+        self.trajectory_playback_slider.setMinimumWidth(80)
+        self.trajectory_playback_slider.valueChanged.connect(
+            self._on_trajectory_playback_slider_changed
+        )
+        timeline_row.addWidget(self.trajectory_playback_slider, 1)
+
+        self.trajectory_playback_label = QLabel("0 / 0")
+        self.trajectory_playback_label.setMinimumWidth(82)
+        self.trajectory_playback_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.trajectory_playback_label.setStyleSheet(
+            "color: #C8D8E0; font-size: 10px; font-weight: 700;"
+        )
+        timeline_row.addWidget(self.trajectory_playback_label)
+        playback_layout.addLayout(timeline_row)
+
+        # Coverage row: progress bar and concise area summary.
+        coverage_row = QHBoxLayout()
+        coverage_row.setSpacing(7)
+        coverage_title = QLabel("PAINT COVERAGE")
+        coverage_title.setStyleSheet(
+            "color: #9FB3BE; font-size: 9px; font-weight: 700;"
+        )
+        coverage_row.addWidget(coverage_title)
+
+        self.trajectory_coverage_bar = QProgressBar()
+        self.trajectory_coverage_bar.setRange(0, 1000)
+        self.trajectory_coverage_bar.setValue(0)
+        self.trajectory_coverage_bar.setFormat("%p%")
+        self.trajectory_coverage_bar.setFixedHeight(17)
+        coverage_row.addWidget(self.trajectory_coverage_bar)
+
+        self.trajectory_coverage_label = QLabel("0.0%  |  0.000 / 0.000 area")
+        self.trajectory_coverage_label.setMinimumWidth(0)
+        self.trajectory_coverage_label.setToolTip(
+            "Estimated geometric area reached by the spray envelope. "
+            "This is not a measured coating-thickness or paint-mass result."
+        )
+        coverage_row.addWidget(self.trajectory_coverage_label, 1)
+        playback_layout.addLayout(coverage_row)
+
+        root.addWidget(playback_panel)
 
         self.trajectory_path_stats_label = QLabel(
             "PATH SAMPLES | Planar: —  Curved: —  Fallback: —  Total: —"
@@ -2225,7 +2320,7 @@ class ProductViewer(QWidget):
         if hasattr(self, "_playback_timer"):
             self._playback_timer.stop()
         if hasattr(self, "trajectory_play_button"):
-            self.trajectory_play_button.setText("Play")
+            self.trajectory_play_button.setText("▶ Play")
         if reset:
             actors = list(self._playback_gun_actors)
             actors.extend((
@@ -2951,7 +3046,7 @@ class ProductViewer(QWidget):
                 self._playback_elapsed_s = float(times[self._playback_index])
             if self._playback_path_actor is None and self._playback_nozzle_actor is None:
                 self._update_trajectory_playback_visuals(self._playback_index)
-        self.trajectory_play_button.setText("Pause")
+        self.trajectory_play_button.setText("Ⅱ Pause")
         self._playback_timer.start()
 
     def _complete_trajectory_playback(self):
