@@ -56,7 +56,7 @@ def is_line_of_sight_occluded(
     strictly before the target (endpoint/self hits are ignored).
 
     Intersection points are supplied by the scene's spatial acceleration
-    structure (VTK OBBTree in the viewer). This helper owns the numerical
+    structure (VTK BSP tree in the viewer). This helper owns the numerical
     segment test and is independent of the renderer.
     """
     origin = np.asarray(ray_origin, dtype=np.float64)
