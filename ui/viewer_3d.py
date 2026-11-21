@@ -1777,10 +1777,12 @@ class ProductViewer(QWidget):
         return np.zeros(3, dtype=float)
 
     def _prepare_product_mesh(self, mesh):
-        mesh_copy = mesh.copy()
-
-        self.source_origin = self._calculate_cad_origin(mesh_copy)
-        bounds = np.asarray(mesh_copy.bounds, dtype=float)
+        # The viewer treats the source mesh as read-only. Copying a finely
+        # tessellated STEP mesh duplicates vertices, triangles and large
+        # STEP metadata arrays without changing the displayed geometry.
+        # Keep one shared mesh object; transforms are applied to VTK actors.
+        self.source_origin = self._calculate_cad_origin(mesh)
+        bounds = np.asarray(mesh.bounds, dtype=float)
         self.product_center_pivot = (bounds[0] + bounds[1]) * 0.5
         # Rotation pivot is the STEP CAD coordinate origin, not the mesh center.
         self.rotation_pivot = np.zeros(3, dtype=float)
@@ -1788,7 +1790,7 @@ class ProductViewer(QWidget):
         self.source_to_view_transform = np.eye(4, dtype=float)
         self.view_to_source_transform = np.eye(4, dtype=float)
 
-        return mesh_copy
+        return mesh
 
     def source_to_view(self, point):
         point = np.asarray(point, dtype=float)
