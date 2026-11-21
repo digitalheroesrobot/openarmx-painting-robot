@@ -654,6 +654,7 @@ class MainWindow(QMainWindow):
 
         # Show the workflow navigation through the first spray-trajectory stage.
         self.workflow_bar = self._build_workflow_bar()
+        root.addWidget(self.workflow_bar)
         self.workflow_bar.show()
 
         # ----------------------------------------------------
