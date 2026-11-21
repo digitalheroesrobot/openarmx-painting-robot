@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 from core.spray_coverage_optimizer import (
     analyze_surface_deficits,
     build_deficit_correction_strokes,
+    build_coverage_correction_plan,
 )
 
 
@@ -81,6 +82,39 @@ class SurfaceDeficitAnalysisTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             analyze_surface_deficits(**{**base, "lower_ratio": 1.1, "upper_ratio": 1.0})
 
+
+class IntegratedCoverageCorrectionPlanTests(unittest.TestCase):
+    def test_plan_uses_complete_target_and_only_underfilm_samples(self):
+        points = np.array([
+            [0., 0., 0.], [10., 0., 0.], [20., 0., 0.],
+            [30., 0., 0.], [40., 0., 0.],
+        ])
+        normals = np.tile([0., 0., 1.], (5, 1))
+        plan = build_coverage_correction_plan(
+            sample_points_mm=points,
+            sample_normals=normals,
+            sample_area_mm2=np.ones(5),
+            target_mask=np.array([True, True, True, True, False]),
+            reached_mask=np.array([True, False, True, True, True]),
+            thickness_um=np.array([0., 20., 50., 70., 999.]),
+            target_thickness_um=50.,
+            patch_ids=np.array([1, 1, 1, 1, 8]),
+            standoff_mm=100.,
+            max_gap_mm=15.,
+        )
+        self.assertEqual(plan["status"], "PREDICTED_UNCALIBRATED_CANDIDATES_ONLY")
+        self.assertFalse(plan["execution_ready"])
+        self.assertEqual(plan["analysis"]["target_sample_count"], 4)
+        np.testing.assert_array_equal(
+            plan["analysis"]["deficit_sample_indices"], [0, 1]
+        )
+        np.testing.assert_array_equal(
+            plan["correction_strokes"]["source_sample_indices"], [0, 1]
+        )
+        self.assertEqual(
+            plan["correction_strokes"]["candidate_status"],
+            "CANDIDATE_REQUIRES_PHYSICAL_VALIDATION",
+        )
 
 class DeficitCorrectionStrokeTests(unittest.TestCase):
     def test_strokes_split_at_spatial_gaps_and_keep_source_mapping(self):
