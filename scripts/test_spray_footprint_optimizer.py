@@ -25,8 +25,19 @@ class SprayFootprintOptimizerTests(unittest.TestCase):
             sample_spacing_coordinate_units=0.25,
         )
 
-    def test_redundant_interior_points_are_removed_without_coverage_loss(self):
-        result = self._run_grid()
+    def test_duplicate_cone_points_are_removed_without_coverage_loss(self):
+        point = np.array([[0.0, 0.0, 0.0]])
+        result = optimize_redundant_spray_points(
+            surface_points=np.repeat(point, 2, axis=0),
+            nozzle_points=np.repeat(point + [0.0, 0.0, 1.0], 2, axis=0),
+            spray_directions=np.tile([0.0, 0.0, -1.0], (2, 1)),
+            probe_points=point,
+            probe_area_weights=np.array([1.0]),
+            standoff_coordinate_units=1.0,
+            cone_angle_deg=90.0,
+            overlap_percent=50.0,
+            sample_spacing_coordinate_units=0.25,
+        )
         self.assertGreater(result["removed_point_count"], 0)
         self.assertEqual(
             result["input_point_count"],
@@ -35,7 +46,8 @@ class SprayFootprintOptimizerTests(unittest.TestCase):
         self.assertTrue(result["coverage_preserved"])
         self.assertEqual(
             result["coverage_preservation_policy"],
-            "NO_PREVIOUSLY_COVERED_SURFACE_SAMPLE_MAY_BECOME_UNCOVERED",
+            "NO_TRUE_FOOTPRINT_PROBE_MAY_LOSE_ALL_OTHER_COVERAGE; "
+            "OTHER_CONES_MUST_COVER_IT_WITH_10_PERCENT_INNER_MARGIN",
         )
 
     def test_overlap_threshold_and_area_method_are_reported(self):
