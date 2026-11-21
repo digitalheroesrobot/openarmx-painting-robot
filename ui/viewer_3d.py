@@ -16,6 +16,7 @@ from core.coating_deposition import (
     calculate_film_thickness_statistics,
 )
 from core.coating_process import coating_model_readiness
+from core.coating_process import DEFAULT_COATING_PROCESS
 
 from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
 from vtkmodules.vtkFiltersGeneral import vtkOBBTree
@@ -97,6 +98,17 @@ PATCH_COLORS = [
 ]
 
 MAX_DIRECTION_ARROWS = 300
+
+# The renderer and the on-screen legend share this exact relative-thickness scale.
+FILM_THICKNESS_COLOR_STOPS = (0.0, 0.5, 0.8, 1.0, 1.5)
+FILM_THICKNESS_COLOR_RGB = (
+    (35, 57, 78),       # 0.0x: no deposited film (dark blue)
+    (0, 145, 210),      # 0.5x: half target (cyan)
+    (0, 190, 125),      # 0.8x: near target (green)
+    (255, 205, 45),     # 1.0x: target reached (yellow)
+    (235, 55, 45),      # 1.5x+: excessive film (red)
+)
+FILM_THICKNESS_COLOR_HEX = ("#23394E", "#0091D2", "#00BE7D", "#FFCD2D", "#EB372D")
 
 
 class ProductViewer(QWidget):
@@ -912,6 +924,21 @@ class ProductViewer(QWidget):
         )
         coverage_row.addWidget(self.trajectory_thickness_checkbox)
         playback_layout.addLayout(coverage_row)
+
+        self.trajectory_thickness_legend_label = QLabel()
+        self.trajectory_thickness_legend_label.setWordWrap(True)
+        self.trajectory_thickness_legend_label.setMinimumHeight(34)
+        self.trajectory_thickness_legend_label.setStyleSheet(
+            "color: #D7E3EA; font-size: 9px; padding-left: 4px;"
+        )
+        self.trajectory_thickness_legend_label.setToolTip(
+            "The continuous 3D color gradient uses these same five reference "
+            "stops. Values are relative to the configured target dry-film thickness."
+        )
+        self._update_film_thickness_legend(
+            DEFAULT_COATING_PROCESS["target_dry_film_thickness_um"]
+        )
+        playback_layout.addWidget(self.trajectory_thickness_legend_label)
 
         self.trajectory_thickness_label = QLabel(
             "PREDICTED DRY FILM THICKNESS | N/A"
@@ -3038,6 +3065,42 @@ class ProductViewer(QWidget):
             sample_face_thickness
         )
 
+    def _update_film_thickness_legend(self, target_um):
+        """Show the exact reference colors and target-relative values used by the renderer."""
+        target = float(target_um)
+        if not math.isfinite(target) or target <= 0.0:
+            self.trajectory_thickness_legend_label.setText(
+                "FILM COLOR SCALE | unavailable — set a positive target thickness"
+            )
+            return
+
+        labels = (
+            "NO FILM",
+            "50% OF TARGET",
+            "80% OF TARGET",
+            "TARGET REACHED",
+            "150%+ — OVERSPRAY",
+        )
+        entries = []
+        for ratio, rgb, color_hex, meaning in zip(
+            FILM_THICKNESS_COLOR_STOPS,
+            FILM_THICKNESS_COLOR_RGB,
+            FILM_THICKNESS_COLOR_HEX,
+            labels,
+        ):
+            thickness = target * ratio
+            value = f"{thickness:.1f} µm"
+            swatch = (
+                f'<span style="color:{color_hex}; font-size:15px;">■</span> '
+                f'<span style="color:#E5EDF2;">{value}</span> '
+                f'<span style="color:#AFC2CB;">{meaning}</span>'
+            )
+            entries.append(swatch)
+
+        self.trajectory_thickness_legend_label.setText(
+            "FILM THICKNESS COLOR KEY  |  " + " &nbsp; ".join(entries)
+        )
+
     def _update_film_thickness_visualization(self):
         """Render target-face predicted dry-film thickness relative to target."""
         cache = self._prepare_trajectory_playback_cache()
@@ -3060,14 +3123,9 @@ class ProductViewer(QWidget):
         valid = display_ids >= 0
         face_values = cache["deposition_face_thickness_um"][cache["target_face_ids"]]
         ratios = np.clip(face_values / target, 0.0, 1.5)
-        stops = np.asarray([0.0, 0.5, 0.8, 1.0, 1.5])
-        palette = np.asarray([
-            [35, 57, 78],
-            [0, 145, 210],
-            [0, 190, 125],
-            [255, 205, 45],
-            [235, 55, 45],
-        ], dtype=np.float64)
+        stops = np.asarray(FILM_THICKNESS_COLOR_STOPS, dtype=np.float64)
+        palette = np.asarray(FILM_THICKNESS_COLOR_RGB, dtype=np.float64)
+        self._update_film_thickness_legend(target)
         mapped = np.column_stack([
             np.interp(ratios, stops, palette[:, channel])
             for channel in range(3)
@@ -4374,7 +4432,7 @@ class ProductViewer(QWidget):
             "DARK GREY - EXCLUDED FROM TARGET AREA\n"
             "YELLOW - REQUIRES INSPECTION\n"
             "RED - INVALID SURFACE\n\n"
-            "GEOMETRIC REACH ONLY - NO FILM THICKNESS"
+            "COVERAGE COLORS SHOW GEOMETRIC REACH ONLY"
         )
         self.plotter.add_text(
             legend,
