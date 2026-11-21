@@ -11,7 +11,10 @@ from core.spray_coverage import (
     is_line_of_sight_occluded,
     mark_sample_hits,
 )
-from core.coating_deposition import (\n    accumulate_double_beta_deposition_step,\n    calculate_film_thickness_statistics,\n)
+from core.coating_deposition import (
+    accumulate_double_beta_deposition_step,
+    calculate_film_thickness_statistics,
+)
 from core.coating_process import coating_model_readiness
 
 from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
