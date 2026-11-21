@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 import trimesh
+from scipy.spatial import cKDTree
 
 
 MM_PER_UNIT = {
@@ -174,16 +175,56 @@ def evaluate_spray_gun_clearance(
         sample_owner.extend([index] * len(centerline))
     query_points = np.vstack(all_centerline_points)
 
-    # closest_point_naive avoids an optional spatial-index dependency. It is
-    # intentionally used in bounded chunks to control temporary memory.
+    # Build a centroid KD-tree once. For each query point, the nearest
+    # centroid gives an initial upper bound. Any triangle that could be closer
+    # must have its centroid within (upper_bound + maximum triangle radius).
+    # Querying that conservative radius and evaluating exact point-to-triangle
+    # distances avoids the O(query_points * all_faces) naive proximity routine
+    # and does not require the optional rtree package.
+    triangles = np.asarray(mesh.triangles, dtype=np.float64)
+    triangle_centers = np.mean(triangles, axis=1)
+    triangle_radii = np.max(
+        np.linalg.norm(triangles - triangle_centers[:, None, :], axis=2),
+        axis=1,
+    )
+    max_triangle_radius = float(np.max(triangle_radii))
+    center_tree = cKDTree(triangle_centers)
+    _, nearest_triangle_indices = center_tree.query(query_points, k=1)
+    nearest_triangle_indices = np.asarray(
+        nearest_triangle_indices, dtype=np.int64
+    )
+    initial_triangles = triangles[nearest_triangle_indices]
+    initial_closest = trimesh.triangles.closest_point(
+        initial_triangles, query_points
+    )
+    initial_upper_bounds = np.linalg.norm(
+        initial_closest - query_points, axis=1
+    )
+
     distances = np.empty(len(query_points), dtype=np.float64)
-    chunk_size = 2048
-    for start in range(0, len(query_points), chunk_size):
-        end = min(start + chunk_size, len(query_points))
-        _, chunk_distances, _ = trimesh.proximity.closest_point_naive(
-            mesh, query_points[start:end]
+    for query_index, point in enumerate(query_points):
+        search_radius = (
+            float(initial_upper_bounds[query_index])
+            + max_triangle_radius
+            + 1e-12
         )
-        distances[start:end] = chunk_distances
+        candidate_indices = center_tree.query_ball_point(
+            point, search_radius
+        )
+        if not candidate_indices:
+            candidate_indices = [int(nearest_triangle_indices[query_index])]
+        candidate_triangles = triangles[
+            np.asarray(candidate_indices, dtype=np.int64)
+        ]
+        candidate_points = np.repeat(
+            point[None, :], len(candidate_triangles), axis=0
+        )
+        closest_points = trimesh.triangles.closest_point(
+            candidate_triangles, candidate_points
+        )
+        distances[query_index] = float(np.min(
+            np.linalg.norm(closest_points - candidate_points, axis=1)
+        ))
 
     owner = np.asarray(sample_owner, dtype=np.int64)
     minimum_by_sample = np.full(len(tips), np.inf, dtype=np.float64)
@@ -223,8 +264,17 @@ def evaluate_spray_gun_clearance(
     else:
         status = "CLEAR"
 
+    sample_status = np.full(len(tips), "GREEN", dtype=object)
+    if status == "UNCERTAIN":
+        sample_status[:] = "YELLOW"
+    elif status == "UNSAFE":
+        sample_status[:] = "YELLOW"
+    if len(collision_samples):
+        sample_status[collision_samples] = "RED"
+
     return {
         "status": status,
+        "sample_status": sample_status.tolist(),
         "method": "SAMPLED_CYLINDRICAL_GUN_BODY_ENVELOPE",
         "coordinate_frame": "PRODUCT_CAD",
         "coordinate_unit": str(coordinate_unit),
