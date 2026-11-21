@@ -140,6 +140,13 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             high_overlap["sampling"]["configured_sampling_spacing_role"],
             "FALLBACK_ONLY_WHEN_FOOTPRINT_UNAVAILABLE",
         )
+        self.assertIn(
+            "footprint_optimizer_removed_sample_count",
+            high_overlap["sampling"],
+        )
+        self.assertTrue(
+            high_overlap["rasterization"]["footprint_optimization"]["coverage_preserved"]
+        )
 
         # Dense probes over the flat target must lie inside at least one
         # nominal circular footprint. This is a geometric test, not a paint
