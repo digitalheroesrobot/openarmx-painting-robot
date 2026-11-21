@@ -8,7 +8,7 @@ if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 from core.coating_deposition import double_beta_spatial_density, simulate_double_beta_deposition
 class DoubleBetaDepositionTests(unittest.TestCase):
     def _args(self):
-        return {"sample_normalized_xy_by_path": np.zeros((2,2,2)), "sample_area_mm2": np.array([25.,25.]), "sample_facing_cosine_by_path": np.ones((2,2)), "sample_face_ids": np.array([0,1]), "trajectory_time_s": np.array([0.,1.]), "spray_on_mask": np.array([False,True]), "hit_sample_indices_by_path": [np.array([],dtype=int),np.array([0,1])], "fluid_flow_ml_min":60., "transfer_efficiency_percent":50., "volume_solids_percent":40., "footprint_width_mm":10., "footprint_thickness_mm":10.}
+        return {"sample_normalized_xy_by_path": np.zeros((2,2,2)), "sample_area_mm2": np.array([10.,10.]), "sample_facing_cosine_by_path": np.ones((2,2)), "sample_face_ids": np.array([0,1]), "trajectory_time_s": np.array([0.,1.]), "spray_on_mask": np.array([False,True]), "hit_sample_indices_by_path": [np.array([],dtype=int),np.array([0,1])], "fluid_flow_ml_min":60., "transfer_efficiency_percent":50., "volume_solids_percent":40., "footprint_width_mm":10., "footprint_thickness_mm":10.}
     def test_uniform_kernel_integrates_to_one(self):
         axis=np.linspace(-1,1,401); xx,yy=np.meshgrid(axis,axis)
         d=double_beta_spatial_density(np.column_stack((xx.ravel(),yy.ravel())),1,1,1,1).reshape(xx.shape)
