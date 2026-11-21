@@ -208,7 +208,7 @@ class SprayPatternPreview(QWidget):
         overlap = max(
             0.0, min(90.0, float(profile.get("overlap_percent", 50.0)))
         )
-        sample_spacing = max(
+        fallback_sample_spacing = max(
             0.1, float(profile.get("sampling_spacing_mm", 20.0))
         )
 
@@ -216,6 +216,11 @@ class SprayPatternPreview(QWidget):
             2.0 * standoff * math.tan(math.radians(angle * 0.5))
         )
         track_pitch_mm = spray_width_mm * (1.0 - overlap / 100.0)
+        effective_sample_spacing = (
+            min(track_pitch_mm, 0.5 * spray_width_mm)
+            if spray_width_mm > 0.0 and track_pitch_mm > 0.0
+            else fallback_sample_spacing
+        )
 
         # Map the calculated physical spray width to screen pixels.
         # A fixed pixel width here would make the preview ignore angle changes.
@@ -324,7 +329,7 @@ class SprayPatternPreview(QWidget):
         painter.setPen(QColor("#00F5A0"))
         painter.drawText(
             14, int(surface_y + 88),
-            f"SURFACE SAMPLE SPACING: {sample_spacing:.1f} mm"
+            f"EFFECTIVE POINT SPACING: {effective_sample_spacing:.1f} mm"
         )
         painter.end()
 
@@ -440,7 +445,7 @@ class SprayerSettingsDialog(QDialog):
             ("standoff_mm", "Working distance (mm)", 20.0, 1000.0, 1),
             ("spray_cone_angle_deg", "Full spray angle (deg)", 1.0, 150.0, 1),
             ("overlap_percent", "Track overlap (%)", 0.0, 90.0, 1),
-            ("sampling_spacing_mm", "Path point spacing (mm)", 1.0, 100.0, 1),
+            ("sampling_spacing_mm", "Fallback point spacing (mm)", 1.0, 100.0, 1),
             ("nozzle_orifice_mm", "Nozzle orifice (mm)", 0.1, 10.0, 2),
             ("nozzle_length_mm", "Nozzle length (mm)", 0.0, 300.0, 1),
             ("gun_body_length_mm", "Gun body length (mm)", 0.0, 600.0, 1),
@@ -535,8 +540,10 @@ class SprayerSettingsDialog(QDialog):
                 )
             elif key == "sampling_spacing_mm":
                 spin.setToolTip(
-                    "Distance between calculated nozzle samples along a pass. "
-                    "This does not set the distance between adjacent spray passes."
+                    "Fallback spacing used only if a valid spray footprint cannot "
+                    "be calculated. With the round-cone profile, effective point "
+                    "spacing in both surface directions is derived from footprint "
+                    "diameter and overlap; the displayed value is shown in the preview."
                 )
             spin.valueChanged.connect(self._refresh_preview)
             self.fields[key] = spin
