@@ -767,68 +767,56 @@ def _triangle_sample_points(
     triangle: np.ndarray,
     spacing_coordinate_units: float,
 ) -> np.ndarray:
+    """Vectorized triangular-lattice sampling for one mesh triangle.
 
+    The generated points are the same two sub-triangle centroids as the
+    previous nested-loop implementation. The two centroid groups are
+    concatenated; their ordering is not used as a geometric authority.
+    """
+    triangle = np.asarray(triangle, dtype=np.float64)
     if triangle.shape != (3, 3):
         raise ValueError("Triangle must have shape (3, 3).")
-
+    if not np.all(np.isfinite(triangle)):
+        return np.empty((0, 3), dtype=np.float64)
     if (
         not math.isfinite(spacing_coordinate_units)
         or spacing_coordinate_units <= 0.0
     ):
         raise ValueError("Sampling spacing must be positive and finite.")
 
-    edge_lengths = [
-        np.linalg.norm(triangle[1] - triangle[0]),
-        np.linalg.norm(triangle[2] - triangle[1]),
-        np.linalg.norm(triangle[0] - triangle[2]),
-    ]
-
-    longest_edge = max(edge_lengths)
-
-    if not math.isfinite(longest_edge):
+    a, b, c = triangle
+    edge_ab = float(np.linalg.norm(b - a))
+    edge_bc = float(np.linalg.norm(c - b))
+    edge_ca = float(np.linalg.norm(a - c))
+    longest_edge = max(edge_ab, edge_bc, edge_ca)
+    if not math.isfinite(longest_edge) or longest_edge <= NORMAL_EPSILON:
         return np.empty((0, 3), dtype=np.float64)
 
-    if longest_edge <= NORMAL_EPSILON:
-        return np.empty((0, 3), dtype=np.float64)
+    n = max(1, int(math.ceil(longest_edge / spacing_coordinate_units)))
+    i_grid, j_grid = np.indices((n, n), dtype=np.int64)
+    valid = (i_grid + j_grid) < n
+    i = i_grid[valid].astype(np.float64) / n
+    j = j_grid[valid].astype(np.float64) / n
 
-    n = max(
-        1,
-        int(math.ceil(longest_edge / spacing_coordinate_units)),
+    # First sub-triangle centroid for every triangular lattice cell.
+    first = (
+        (1.0 - i - j / 3.0)[:, None] * a
+        + (i + 1.0 / (3.0 * n))[:, None] * b
+        + (j + 1.0 / (3.0 * n))[:, None] * c
     )
 
-    samples = np.empty((n * n, 3), dtype=np.float64)
-
-    a, b, c = triangle
-
-    def barycentric_point(i: int, j: int) -> np.ndarray:
-        u = i / n
-        v = j / n
-
-        return (
-            (1.0 - u - v) * a
-            + u * b
-            + v * c
+    # Second sub-triangle centroid exists for cells strictly below the edge.
+    second_mask = (i_grid + j_grid) < (n - 1)
+    if np.any(second_mask):
+        i2 = i_grid[second_mask].astype(np.float64) / n
+        j2 = j_grid[second_mask].astype(np.float64) / n
+        second = (
+            (1.0 - i2 - j2 - 2.0 / (3.0 * n))[:, None] * a
+            + (i2 + 2.0 / (3.0 * n))[:, None] * b
+            + (j2 + 2.0 / (3.0 * n))[:, None] * c
         )
-
-    sample_index = 0
-
-    for i in range(n):
-        for j in range(n - i):
-
-            p0 = barycentric_point(i, j)
-            p1 = barycentric_point(i + 1, j)
-            p2 = barycentric_point(i, j + 1)
-
-            samples[sample_index] = (p0 + p1 + p2) / 3.0
-            sample_index += 1
-
-            if i + j < n - 1:
-                p3 = barycentric_point(i + 1, j + 1)
-
-                samples[sample_index] = (p1 + p3 + p2) / 3.0
-                sample_index += 1
-
-    return samples[:sample_index]
+        return np.concatenate((first, second), axis=0)
+    return first
 
 
 # ------------------------------------------------------------
