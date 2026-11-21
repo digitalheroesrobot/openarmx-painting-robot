@@ -2133,7 +2133,10 @@ class ProductViewer(QWidget):
 
         self._render_product(reset_camera=False)
 
-    def start_interactive_spray_path(self, standoff, cone_angle_deg):
+    def start_interactive_spray_path(
+        self, standoff, cone_angle_deg, sampling_spacing=None,
+        sprayer_profile=None, coating_process=None,
+    ):
         """Enter surface-following spray cursor mode and begin an empty path."""
         if self.current_mesh is None:
             raise RuntimeError("Load a product before starting an interactive spray path.")
@@ -2141,6 +2144,10 @@ class ProductViewer(QWidget):
             raise ValueError("Spray standoff must be a positive finite value.")
         if not np.isfinite(cone_angle_deg) or not 0.0 < cone_angle_deg < 179.0:
             raise ValueError("Spray cone angle must be in (0, 179) degrees.")
+        if sampling_spacing is None:
+            sampling_spacing = max(float(standoff) * 0.025, 1e-3)
+        if not np.isfinite(sampling_spacing) or sampling_spacing <= 0.0:
+            raise ValueError("Spray sampling spacing must be a positive finite value.")
         if self._interactive_spray_active:
             return
         self.display_mode = "spray_point_preview"
@@ -2152,6 +2159,9 @@ class ProductViewer(QWidget):
 
         self._interactive_spray_standoff = float(standoff)
         self._interactive_spray_cone_angle_deg = float(cone_angle_deg)
+        self._interactive_spray_sampling_spacing = float(sampling_spacing)
+        self._interactive_sprayer_profile = dict(sprayer_profile or {})
+        self._interactive_coating_process = dict(coating_process or {})
         self._interactive_spray_transform = self._actor_matrix_array().copy()
         self._interactive_spray_surface = self._to_polydata(self.current_mesh).clean()
         self._interactive_spray_locator = vtkOBBTree()
@@ -2375,7 +2385,7 @@ class ProductViewer(QWidget):
                 pose["surface_normal_world"], previous["surface_normal_world"]
             ), -1.0, 1.0))
             angle = math.degrees(math.acos(dot))
-            minimum_step = max(self._interactive_spray_standoff * 0.025, 1e-3)
+            minimum_step = max(self._interactive_spray_sampling_spacing, 1e-3)
             if distance < minimum_step and angle < 2.0:
                 return False
         record = {
@@ -2501,6 +2511,9 @@ class ProductViewer(QWidget):
             "coordinate_frame": "PRODUCT_CAD_AND_WORLD",
             "standoff_source_units": self._interactive_spray_standoff,
             "cone_angle_deg": self._interactive_spray_cone_angle_deg,
+            "sampling_spacing_source_units": self._interactive_spray_sampling_spacing,
+            "sprayer_profile": dict(self._interactive_sprayer_profile),
+            "coating_process": dict(self._interactive_coating_process),
             "nozzle_points_product": np.asarray(
                 [item["nozzle_point_product"] for item in records], dtype=float
             ).reshape(-1, 3),
