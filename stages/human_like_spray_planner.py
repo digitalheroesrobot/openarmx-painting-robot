@@ -69,13 +69,19 @@ def _principal_plane(points: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.nda
     return center, major, minor
 
 
-def _split_lane(indices: np.ndarray, points: np.ndarray, max_gap: float) -> list[np.ndarray]:
+def _split_lane(
+    indices: np.ndarray,
+    projected_points: np.ndarray,
+    spatial_points: np.ndarray,
+    max_gap: float,
+) -> list[np.ndarray]:
+    """Order a projected lane, splitting only on true 3D spatial gaps."""
     if len(indices) == 0:
         return []
-    ordered = indices[np.argsort(points[indices, 0], kind="stable")]
+    ordered = indices[np.argsort(projected_points[indices, 0], kind="stable")]
     if len(ordered) == 1:
         return [ordered]
-    gaps = np.linalg.norm(np.diff(points[ordered], axis=0), axis=1)
+    gaps = np.linalg.norm(np.diff(spatial_points[ordered], axis=0), axis=1)
     cuts = np.flatnonzero(gaps > max_gap) + 1
     return [part for part in np.split(ordered, cuts) if len(part)]
 
@@ -190,7 +196,7 @@ def plan_human_like_sweeps(
         members = np.flatnonzero(lane_index == lane_number)
         # Sort by the dominant sweep coordinate, then split only physical gaps.
         members = members[np.argsort(projected[members, 0], kind="stable")]
-        chunks = _split_lane(members, projected, max_gap)
+        chunks = _split_lane(members, projected, points, max_gap)
         for chunk_number, chunk in enumerate(chunks):
             ordered_chunks.append(chunk)
             lane_ids.append(int(lane_number))
@@ -198,11 +204,13 @@ def plan_human_like_sweeps(
     # Alternate direction across successive chunks to create a serpentine path.
     ordered_indices: list[int] = []
     segment_ids: list[int] = []
+    ordered_lane_ids: list[int] = []
     for segment_id, chunk in enumerate(ordered_chunks):
         if segment_id % 2:
             chunk = chunk[::-1]
         ordered_indices.extend(int(value) for value in chunk)
         segment_ids.extend([segment_id] * len(chunk))
+        ordered_lane_ids.extend([lane_ids[segment_id]] * len(chunk))
 
     order = np.asarray(ordered_indices, dtype=np.int64)
     segments = np.asarray(segment_ids, dtype=np.int64)
@@ -225,6 +233,7 @@ def plan_human_like_sweeps(
         "face_indices": faces[order].copy(),
         "patch_ids": patches[order].copy(),
         "segment_ids": segments,
+        "lane_ids": np.asarray(ordered_lane_ids, dtype=np.int64),
         "path_tangents": ordered_tangents,
         "spray_directions": directions,
         "nozzle_frames": frames,
