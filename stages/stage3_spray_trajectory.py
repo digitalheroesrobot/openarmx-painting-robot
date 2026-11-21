@@ -3526,8 +3526,9 @@ def _build_analysis(
             "coordinate_value": spacing_coordinate_units,
             "coordinate_unit": coordinate_unit,
             "meaning": (
-                "Physical sampling interval converted to STL coordinates. "
-                "It does not prove paint coverage."
+                "Coverage-oriented surface lattice interval derived from the "
+                "nominal spray footprint and overlap, converted to STL coordinates. "
+                "It does not prove calibrated paint deposition."
             ),
         },
         {
@@ -4894,7 +4895,7 @@ def _build_saved_report(
             "Open or non-watertight mesh normals may have uncertain outward direction and require review.",
             "The product CAD-to-World rigid transform is recorded and world-coordinate arrays are exported.",
             "The initial generator uses global PCA-projected serpentine sweeps over all sampled paintable surfaces; local mesh normals guide nozzle orientation, and only 3D spatial gaps split segments.",
-            "Raster lane spacing uses the configured equivalent fan-width estimate and overlap; physical coating coverage is not verified.",
+            "Surface sample spacing and nominal raster lane spacing are derived from the configured cone footprint and overlap; this is geometric coverage planning, not calibrated coating-deposition verification.",
             "Inter-segment travel is represented as direct straight-line, spray-OFF visualization estimates only; collision and reachability are not checked.",
             "Travel movements between separate patches are also represented by the same unvalidated straight-line estimates.",
             "Bend and cylinder estimates do not yet modify nozzle orientation.",
