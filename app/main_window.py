@@ -2537,15 +2537,20 @@ class MainWindow(QMainWindow):
         )
         if dialog.exec() != QDialog.Accepted or dialog.selected_process is None:
             return
-        previous_process = dict(self.coating_process)
         self.coating_process = dict(dialog.selected_process)
         motion_keys = (
             "base_travel_speed_mm_s",
             "min_travel_speed_mm_s",
             "max_travel_acceleration_mm_s2",
         )
+        generated_process = (
+            self.current_stage3_parameters.get("coating_process", {})
+            if isinstance(self.current_stage3_parameters, dict)
+            else {}
+        )
         timing_stale = any(
-            float(previous_process.get(key, 0.0)) != float(self.coating_process.get(key, 0.0))
+            float(generated_process.get(key, self.coating_process.get(key, 0.0)))
+            != float(self.coating_process.get(key, 0.0))
             for key in motion_keys
         )
         self.viewer.update_coating_process_preview(
