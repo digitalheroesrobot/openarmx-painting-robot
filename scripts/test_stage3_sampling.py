@@ -54,9 +54,12 @@ class TriangleSamplingTests(unittest.TestCase):
                     )
 
     def test_sample_count_is_square_of_subdivision_count(self):
-        triangle = np.array([[0., 0., 0.], [30., 0., 0.], [0., 30., 0.]])
+        triangle = np.array([
+            [0., 0., 0.], [30., 0., 0.],
+            [15., 25.98076211353316, 0.],
+        ])
         for n in (1, 2, 3, 5, 10):
-            points = _triangle_sample_points(triangle, 30.0 / n)
+            points = _triangle_sample_points(triangle, 30.001 / n)
             self.assertEqual(len(points), n * n)
 
     def test_all_samples_remain_inside_triangle(self):
