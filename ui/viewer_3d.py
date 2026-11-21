@@ -2508,7 +2508,7 @@ class ProductViewer(QWidget):
         )
 
     def _add_trajectory_visualization(self):
-        """Display independent spray target points only; never connect samples."""
+        """Display independent nozzle spray points at the configured stand-off."""
         data = self.trajectory_data
         if data is None:
             return
@@ -2517,11 +2517,13 @@ class ProductViewer(QWidget):
         rotation = transform[:3, :3]
         translation = transform[:3, 3]
 
-        # Render target locations on the product surface as independent points.
-        # Do not draw paths, lane links, travel connectors, footprints, arrows,
-        # orientation frames, or gun geometry in this initial simple preview.
+        # Stage 3 already calculates nozzle_points as
+        # surface_points + standoff * surface_normals in source CAD units.
+        # Display those nozzle locations, not the target surface samples.
+        # Keep each point independent: no paths, connectors, footprints,
+        # arrows, orientation frames, or gun geometry in this simple preview.
         spray_points = (
-            np.asarray(data["surface_points"], dtype=float) @ rotation.T
+            np.asarray(data["nozzle_points"], dtype=float) @ rotation.T
             + translation
         )
         if len(spray_points) == 0:
