@@ -4744,6 +4744,10 @@ def _build_saved_report(
             ),
         },
         "engineering_limitations": [
+            "A sampled cylindrical gun-body clearance check is performed in PRODUCT_CAD coordinates and reported separately from the trajectory arrays.",
+            "The gun-body envelope uses configured dimensions; provisional dimensions are explicitly marked uncertain.",
+            "Nozzle shaft radial clearance, robot links, wrist, hoses, fixtures, and external obstacles are not yet checked by the safety module.",
+            "The spray-gun clearance result is not a certified robot safety assessment and cannot establish full robot reachability.",
             "Robot reachability is not checked.",
             "Robot collision is not checked.",
             "Fixture and hook clearance are not checked.",
