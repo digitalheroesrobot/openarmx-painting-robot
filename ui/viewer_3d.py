@@ -2682,6 +2682,8 @@ class ProductViewer(QWidget):
             "surface_tree": surface_tree,
             "occlusion_polydata": occlusion_polydata,
             "occlusion_locator": occlusion_locator,
+            "ray_intersection_points": vtkPoints(),
+            "ray_intersection_cell_ids": vtkIdList(),
             "ray_tolerance": ray_tolerance,
             "last_hit_path_index": -1,
             "last_hit_sample_indices": np.empty(0, dtype=np.int64),
@@ -2808,8 +2810,12 @@ class ProductViewer(QWidget):
             visible_indices = []
             for sample_index in footprint_candidates:
                 target = cache["face_samples"][sample_index]
-                intersection_points = vtkPoints()
-                intersection_cell_ids = vtkIdList()
+                # Reuse VTK result buffers instead of allocating two VTK
+                # objects for every footprint sample on every playback frame.
+                intersection_points = cache["ray_intersection_points"]
+                intersection_cell_ids = cache["ray_intersection_cell_ids"]
+                intersection_points.SetNumberOfPoints(0)
+                intersection_cell_ids.SetNumberOfIds(0)
                 locator.IntersectWithLine(
                     tuple(float(v) for v in nozzle),
                     tuple(float(v) for v in target),
@@ -2848,19 +2854,33 @@ class ProductViewer(QWidget):
         polydata = self._playback_spray_polydata
         if cache is None or actor is None or polydata is None:
             return
-        rgba = np.zeros((len(cache["target_face_ids"]), 4), dtype=np.uint8)
+        # Keep one RGBA array attached to the VTK polydata. Only clear the
+        # cells highlighted by the previous frame and write the new footprint;
+        # avoid allocating and copying an entire target-face array per frame.
+        rgba = cache["current_footprint_rgba"]
+        previous_faces = cache["current_footprint_face_positions"]
+        if len(previous_faces):
+            rgba[previous_faces] = 0
+
+        current_faces = np.empty(0, dtype=np.int64)
         known = cache["pattern_type"] == "round_cone" or cache["fan_thickness_units"] > 0.0
         if cache["spray_on_mask"][path_index] and known:
             hits = self._get_surface_sample_hits_from_spray(path_index)
             if len(hits):
-                face_positions = np.unique(hits // cache["sample_count_per_face"])
-                rgba[face_positions] = [*np.clip(np.rint(cache["paint_rgb"]), 0, 255).astype(np.uint8), 190]
-        polydata.cell_data["Spray Footprint RGBA"] = rgba
+                current_faces = np.unique(
+                    hits // cache["sample_count_per_face"]
+                )
+                rgba[current_faces] = [
+                    *np.clip(np.rint(cache["paint_rgb"]), 0, 255).astype(np.uint8),
+                    190,
+                ]
+
+        cache["current_footprint_face_positions"] = current_faces
         vtk_array = polydata.GetCellData().GetArray("Spray Footprint RGBA")
         if vtk_array is not None:
             vtk_array.Modified()
         polydata.Modified()
-        actor.SetVisibility(bool(np.any(rgba[:, 3] > 0)))
+        actor.SetVisibility(bool(len(current_faces)))
 
 
     def _update_paint_coverage_visualization(self, index):
@@ -3070,8 +3090,11 @@ class ProductViewer(QWidget):
             np.arange(face_count, dtype=np.int64) * 3 + 2,
         ]).reshape(-1)
         self._playback_spray_polydata = pv.PolyData(target_points, target_faces)
+        footprint_rgba = np.zeros((face_count, 4), dtype=np.uint8)
+        cache["current_footprint_rgba"] = footprint_rgba
+        cache["current_footprint_face_positions"] = np.empty(0, dtype=np.int64)
         self._playback_spray_polydata.cell_data["Spray Footprint RGBA"] = (
-            np.zeros((face_count, 4), dtype=np.uint8)
+            footprint_rgba
         )
         self._playback_spray_actor = self.plotter.add_mesh(
             self._playback_spray_polydata,
@@ -3344,12 +3367,11 @@ class ProductViewer(QWidget):
             if self._playback_spray_actor is not None:
                 self._playback_spray_actor.SetVisibility(0)
             if self._playback_spray_polydata is not None:
-                rgba = np.zeros(
-                    (len(cache["target_face_ids"]), 4), dtype=np.uint8
+                rgba = cache["current_footprint_rgba"]
+                rgba.fill(0)
+                cache["current_footprint_face_positions"] = np.empty(
+                    0, dtype=np.int64
                 )
-                self._playback_spray_polydata.cell_data[
-                    "Spray Footprint RGBA"
-                ] = rgba
                 vtk_array = self._playback_spray_polydata.GetCellData().GetArray(
                     "Spray Footprint RGBA"
                 )
