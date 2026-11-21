@@ -68,7 +68,9 @@ class HumanLikeSweepPlannerTests(unittest.TestCase):
         for frame in frames:
             np.testing.assert_allclose(frame.T @ frame, np.eye(3), atol=1e-8)
             self.assertAlmostEqual(float(np.linalg.det(frame)), 1.0, places=8)
-        np.testing.assert_allclose(frames[:, :, 2], [0.0, 0.0, -1.0])
+        np.testing.assert_allclose(
+            frames[:, :, 2], np.tile([0.0, 0.0, -1.0], (len(frames), 1))
+        )
 
     def test_invalid_input_is_rejected(self):
         with self.assertRaises(ValueError):
