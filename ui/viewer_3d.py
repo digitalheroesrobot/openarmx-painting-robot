@@ -1816,29 +1816,37 @@ class ProductViewer(QWidget):
 
     @staticmethod
     def _to_polydata(mesh, face_mask=None):
-        faces = np.asarray(mesh.faces, dtype=np.int64)
+        vertices = np.asarray(mesh.vertices)
+        source_faces = np.asarray(mesh.faces)
+        if len(vertices) <= np.iinfo(np.int32).max:
+            faces = np.asarray(source_faces, dtype=np.int32)
+            index_dtype = np.int32
+        else:
+            faces = np.asarray(source_faces, dtype=np.int64)
+            index_dtype = np.int64
 
         if face_mask is not None:
             face_mask = np.asarray(face_mask, dtype=bool)
-
             if len(face_mask) != len(faces):
                 raise ValueError(
                     "Face visibility mask does not match mesh faces."
                 )
-
             faces = faces[face_mask]
 
         if len(faces) == 0:
             return pv.PolyData()
 
-        packed_faces = np.hstack([
-            np.full((len(faces), 1), 3, dtype=np.int64),
-            faces,
-        ])
+        # Build the VTK packed-cell array in one allocation. The previous
+        # hstack path temporarily allocated a second full-size faces block.
+        packed_faces = np.empty(
+            (len(faces), 4), dtype=index_dtype
+        )
+        packed_faces[:, 0] = 3
+        packed_faces[:, 1:] = faces
 
         return pv.PolyData(
-            np.asarray(mesh.vertices),
-            packed_faces.ravel(),
+            vertices,
+            packed_faces.reshape(-1),
         )
 
     def _build_offset_patch_shell(self, mesh, face_mask, offset_distance):
