@@ -3105,16 +3105,17 @@ class ProductViewer(QWidget):
             locator = cache["occlusion_locator"]
             tolerance = cache["ray_tolerance"]
             visible_indices = []
+            # These values are invariant for every candidate ray in this
+            # playback frame. Resolve them once rather than once per sample.
+            ray_origin = tuple(float(v) for v in nozzle)
+            intersection_points = cache["ray_intersection_points"]
+            intersection_cell_ids = cache["ray_intersection_cell_ids"]
             for sample_index in footprint_candidates:
                 target = cache["face_samples"][sample_index]
-                # Reuse VTK result buffers instead of allocating two VTK
-                # objects for every footprint sample on every playback frame.
-                intersection_points = cache["ray_intersection_points"]
-                intersection_cell_ids = cache["ray_intersection_cell_ids"]
                 intersection_points.SetNumberOfPoints(0)
                 intersection_cell_ids.SetNumberOfIds(0)
                 locator.IntersectWithLine(
-                    tuple(float(v) for v in nozzle),
+                    ray_origin,
                     tuple(float(v) for v in target),
                     intersection_points,
                     intersection_cell_ids,
