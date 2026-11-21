@@ -39,7 +39,16 @@ from core.coating_process import load_coating_process
 from stages.stage1_geometry import execute_stage1
 from stages.stage2_surface_identification import execute_stage2
 from stages.cad_surface_analysis import analyze_step_faces
-from stages.stage3_spray_trajectory import execute_stage3
+from stages.stage3_spray_trajectory import (
+    execute_stage3,
+    _calculate_spray_footprint,
+    _get_face_normals,
+    _determine_normal_orientation,
+)
+from stages.spray_deposition_model import SprayDepositionConfig
+from stages.spray_deposition_path_optimizer import (
+    select_track_spacing_by_relative_deposition,
+)
 
 from ui.viewer_3d import ProductViewer
 from ui.coating_process_settings import CoatingProcessSettingsDialog
@@ -227,6 +236,92 @@ class OperationWorker(QThread):
             self.failed.emit(str(exc))
 
 
+def _compute_optimized_spray_point_preview(
+    mesh,
+    face_status_labels,
+    patch_labels,
+    standoff_mm,
+    sampling_spacing_mm,
+    coordinate_unit,
+    sprayer_profile,
+    coating_process,
+):
+    """Build an isolated optimized nozzle-point preview from approved faces."""
+    from stages.spray_stroke_route_optimizer import optimize_stroke_order
+
+    if coordinate_unit not in MM_PER_UNIT:
+        raise ValueError("A known source coordinate unit is required.")
+    labels = np.asarray(face_status_labels, dtype=np.int64)
+    patches = np.asarray(patch_labels, dtype=np.int64)
+    if labels.shape != (len(mesh.faces),) or patches.shape != (len(mesh.faces),):
+        raise ValueError("Stage 1/2 face labels do not match the product mesh.")
+    paintable_faces = np.flatnonzero(labels == FACE_PAINTABLE_CANDIDATE)
+    if len(paintable_faces) == 0:
+        raise ValueError("There are no approved paintable faces to preview.")
+
+    footprint = _calculate_spray_footprint(sprayer_profile, float(standoff_mm))
+    cone_angle = float(footprint.get("included_angle_deg", 0.0))
+    nominal_pitch_mm = float(footprint.get("nominal_track_spacing_mm", 0.0))
+    if cone_angle <= 0.0 or nominal_pitch_mm <= 0.0:
+        raise ValueError(
+            "The active sprayer profile does not define a usable spray footprint. "
+            "Set a positive spray cone angle and track overlap."
+        )
+
+    mm_per_unit = float(MM_PER_UNIT[coordinate_unit])
+    standoff = float(standoff_mm) / mm_per_unit
+    spacing_candidates_mm = [
+        nominal_pitch_mm * factor for factor in (0.65, 0.8, 1.0, 1.2)
+    ]
+    spacing_candidates = [value / mm_per_unit for value in spacing_candidates_mm]
+    sample_spacing = max(
+        min(float(sampling_spacing_mm) * 0.5, min(spacing_candidates_mm) * 0.5)
+        / mm_per_unit,
+        1e-6,
+    )
+    normals, _ = _get_face_normals(mesh)
+    normals, normal_info = _determine_normal_orientation(mesh, normals)
+    if not np.all(np.isfinite(normals[paintable_faces])):
+        raise ValueError("Paintable faces contain invalid surface normals.")
+
+    speed = float(coating_process["base_travel_speed_mm_s"]) / mm_per_unit
+    config = SprayDepositionConfig(cone_angle_deg=cone_angle)
+    selection = select_track_spacing_by_relative_deposition(
+        mesh=mesh,
+        face_indices=paintable_faces,
+        patch_ids=patches,
+        face_normals=normals,
+        standoff=standoff,
+        sample_spacing=sample_spacing,
+        track_spacing_candidates=spacing_candidates,
+        deposition_config=config,
+        spray_speed=speed,
+        minimum_relative_dose_fraction=0.15,
+        minimum_area_coverage=0.90,
+        lane_orientation_candidates_deg=(0.0, 45.0, 90.0, 135.0),
+        travel_speed=speed,
+    )
+    candidate = selection["selected_candidate"]
+    if len(candidate.get("nozzle_points", [])) == 0:
+        raise RuntimeError("The optimized planner did not generate any spray points.")
+
+    # Keep the selected preview data separate from the legacy Stage 3 result.
+    candidate = dict(candidate)
+    candidate["preview_metadata"] = {
+        "planner": selection["optimizer"],
+        "selection_status": selection["selection_status"],
+        "selected_track_spacing_coordinate_units": selection["selected_track_spacing"],
+        "selected_lane_orientation_angle_deg": selection["selected_lane_orientation_angle_deg"],
+        "evaluation": {
+            key: value for key, value in selection["selected_evaluation"].items()
+            if key != "relative_dose"
+        },
+        "normal_orientation": normal_info,
+        "calibration_status": "UNCALIBRATED_RELATIVE_DOSE_ONLY",
+    }
+    return candidate
+
+
 class PatchDistributionChart(QWidget):
     """Dependency-free Qt pie chart for Stage 1 patch classification."""
 
@@ -357,6 +452,7 @@ class MainWindow(QMainWindow):
         self.current_report = None
         self.current_stage2_result = None
         self.current_stage3_result = None
+        self.optimized_spray_preview = None
 
         self.source_unit_from_stl = "unknown"
         self.coordinate_unit = "unknown"
@@ -1291,6 +1387,20 @@ class MainWindow(QMainWindow):
             self.start_analysis_button
         )
 
+        self.optimized_preview_button = QPushButton(
+            "PREVIEW OPTIMIZED SPRAY POINTS"
+        )
+        self.optimized_preview_button.setObjectName("SecondaryButton")
+        self.optimized_preview_button.setToolTip(
+            "Generate patch-wise spray points using the relative deposition optimizer. "
+            "This preview does not replace or modify the current Stage 3 trajectory."
+        )
+        self.optimized_preview_button.clicked.connect(
+            self.run_optimized_spray_point_preview
+        )
+        self.optimized_preview_button.hide()
+        layout.addWidget(self.optimized_preview_button)
+
         # ----------------------------------------------------
         # OPERATION PROGRESS
         # This is a separate progress indicator for running
@@ -2219,6 +2329,7 @@ class MainWindow(QMainWindow):
         self.current_report = None
         self.current_stage2_result = None
         self.current_stage3_result = None
+        self.optimized_spray_preview = None
 
         self.current_stage3_parameters = None
         self.pending_stage3_parameters = None
@@ -2781,6 +2892,16 @@ class MainWindow(QMainWindow):
             )
 
             self.start_analysis_button.setEnabled(False)
+
+        if hasattr(self, "optimized_preview_button"):
+            preview_available = (
+                self.active_stage == STAGE_SPRAY_TRAJECTORY
+                and self._stage_available(STAGE_SPRAY_TRAJECTORY)
+            )
+            self.optimized_preview_button.setVisible(preview_available)
+            self.optimized_preview_button.setEnabled(
+                preview_available and not self._operation_running
+            )
 
         # ----------------------------------------------------
         # WORKFLOW STATUS
@@ -4025,6 +4146,88 @@ class MainWindow(QMainWindow):
         )
 
         self._worker.start()
+
+    def run_optimized_spray_point_preview(self):
+        """Generate and display the isolated patch-wise optimized point set."""
+        if self._operation_running or self.current_mesh is None:
+            return
+        if self.current_stage2_result is None or self.current_stage1_result is None:
+            QMessageBox.warning(
+                self, "Stage 1/2 Required",
+                "Run geometry inspection and approve paintable surfaces first.",
+            )
+            return
+        self._apply_manual_patch_decisions()
+        parameters = self._get_current_spray_parameters()
+        labels = np.asarray(
+            self.current_stage2_result.get("face_status_labels", []),
+            dtype=np.int64,
+        ).copy()
+        patches = np.asarray(
+            self.current_stage1_result.get("patch_labels", []),
+            dtype=np.int64,
+        ).copy()
+        self._start_operation_ui("OPTIMIZED SPRAY POINT PREVIEW")
+        self._worker = OperationWorker(
+            _compute_optimized_spray_point_preview,
+            self.current_mesh.copy(),
+            labels,
+            patches,
+            parameters["standoff_mm"],
+            parameters["sampling_spacing_mm"],
+            self.coordinate_unit,
+            dict(parameters["sprayer_profile"]),
+            dict(parameters["coating_process"]),
+        )
+        self._worker.succeeded.connect(self._on_optimized_spray_preview_complete)
+        self._worker.failed.connect(self._on_optimized_spray_preview_failed)
+        self._worker.finished.connect(self._on_worker_thread_finished)
+        self._worker.start()
+
+    def _on_optimized_spray_preview_complete(self, candidate):
+        try:
+            self.optimized_spray_preview = candidate
+            self.viewer.show_spray_point_preview(
+                self.current_mesh,
+                candidate["nozzle_points"],
+                self.viewer.get_product_transform(),
+            )
+            metadata = candidate.get("preview_metadata", {})
+            evaluation = metadata.get("evaluation", {})
+            self.status_bar.showMessage(
+                "OPTIMIZED SPRAY POINT PREVIEW  |  "
+                f"POINTS: {len(candidate['nozzle_points'])}  |  "
+                f"STROKES: {candidate.get('segment_count', 0)}  |  "
+                f"COVERAGE: {100.0 * evaluation.get('area_weighted_relative_coverage', 0.0):.1f}%  |  "
+                f"SPACING: {metadata.get('selected_track_spacing_coordinate_units', 0.0):.3f} "
+                f"{self.coordinate_unit}"
+            )
+            self.analysis_summary.setText(
+                "PATCH-WISE OPTIMIZED SPRAY POINT PREVIEW\n\n"
+                f"SPRAY POINTS: {len(candidate['nozzle_points'])}\n"
+                f"STROKES: {candidate.get('segment_count', 0)}\n"
+                f"SELECTED TRACK SPACING: "
+                f"{metadata.get('selected_track_spacing_coordinate_units', 0.0):.4f} "
+                f"{self.coordinate_unit}\n"
+                f"LANE ANGLE: {metadata.get('selected_lane_orientation_angle_deg', 0.0):.1f} deg\n"
+                f"RELATIVE COVERAGE: "
+                f"{100.0 * evaluation.get('area_weighted_relative_coverage', 0.0):.2f}%\n"
+                f"SELECTION: {metadata.get('selection_status', 'UNKNOWN')}\n\n"
+                "GREEN SPHERES SHOW NOZZLE SPRAY LOCATIONS ONLY.\n"
+                "NO TRAVEL PATH OR CONNECTOR IS DISPLAYED.\n"
+                "RELATIVE DEPOSITION MODEL IS NOT CALIBRATED."
+            )
+            self._finish_operation_ui(True)
+        except Exception as exc:
+            traceback.print_exc()
+            self._finish_operation_ui(False)
+            QMessageBox.critical(self, "Spray Point Preview Error", str(exc))
+
+    def _on_optimized_spray_preview_failed(self, error_message):
+        self._finish_operation_ui(False)
+        QMessageBox.critical(
+            self, "Optimized Spray Point Preview Failed", error_message
+        )
 
     def _display_current_trajectory(self):
         if self.current_stage3_result is None:
