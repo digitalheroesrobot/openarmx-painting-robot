@@ -77,7 +77,29 @@ def _build_spray_footprint_overlay(
     if int(rays_per_ring) < 8:
         raise ValueError("rays_per_ring must be at least 8.")
 
-    surface = mesh.triangulate().clean()
+    # The application stores the product as a trimesh.Trimesh. Convert
+    # its triangular faces explicitly before using PyVista/VTK intersection.
+    if not hasattr(mesh, "vertices") or not hasattr(mesh, "faces"):
+        raise TypeError("Product mesh must expose trimesh-style vertices and faces.")
+    mesh_vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    mesh_faces = np.asarray(mesh.faces, dtype=np.int64)
+    if (
+        mesh_vertices.ndim != 2 or mesh_vertices.shape[1] != 3
+        or mesh_faces.ndim != 2 or mesh_faces.shape[1] != 3
+        or len(mesh_vertices) == 0 or len(mesh_faces) == 0
+    ):
+        return []
+    if (
+        not np.all(np.isfinite(mesh_vertices))
+        or np.any(mesh_faces < 0)
+        or np.any(mesh_faces >= len(mesh_vertices))
+    ):
+        raise ValueError("Product mesh contains invalid vertices or triangle indices.")
+    packed_faces = np.column_stack((
+        np.full(len(mesh_faces), 3, dtype=np.int64),
+        mesh_faces,
+    )).ravel()
+    surface = pv.PolyData(mesh_vertices, packed_faces).clean()
     if surface.n_cells == 0:
         return []
     bounds = np.asarray(surface.bounds, dtype=np.float64).reshape(3, 2)
