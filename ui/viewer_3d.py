@@ -25,6 +25,7 @@ from core.spray_coverage_optimizer import (
 )
 
 from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
+from vtkmodules.util.numpy_support import vtk_to_numpy
 from vtkmodules.vtkFiltersGeneral import vtkOBBTree
 
 from PySide6.QtCore import QEvent, Qt, Signal, QTimer
@@ -3118,10 +3119,15 @@ class ProductViewer(QWidget):
                     intersection_points,
                     intersection_cell_ids,
                 )
-                intersections = np.asarray([
-                    intersection_points.GetPoint(point_index)
-                    for point_index in range(intersection_points.GetNumberOfPoints())
-                ], dtype=np.float64).reshape(-1, 3)
+                intersection_count = intersection_points.GetNumberOfPoints()
+                if intersection_count:
+                    # Read the reusable VTK buffer as a NumPy view. This avoids
+                    # allocating one Python tuple per intersection on every ray.
+                    intersections = vtk_to_numpy(
+                        intersection_points.GetData()
+                    )[:intersection_count]
+                else:
+                    intersections = np.empty((0, 3), dtype=np.float64)
                 if not is_line_of_sight_occluded(
                     intersections, nozzle, target, tolerance
                 ):
