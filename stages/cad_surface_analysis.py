@@ -63,14 +63,26 @@ def analyze_step_faces(
     if not isinstance(face_records, list) or not isinstance(triangle_face_ids, (list, tuple, np.ndarray)):
         raise ValueError("STEP Face records or triangle_face_ids are missing.")
 
-    triangle_face_ids = np.asarray(triangle_face_ids, dtype=np.int64)
-    if triangle_face_ids.ndim != 1 or len(triangle_face_ids) != len(mesh.faces):
-        raise ValueError("triangle_face_ids must contain one ID per display triangle.")
+    # Keep the loader-owned integer array without converting it into
+    # per-triangle Python integers or per-Face Python index lists.
+    triangle_face_ids = np.asarray(triangle_face_ids)
+    if (
+        triangle_face_ids.ndim != 1
+        or len(triangle_face_ids) != len(mesh.faces)
+        or not np.issubdtype(triangle_face_ids.dtype, np.integer)
+    ):
+        raise ValueError("triangle_face_ids must contain one integer ID per display triangle.")
 
-    # Build the triangle list for each original CAD Face ID.
-    face_triangles: dict[int, list[int]] = defaultdict(list)
-    for triangle_index, face_id in enumerate(triangle_face_ids):
-        face_triangles[int(face_id)].append(triangle_index)
+    # Only 168-ish Face IDs are unique even when the display mesh contains
+    # millions of triangles. Count them in NumPy rather than retaining one
+    # Python list entry per triangle.
+    unique_triangle_face_ids, triangle_counts = np.unique(
+        triangle_face_ids, return_counts=True
+    )
+    triangle_count_by_face = {
+        int(face_id): int(count)
+        for face_id, count in zip(unique_triangle_face_ids, triangle_counts)
+    }
 
     # Exact STEP B-Rep adjacency is authoritative. Do not build a
     # Python edge-owner dictionary for every display triangle when exact
@@ -122,21 +134,9 @@ def analyze_step_faces(
         for neighbor in neighbors if face_id != neighbor
     } if has_brep_adjacency else set()
 
-    # Area-weighted display-mesh normals, grouped by original CAD Face ID.
-    triangle_areas = np.asarray(mesh.area_faces, dtype=float)
-    triangle_normals = np.asarray(mesh.face_normals, dtype=float)
-    face_normals: dict[int, list[float] | None] = {}
-    for face_id, indices in face_triangles.items():
-        idx = np.asarray(indices, dtype=np.int64)
-        weights = triangle_areas[idx]
-        vectors = triangle_normals[idx] * weights[:, None]
-        summed = vectors.sum(axis=0)
-        norm = float(np.linalg.norm(summed))
-        face_normals[face_id] = (
-            (summed / norm).astype(float).tolist()
-            if np.isfinite(norm) and norm > 1e-12 else None
-        )
-
+    # Display normals are not used by the CAD face classification or
+    # the operator table. Avoid forcing Trimesh to materialize full-size
+    # area and normal caches for every display triangle.
     results = []
     face_status_by_id: dict[int, str] = {}
     counts = {
@@ -150,11 +150,10 @@ def analyze_step_faces(
         surface_type = str(record.get("surface_type", "OTHER")).upper()
         area_mm2 = _safe_float(record.get("area_mm2"), -1.0)
         centroid = record.get("centroid_mm", [None, None, None])
-        triangle_indices = face_triangles.get(face_id, [])
-        normal = face_normals.get(face_id)
+        triangle_count = triangle_count_by_face.get(face_id, 0)
 
         reasons = []
-        if not triangle_indices or area_mm2 <= 0:
+        if triangle_count == 0 or area_mm2 <= 0:
             status = INVALID
             reasons.append("MISSING_TESSELLATION_OR_INVALID_BREP_AREA")
         elif area_mm2 < threshold:
@@ -167,8 +166,7 @@ def analyze_step_faces(
             status = REVIEW_REQUIRED
             reasons.append("CURVED_OR_FREEFORM_FACE_REQUIRES_REVIEW")
 
-        if normal is None and status != INVALID:
-            reasons.append("DISPLAY_NORMAL_UNAVAILABLE")
+        reasons.append("DISPLAY_NORMAL_NOT_COMPUTED_MEMORY_OPTIMIZED")
 
         face_status_by_id[face_id] = status
         counts[status] += 1
@@ -177,27 +175,42 @@ def analyze_step_faces(
             "surface_type": surface_type,
             "area_mm2": area_mm2 if area_mm2 >= 0 else None,
             "centroid_mm": centroid,
-            "display_normal": normal,
+            "display_normal": None,
             "adjacent_face_ids": sorted(adjacency.get(face_id, set())),
             "adjacent_face_count": len(adjacency.get(face_id, set())),
             "adjacency_source": adjacency_source,
-            "display_triangle_count": len(triangle_indices),
+            "display_triangle_count": triangle_count,
             "preliminary_status": status,
             "reason_codes": reasons,
             "exterior_exposure_verified": False,
             "spray_accessibility_verified": False,
         })
 
-    triangle_labels = np.full(len(mesh.faces), 3, dtype=np.uint8)
     numeric_status = {
         "EXCLUDED": 0,
         PAINTABLE_CANDIDATE: 1,
         REVIEW_REQUIRED: 2,
         INVALID: 3,
     }
-    for triangle_index, face_id in enumerate(triangle_face_ids):
-        status = face_status_by_id.get(int(face_id), INVALID)
-        triangle_labels[triangle_index] = numeric_status[status]
+    status_lookup = np.full(
+        max(face_status_by_id, default=0) + 1,
+        numeric_status[INVALID],
+        dtype=np.uint8,
+    )
+    for face_id, status in face_status_by_id.items():
+        if 0 <= face_id < len(status_lookup):
+            status_lookup[face_id] = numeric_status[status]
+
+    # STEP Face IDs are one-based. A single vectorized lookup creates the
+    # triangle labels without a Python iteration over every display triangle.
+    valid_ids = (
+        (triangle_face_ids >= 0)
+        & (triangle_face_ids < len(status_lookup))
+    )
+    triangle_labels = np.full(
+        len(triangle_face_ids), numeric_status[INVALID], dtype=np.uint8
+    )
+    triangle_labels[valid_ids] = status_lookup[triangle_face_ids[valid_ids]]
 
     report = {
         "analysis": {
@@ -227,7 +240,7 @@ def analyze_step_faces(
                 "Curved and freeform faces remain review-required.",
                 "Holes and grooves are not automatically excluded.",
                 "Robot reachability, spray direction, standoff and collision checks are not performed.",
-                "Face adjacency uses exact STEP B-Rep shared edges when available; tessellation adjacency is retained only for comparison. Display normals remain tessellation-derived.",
+                "Face adjacency uses exact STEP B-Rep shared edges when available. Per-triangle display normals are omitted in the memory-optimized face inventory.",
             ],
         },
         "summary": {
@@ -294,6 +307,7 @@ def run_cad_surface_analysis_tests() -> None:
     assert result["report"]["summary"]["paintable_candidate_faces"] == 6
     assert len(result["triangle_status_labels"]) == len(mesh.faces)
     assert np.all(result["triangle_status_labels"] == 1)
+    assert all(item["display_normal"] is None for item in result["report"]["faces"])
 
     # Curved faces are never silently treated as confirmed candidates.
     records[0]["surface_type"] = "CYLINDER"
