@@ -11,10 +11,40 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.spray_coverage_optimizer import (
+    world_samples_to_product_cad_mm,
     analyze_surface_deficits,
     build_deficit_correction_strokes,
     build_coverage_correction_plan,
 )
+
+
+class ProductCadCoordinateTests(unittest.TestCase):
+    def test_world_samples_are_inverted_to_product_cad_millimeters(self):
+        angle = np.deg2rad(90.0)
+        rotation = np.array([[np.cos(angle), -np.sin(angle), 0.0],
+                             [np.sin(angle), np.cos(angle), 0.0],
+                             [0.0, 0.0, 1.0]])
+        transform = np.eye(4)
+        transform[:3, :3] = rotation
+        transform[:3, 3] = [100.0, -20.0, 5.0]
+        cad_mm = np.array([[10.0, 20.0, 30.0], [-5.0, 4.0, 2.0]])
+        world = (cad_mm / 10.0) @ rotation.T + transform[:3, 3]
+        normals_cad = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]])
+        normals_world = normals_cad @ rotation.T
+        actual_points, actual_normals = world_samples_to_product_cad_mm(
+            points_world=world, normals_world=normals_world,
+            product_transform_4x4=transform, mm_per_unit=10.0)
+        np.testing.assert_allclose(actual_points, cad_mm, atol=1e-10)
+        np.testing.assert_allclose(actual_normals, normals_cad, atol=1e-10)
+
+    def test_rejects_non_rigid_product_transform(self):
+        transform = np.eye(4)
+        transform[0, 0] = 2.0
+        with self.assertRaises(ValueError):
+            world_samples_to_product_cad_mm(
+                points_world=np.zeros((1, 3)),
+                normals_world=np.array([[0.0, 0.0, 1.0]]),
+                product_transform_4x4=transform, mm_per_unit=1.0)
 
 
 class SurfaceDeficitAnalysisTests(unittest.TestCase):
