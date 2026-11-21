@@ -3356,13 +3356,17 @@ class ProductViewer(QWidget):
             "PREDICTED DRY FILM [µm] | "
             f"MIN {stats['min_um']:.1f}  MEAN {stats['mean_um']:.1f}  "
             f"P95 {stats['p95_um']:.1f}  MAX {stats['max_um']:.1f}  "
-            f"AREA ≥ TARGET {stats['area_at_or_above_target_percent']:.1f}% "
-            f"(TARGET {target:.1f}) | UNCALIBRATED"
+            f"IN BAND 90–110% {stats['area_in_target_band_percent']:.1f}%  "
+            f"UNDER {stats['area_below_target_band_percent']:.1f}%  "
+            f"OVER {stats['area_above_target_band_percent']:.1f}% "
+            f"(TARGET {target:.1f} µm) | UNCALIBRATED"
         )
         self.trajectory_thickness_label.setToolTip(
             "Predicted dry-film thickness from the time-integrated Double-Beta "
-            "spray model. Color scale: dark blue=0, cyan=0.5× target, "
-            "green=0.8×, yellow=1.0×, red=1.5× or above. Only visible samples "
+            "spray model. The 90–110% in-band percentage is area-weighted; "
+            "under-band and over-band areas are reported separately. Color scale: "
+            "dark blue=0, cyan=0.5× target, green=0.8×, yellow=1.0×, red=1.5× "
+            "or above. Only visible samples "
             "inside the spray footprint receive deposition. The model is not "
             "calibrated; valve ON/OFF delays, evaporation, atomization and "
             "measured coupon validation are not included. "
@@ -3679,8 +3683,10 @@ class ProductViewer(QWidget):
                             "PREDICTED DRY FILM [µm] | "
                             f"MIN {stats['min_um']:.1f}  MEAN {stats['mean_um']:.1f}  "
                             f"P95 {stats['p95_um']:.1f}  MAX {stats['max_um']:.1f}  "
-                            f"AREA ≥ TARGET {stats['area_at_or_above_target_percent']:.1f}% "
-                            f"(TARGET {target:.1f}) | UNCALIBRATED"
+                            f"IN BAND 90–110% {stats['area_in_target_band_percent']:.1f}%  "
+            f"UNDER {stats['area_below_target_band_percent']:.1f}%  "
+            f"OVER {stats['area_above_target_band_percent']:.1f}% "
+            f"(TARGET {target:.1f} µm) | UNCALIBRATED"
                         )
                 else:
                     missing = ", ".join(cache["deposition_missing_inputs"])
