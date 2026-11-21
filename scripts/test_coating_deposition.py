@@ -96,6 +96,18 @@ class DoubleBetaDepositionTests(unittest.TestCase):
         self.assertIn("WHEN FILM THICKNESS IS OFF: COVERAGE COLORS SHOW GEOMETRIC REACH", source)
         self.assertNotIn("GEOMETRIC REACH ONLY - NO FILM THICKNESS", source)
 
+    def test_viewer_playback_timer_reports_wall_path_and_transfer_time(self):
+        viewer_path = ROOT / "ui" / "viewer_3d.py"
+        source = viewer_path.read_text(encoding="utf-8")
+        self.assertIn("self.trajectory_time_label = QLabel(", source)
+        self.assertIn("WALL {self._format_playback_duration(wall_elapsed)}", source)
+        self.assertIn("PATH {path_text}", source)
+        self.assertIn("TRAVEL +{self._format_playback_duration(travel_seconds)}", source)
+        self.assertIn("PLAN {self._format_playback_duration(total_plan)}", source)
+        self.assertIn("def _pause_playback_wall_clock(self):", source)
+        self.assertIn("self._playback_wall_started_at = time.monotonic()", source)
+        self.assertIn("self._update_trajectory_time_label(index)", source)
+
     def _args(self):
         return {"sample_normalized_xy_by_path": np.zeros((2,2,2)), "sample_area_mm2": np.array([10.,10.]), "sample_facing_cosine_by_path": np.ones((2,2)), "sample_face_ids": np.array([0,1]), "trajectory_time_s": np.array([0.,1.]), "spray_on_mask": np.array([False,True]), "hit_sample_indices_by_path": [np.array([],dtype=int),np.array([0,1])], "fluid_flow_ml_min":60., "transfer_efficiency_percent":50., "volume_solids_percent":40., "footprint_width_mm":10., "footprint_thickness_mm":10.}
     def test_uniform_kernel_integrates_to_one(self):
