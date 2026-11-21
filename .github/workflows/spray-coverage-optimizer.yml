@@ -9,6 +9,7 @@ on:
       - "scripts/test_human_like_spray_planner.py"
       - "scripts/test_circular_spray_footprint.py"
       - "stages/trajectory_safety.py"
+      - "stages/stage3_spray_trajectory.py"
       - "stages/human_like_spray_planner.py"
       - "ui/viewer_3d.py"
       - "ui/sprayer_settings.py"
@@ -21,6 +22,7 @@ on:
       - "scripts/test_trajectory_safety.py"
       - "scripts/test_human_like_spray_planner.py"
       - "stages/trajectory_safety.py"
+      - "stages/stage3_spray_trajectory.py"
       - "stages/human_like_spray_planner.py"
       - ".github/workflows/spray-coverage-optimizer.yml"
 
