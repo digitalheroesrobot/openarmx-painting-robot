@@ -10,6 +10,7 @@ import numpy as np
 import trimesh
 
 from core.result_manager import ResultManager
+from core.coating_process import validate_coating_process
 
 
 # ============================================================
@@ -4164,6 +4165,7 @@ def generate_spray_trajectory(
     stage1_report: dict | None = None,
     coordinate_unit: str | None = None,
     sprayer_profile: dict | None = None,
+    coating_process: dict | None = None,
     product_transform: np.ndarray | list | None = None,
 ) -> dict:
 
@@ -4179,6 +4181,18 @@ def generate_spray_trajectory(
     )
 
     product_transform_matrix = _validate_product_transform(product_transform)
+
+    # Existing saved sprayer profiles may contain legacy process fields.
+    # Use them only as a migration fallback when no separate process is supplied.
+    legacy_profile = sprayer_profile if isinstance(sprayer_profile, dict) else {}
+    if coating_process is None:
+        coating_process = {
+            "base_travel_speed_mm_s": legacy_profile.get("travel_speed_mm_s", 150.0),
+            "min_travel_speed_mm_s": legacy_profile.get("min_travel_speed_mm_s", 40.0),
+            "max_travel_acceleration_mm_s2": legacy_profile.get("max_travel_acceleration_mm_s2", 500.0),
+            "fluid_flow_ml_min": legacy_profile.get("fluid_flow_ml_min", 0.0),
+        }
+    coating_process_data = validate_coating_process(coating_process)
 
     # Resolve unit before performing any physical-distance calculation.
     source_unit = _resolve_coordinate_unit(
@@ -4358,15 +4372,9 @@ def generate_spray_trajectory(
         if isinstance(sprayer_profile, dict)
         else {}
     )
-    base_travel_speed = _safe_float(profile_data.get("travel_speed_mm_s", 150.0))
-    if base_travel_speed is None or base_travel_speed <= 0.0:
-        base_travel_speed = 150.0
-    minimum_travel_speed = _safe_float(profile_data.get("min_travel_speed_mm_s", 40.0))
-    if minimum_travel_speed is None or minimum_travel_speed <= 0.0:
-        minimum_travel_speed = 40.0
-    maximum_acceleration = _safe_float(profile_data.get("max_travel_acceleration_mm_s2", 500.0))
-    if maximum_acceleration is None or maximum_acceleration <= 0.0:
-        maximum_acceleration = 500.0
+    base_travel_speed = coating_process_data["base_travel_speed_mm_s"]
+    minimum_travel_speed = coating_process_data["min_travel_speed_mm_s"]
+    maximum_acceleration = coating_process_data["max_travel_acceleration_mm_s2"]
     if minimum_travel_speed > base_travel_speed:
         minimum_travel_speed = base_travel_speed
     travel_speeds_mm_s, trajectory_time_s, adaptive_speed_analysis = (
@@ -4517,6 +4525,7 @@ def generate_spray_trajectory(
             "sampling_spacing_mm": sampling_spacing_mm,
             "spray_angle_deg": spray_angle_deg,
             "sprayer_profile": profile_data,
+            "coating_process": coating_process_data,
             "adaptive_speed": adaptive_speed_analysis,
             "product_transform_4x4": product_transform_matrix.tolist(),
             "product_coordinate_frame": "PRODUCT_CAD",
@@ -4764,6 +4773,7 @@ def execute_stage3(
     stage1_report: dict | None = None,
     coordinate_unit: str | None = None,
     sprayer_profile: dict | None = None,
+    coating_process: dict | None = None,
     product_transform: np.ndarray | list | None = None,
 ) -> dict:
 
@@ -4797,6 +4807,7 @@ def execute_stage3(
         stage1_report=stage1_report,
         coordinate_unit=coordinate_unit,
         sprayer_profile=sprayer_profile,
+        coating_process=coating_process,
         product_transform=product_transform,
     )
 
