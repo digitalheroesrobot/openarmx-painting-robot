@@ -2167,7 +2167,11 @@ class ProductViewer(QWidget):
             style.SetEnabled(0)
 
         self._interactive_hud_actor = self.plotter.add_text(
-            "SPRAY CURSOR ACTIVE  |  MOVE: AIM  |  HOLD LEFT MOUSE: RECORD  |  RELEASE: PAUSE",
+            (
+                f"SPRAY CURSOR ACTIVE  |  STANDOFF {self._interactive_spray_standoff:.3f} "
+                f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
+                "MOVE: AIM  |  HOLD LEFT MOUSE: RECORD  |  RELEASE: PAUSE"
+            ),
             position="upper_left",
             font_size=10,
             color="#00E5FF",
@@ -2200,6 +2204,27 @@ class ProductViewer(QWidget):
         if cell_id < 0 or cell_id >= len(face_normals):
             return None
         normal_local = face_normals[cell_id]
+        # Interpolate vertex normals at the picked triangle location so the
+        # nozzle attitude does not jump at every triangle boundary.
+        try:
+            vertex_normals = np.asarray(self.current_mesh.vertex_normals, dtype=float)
+            face_vertices = np.asarray(self.current_mesh.faces[cell_id], dtype=np.int64)
+            parametric = np.asarray(picker.GetPCoords(), dtype=float)
+            if (
+                vertex_normals.shape == (len(self.current_mesh.vertices), 3)
+                and face_vertices.shape == (3,)
+                and parametric.shape == (3,)
+            ):
+                weights = np.asarray([
+                    1.0 - parametric[0] - parametric[1],
+                    parametric[0],
+                    parametric[1],
+                ], dtype=float)
+                interpolated = weights @ vertex_normals[face_vertices]
+                if np.all(np.isfinite(interpolated)) and np.linalg.norm(interpolated) > 1e-12:
+                    normal_local = interpolated
+        except (AttributeError, IndexError, TypeError, ValueError):
+            pass
         normal_length = float(np.linalg.norm(normal_local))
         if not np.isfinite(normal_length) or normal_length <= 1e-12:
             return None
