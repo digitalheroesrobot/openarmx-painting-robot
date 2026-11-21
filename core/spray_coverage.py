@@ -45,6 +45,48 @@ def mark_sample_hits(sample_hits, hit_indices, spray_on: bool):
     return hits
 
 
+
+def is_line_of_sight_occluded(
+    intersection_points,
+    ray_origin,
+    target_point,
+    tolerance: float,
+) -> bool:
+    """Return True when geometry intersects the nozzle-to-target segment
+    strictly before the target (endpoint/self hits are ignored).
+
+    Intersection points are supplied by the scene's spatial acceleration
+    structure (VTK OBBTree in the viewer). This helper owns the numerical
+    segment test and is independent of the renderer.
+    """
+    origin = np.asarray(ray_origin, dtype=np.float64)
+    target = np.asarray(target_point, dtype=np.float64)
+    points = np.asarray(intersection_points, dtype=np.float64)
+    tol = float(tolerance)
+    if (
+        origin.shape != (3,) or target.shape != (3,)
+        or not np.all(np.isfinite(origin))
+        or not np.all(np.isfinite(target))
+        or not np.isfinite(tol) or tol < 0.0
+    ):
+        raise ValueError("Ray endpoints and tolerance must be finite.")
+    if points.size == 0:
+        return False
+    if points.ndim != 2 or points.shape[1] != 3 or not np.all(np.isfinite(points)):
+        raise ValueError("intersection_points must have finite shape (N, 3).")
+    ray = target - origin
+    target_distance = float(np.linalg.norm(ray))
+    if target_distance <= 2.0 * tol:
+        return False
+    direction = ray / target_distance
+    relative = points - origin
+    along = relative @ direction
+    perpendicular = relative - along[:, None] * direction
+    lateral_distance = np.linalg.norm(perpendicular, axis=1)
+    before_target = (along > tol) & (along < target_distance - tol)
+    on_segment = lateral_distance <= max(tol * 4.0, 1e-9)
+    return bool(np.any(before_target & on_segment))
+
 def calculate_area_weighted_coverage(
     face_areas,
     sample_hits,
