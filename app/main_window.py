@@ -4106,11 +4106,17 @@ class MainWindow(QMainWindow):
 
         trajectory = self.current_stage3_result["trajectory"]
         face_surface_types = self._build_face_surface_types()
+        face_status_labels = (
+            self.current_stage2_result.get("face_status_labels")
+            if isinstance(self.current_stage2_result, dict)
+            else None
+        )
 
         self.viewer.show_spray_trajectory(
             self.current_mesh,
             trajectory,
             face_surface_types=face_surface_types,
+            face_status_labels=face_status_labels,
         )
 
         if hasattr(self, "spray_playback_section"):
