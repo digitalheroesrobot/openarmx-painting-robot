@@ -6,6 +6,8 @@ from stages.spray_deposition_model import SprayDepositionConfig
 from stages.spray_deposition_path_optimizer import (
     evaluate_raster_candidate,
     select_track_spacing_by_relative_deposition,
+    _pose_durations,
+    _trajectory_distance_metrics,
 )
 
 
@@ -92,6 +94,64 @@ class RelativeDepositionPathOptimizerTests(unittest.TestCase):
         )
         self.assertEqual(result["orientation_search_scope"],
                          "PLANAR_PATCH_PCA_AXIS_ROTATION")
+
+
+    def test_fixed_reference_threshold_does_not_follow_candidate_maximum(self):
+        centers = self.mesh.triangles_center
+        normals = self.mesh.face_normals
+        nozzle = centers + normals * 80.
+        candidate = {
+            "face_indices": self.face_ids,
+            "nozzle_points": nozzle,
+            "spray_directions": -normals,
+            "segment_ids": np.zeros(len(self.face_ids), dtype=np.int64),
+        }
+        fast = evaluate_raster_candidate(
+            self.mesh, candidate, self.config, spray_speed=100.,
+            reference_standoff=80.,
+        )
+        slow = evaluate_raster_candidate(
+            self.mesh, candidate, self.config, spray_speed=50.,
+            reference_standoff=80.,
+        )
+        self.assertAlmostEqual(
+            fast["relative_dose_threshold"], slow["relative_dose_threshold"]
+        )
+        self.assertAlmostEqual(
+            slow["maximum_relative_dose"],
+            2.0 * fast["maximum_relative_dose"],
+            places=10,
+        )
+        self.assertEqual(
+            fast["coverage_threshold_basis"],
+            "FIXED_CALLER_SUPPLIED_REFERENCE_STANDOFF",
+        )
+
+    def test_pose_time_weights_sum_to_stroke_length_over_speed(self):
+        points = np.array([
+            [0., 0., 0.], [3., 0., 0.], [3., 4., 0.],
+            [20., 0., 0.], [20., 0., 6.],
+        ])
+        segments = np.array([0, 0, 0, 1, 1], dtype=np.int64)
+        durations = _pose_durations(points, segments, speed=2.)
+        expected_length = 3. + 4. + 6.
+        self.assertAlmostEqual(float(np.sum(durations)), expected_length / 2.)
+
+    def test_total_trajectory_cost_includes_spray_off_transitions(self):
+        points = np.array([
+            [0., 0., 0.], [10., 0., 0.],
+            [100., 0., 0.], [110., 0., 0.],
+        ])
+        segments = np.array([0, 0, 1, 1], dtype=np.int64)
+        metrics = _trajectory_distance_metrics(points, segments, travel_speed=50.)
+        self.assertAlmostEqual(metrics["spray_path_length_coordinate_units"], 20.)
+        self.assertAlmostEqual(
+            metrics["spray_off_transition_length_coordinate_units"], 90.
+        )
+        self.assertAlmostEqual(
+            metrics["total_trajectory_length_coordinate_units"], 110.
+        )
+        self.assertAlmostEqual(metrics["spray_off_transition_time_s"], 1.8)
 
     def test_invalid_optimizer_inputs_are_rejected(self):
         with self.assertRaises(ValueError):
