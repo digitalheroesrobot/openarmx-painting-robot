@@ -199,10 +199,11 @@ class ProductViewer(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        self.display_control_panel = self._build_trajectory_controls()
-        layout.addWidget(self.display_control_panel)
+        # Keep Hook Control at the very top of the 3D viewer whenever it is visible.
         self.hole_control_panel = self._build_hole_controls()
         layout.addWidget(self.hole_control_panel)
+        self.display_control_panel = self._build_trajectory_controls()
+        layout.addWidget(self.display_control_panel)
         self.pose_control_panel = self._build_pose_controls()
         self.pose_control_panel.setMinimumHeight(42)
         self.pose_control_panel.setMaximumHeight(48)
