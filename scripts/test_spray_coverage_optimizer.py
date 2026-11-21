@@ -102,8 +102,11 @@ class DeficitCorrectionStrokeTests(unittest.TestCase):
             [3, 2],
         )
         np.testing.assert_array_equal(result["source_sample_indices"], [0, 1, 2, 3, 4])
-        np.testing.assert_allclose(\n            result["nozzle_points_mm"] - points,\n            np.tile([0., 0., 100.], (5, 1)),\n        )
-        np.testing.assert_allclose(result["spray_directions"], [0., 0., -1.])
+        np.testing.assert_allclose(
+            result["nozzle_points_mm"] - points,
+            np.tile([0., 0., 100.], (5, 1)),
+        )
+        np.testing.assert_allclose(\n            result["spray_directions"], np.tile([0., 0., -1.], (5, 1))\n        )
 
     def test_strokes_never_join_different_stage1_patches(self):
         points = np.array([[0., 0., 0.], [1., 0., 0.], [2., 0., 0.]])
