@@ -2195,7 +2195,8 @@ class ProductViewer(QWidget):
         if self.face_status_labels is not None:
             status = np.asarray(self.face_status_labels, dtype=np.uint8)
             base_rgb[status == FACE_EXCLUDED] = [89, 99, 107]
-            base_rgb[status == FACE_PAINTABLE_CANDIDATE] = [0, 230, 118]
+            # A paintable candidate remains unpainted until spray samples hit it.
+            base_rgb[status == FACE_PAINTABLE_CANDIDATE] = [178, 188, 195]
             base_rgb[status == FACE_REQUIRES_INSPECTION] = [255, 215, 64]
             base_rgb[status == FACE_INVALID] = [255, 82, 82]
 
@@ -3872,7 +3873,8 @@ class ProductViewer(QWidget):
             if self.face_status_labels is not None:
                 status = np.asarray(self.face_status_labels, dtype=np.uint8)
                 base_rgb[status == FACE_EXCLUDED] = [89, 99, 107]
-                base_rgb[status == FACE_PAINTABLE_CANDIDATE] = [0, 230, 118]
+                # A paintable candidate remains unpainted until spray samples hit it.
+            base_rgb[status == FACE_PAINTABLE_CANDIDATE] = [178, 188, 195]
                 base_rgb[status == FACE_REQUIRES_INSPECTION] = [255, 215, 64]
                 base_rgb[status == FACE_INVALID] = [255, 82, 82]
 
@@ -3902,7 +3904,7 @@ class ProductViewer(QWidget):
 
             self._add_trajectory_visualization()
             if self.face_status_labels is not None:
-                self._add_classification_legend()
+                self._add_spray_coverage_legend()
 
         # DEFAULT PRODUCT MODE
         # -------------------------------------------------
@@ -3973,6 +3975,25 @@ class ProductViewer(QWidget):
 
         if self._pose_actor is not None:
             self._update_pose_readout()
+
+    def _add_spray_coverage_legend(self):
+        """Explain target eligibility and sampled spray hits separately."""
+        legend = (
+            "SPRAY PREVIEW STATUS\n"
+            "LIGHT GREY - APPROVED TARGET, NOT REACHED\n"
+            "PAINT COLOR - SPRAY-ENVELOPE HIT\n"
+            "DARK GREY - EXCLUDED FROM TARGET AREA\n"
+            "YELLOW - REQUIRES INSPECTION\n"
+            "RED - INVALID SURFACE\n\n"
+            "GEOMETRIC REACH ONLY - NO FILM THICKNESS"
+        )
+        self.plotter.add_text(
+            legend,
+            position="upper_right",
+            font_size=9,
+            color="#E1EAF0",
+            shadow=True,
+        )
 
     def _add_classification_legend(self):
         legend = (
