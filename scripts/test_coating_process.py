@@ -68,6 +68,42 @@ class CoatingProcessTests(unittest.TestCase):
             self.assertEqual(loaded["fluid_flow_ml_min"], 240.0)
             self.assertEqual(loaded["number_of_coats"], 1)
 
+    def test_old_factory_process_file_is_upgraded_without_overwriting_motion_settings(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "coating_process.json"
+            old_factory = {
+                "name": "default coating process",
+                "target_dry_film_thickness_um": 60.0,
+                "fluid_flow_ml_min": 0.0,
+                "transfer_efficiency_percent": 0.0,
+                "volume_solids_percent": 0.0,
+                "base_travel_speed_mm_s": 125.0,
+                "min_travel_speed_mm_s": 35.0,
+                "max_travel_acceleration_mm_s2": 400.0,
+                "number_of_coats": 2,
+                "spray_on_delay_ms": 12.0,
+                "spray_off_delay_ms": 15.0,
+            }
+            path.write_text(
+                json.dumps({"schema_version": 1, "process": old_factory}),
+                encoding="utf-8",
+            )
+            loaded = load_coating_process(path)
+            self.assertEqual(loaded["target_dry_film_thickness_um"], 50.0)
+            self.assertEqual(loaded["fluid_flow_ml_min"], 300.0)
+            self.assertEqual(loaded["transfer_efficiency_percent"], 50.0)
+            self.assertEqual(loaded["volume_solids_percent"], 50.0)
+            self.assertEqual(loaded["base_travel_speed_mm_s"], 125.0)
+            self.assertEqual(loaded["min_travel_speed_mm_s"], 35.0)
+            self.assertEqual(loaded["number_of_coats"], 2)
+            self.assertEqual(loaded["spray_on_delay_ms"], 12.0)
+            self.assertEqual(loaded["spray_off_delay_ms"], 15.0)
+            loaded["fluid_flow_ml_min"] = 275.0
+            save_coating_process(path, loaded)
+            again = load_coating_process(path)
+            self.assertEqual(again["fluid_flow_ml_min"], 275.0)
+
     def test_legacy_sprayer_settings_are_migrated_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "coating_process.json"
