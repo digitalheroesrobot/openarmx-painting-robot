@@ -2542,6 +2542,12 @@ def _refine_trajectory_with_step_brep(
         "maximum_position_correction_mm": None,
         "maximum_mesh_to_brep_normal_change_deg": None,
         "normal_source": "DISPLAY_MESH",
+        "runtime_context_attached": bool(
+            getattr(mesh, "_step_brep_context", None) is not None
+        ),
+        "mesh_metadata_type": type(
+            getattr(mesh, "metadata", None)
+        ).__name__,
     }
     if _normalize_unit(coordinate_unit) != "mm":
         summary["status"] = "SKIPPED_NON_MM_COORDINATE_UNIT"
@@ -2562,6 +2568,21 @@ def _refine_trajectory_with_step_brep(
         summary["reason"] = f"{type(exc).__name__}: {exc}"
         return dict(trajectory), summary
     if context is None:
+        summary["status"] = "MISSING_STEP_BREP_CONTEXT"
+        metadata = getattr(mesh, "metadata", None)
+        if not isinstance(metadata, dict):
+            summary["reason"] = (
+                "Mesh metadata is not a dictionary; STEP runtime context "
+                "lookup cannot proceed."
+            )
+        elif not summary["runtime_context_attached"]:
+            summary["reason"] = (
+                "The mesh reaching Stage 3 has no _step_brep_context runtime attribute."
+            )
+        else:
+            summary["reason"] = (
+                "STEP runtime context lookup returned None despite an attached attribute."
+            )
         return dict(trajectory), summary
 
     points = np.asarray(trajectory["surface_points"], dtype=np.float64)
