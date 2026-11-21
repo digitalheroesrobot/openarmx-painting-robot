@@ -49,6 +49,187 @@ def world_samples_to_product_cad_mm(*, points_world, normals_world, product_tran
     return cad_points_mm, cad_normals
 
 
+
+def append_correction_strokes_to_trajectory(
+    *,
+    trajectory,
+    correction_strokes,
+    source_face_ids,
+    mm_per_unit,
+    base_speed_mm_s,
+    minimum_speed_mm_s,
+    singleton_duration_s=0.10,
+):
+    """Append CAD-space correction strokes to a Stage-3 trajectory dictionary.
+
+    Candidate geometry is supplied in PRODUCT_CAD millimeters and converted
+    to the source mesh coordinate unit only at this boundary. Every correction
+    stroke receives a fresh segment ID. The first waypoint of each stroke is
+    spray-OFF by the Viewer segment-boundary convention; singleton strokes
+    receive a repeated endpoint so their second sample can deposit paint.
+
+    This helper does not claim visibility, IK, collision, or robot execution
+    validity. It returns a new dictionary and never mutates the input.
+    """
+    required = (
+        "surface_points", "surface_normals", "nozzle_points",
+        "spray_directions", "segment_ids", "travel_speeds_mm_s",
+        "trajectory_time_s",
+    )
+    missing = [key for key in required if key not in trajectory]
+    if missing:
+        raise ValueError("Base trajectory is missing: " + ", ".join(missing))
+
+    scale = float(mm_per_unit)
+    base_speed = float(base_speed_mm_s)
+    min_speed = float(minimum_speed_mm_s)
+    singleton_dt = float(singleton_duration_s)
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("mm_per_unit must be finite and positive.")
+    if not math.isfinite(base_speed) or base_speed <= 0.0:
+        raise ValueError("base_speed_mm_s must be finite and positive.")
+    if not math.isfinite(min_speed) or min_speed <= 0.0 or min_speed > base_speed:
+        raise ValueError("minimum_speed_mm_s must be positive and <= base speed.")
+    if not math.isfinite(singleton_dt) or singleton_dt <= 0.0:
+        raise ValueError("singleton_duration_s must be finite and positive.")
+
+    points = np.asarray(correction_strokes["surface_points_mm"], dtype=float)
+    normals = np.asarray(correction_strokes["surface_normals"], dtype=float)
+    nozzle = np.asarray(correction_strokes["nozzle_points_mm"], dtype=float)
+    directions = np.asarray(correction_strokes["spray_directions"], dtype=float)
+    sample_ids = np.asarray(correction_strokes["source_sample_indices"], dtype=np.int64)
+    face_ids = np.asarray(source_face_ids, dtype=np.int64)
+    ranges = list(correction_strokes["stroke_ranges"])
+    count = len(points)
+    if any(array.shape != (count, 3) for array in (normals, nozzle, directions)):
+        raise ValueError("Correction geometry arrays must all have shape (N, 3).")
+    if sample_ids.shape != (count,) or np.any(sample_ids < 0) or np.any(sample_ids >= len(face_ids)):
+        raise ValueError("Correction source sample indices are invalid.")
+    if not all(np.all(np.isfinite(array)) for array in (points, normals, nozzle, directions)):
+        raise ValueError("Correction geometry must be finite.")
+    if count == 0:
+        return {key: (value.copy() if isinstance(value, np.ndarray) else value)
+                for key, value in trajectory.items()}
+
+    base_count = len(np.asarray(trajectory["nozzle_points"]))
+    base_segments = np.asarray(trajectory["segment_ids"], dtype=np.int64)
+    base_times = np.asarray(trajectory["trajectory_time_s"], dtype=float)
+    if base_segments.shape != (base_count,) or base_times.shape != (base_count,):
+        raise ValueError("Base segment/time arrays do not match trajectory length.")
+    if not np.all(np.isfinite(base_times)) or (base_count > 1 and np.any(np.diff(base_times) < 0.0)):
+        raise ValueError("Base trajectory times must be finite and monotonic.")
+    if len(face_ids) == 0 or np.any(face_ids < 0):
+        raise ValueError("source_face_ids must map every target sample to a valid mesh face.")
+    if not ranges:
+        raise ValueError("Non-empty correction geometry requires stroke ranges.")
+
+    # Duplicate singleton samples so the segment's second point is spray-ON
+    # under the Viewer convention that the first sample of each segment is OFF.
+    expanded = []
+    for stroke in ranges:
+        start, stop = int(stroke["start"]), int(stroke["stop"])
+        if start < 0 or stop <= start or stop > count:
+            raise ValueError("Correction stroke range is invalid.")
+        ids = list(range(start, stop))
+        if len(ids) == 1:
+            ids.append(ids[0])
+        expanded.append(ids)
+
+    appended_indices = np.asarray([i for group in expanded for i in group], dtype=np.int64)
+    out = dict(trajectory)
+    total = base_count + len(appended_indices)
+    segment_start = int(np.max(base_segments)) + 1 if base_count else 0
+    new_segment_ids = []
+    new_times = []
+    new_speeds = []
+    previous_nozzle = (
+        np.asarray(trajectory["nozzle_points"], dtype=float)[-1]
+        if base_count else None
+    )
+    current_time = float(base_times[-1]) if base_count else 0.0
+    cursor = 0
+    for local_stroke_id, group in enumerate(expanded):
+        group_points = nozzle[group] / scale
+        if previous_nozzle is not None:
+            travel_mm = float(np.linalg.norm(group_points[0] - previous_nozzle) * scale)
+            current_time += travel_mm / min_speed
+        stroke_id = segment_start + local_stroke_id
+        for j, local_index in enumerate(group):
+            if j > 0:
+                distance_mm = float(np.linalg.norm(
+                    (nozzle[local_index] - nozzle[group[j - 1]])
+                ))
+                current_time += distance_mm / base_speed
+                if distance_mm <= 1e-12:
+                    current_time += singleton_dt
+            new_times.append(current_time)
+            new_speeds.append(min_speed if j == 0 else base_speed)
+            new_segment_ids.append(stroke_id)
+        previous_nozzle = group_points[-1]
+        cursor += len(group)
+
+    def append_vector(key, values):
+        base = np.asarray(trajectory[key])
+        extra = np.asarray(values)
+        if base.ndim != extra.ndim or base.shape[1:] != extra.shape[1:]:
+            raise ValueError(f"Trajectory field {key} has incompatible shape.")
+        out[key] = np.concatenate((base, extra), axis=0)
+
+    append_vector("surface_points", points[appended_indices] / scale)
+    append_vector("surface_normals", normals[appended_indices])
+    append_vector("nozzle_points", nozzle[appended_indices] / scale)
+    append_vector("spray_directions", directions[appended_indices])
+    append_vector("face_indices", face_ids[sample_ids[appended_indices]])
+    patch_values = np.asarray(correction_strokes["patch_ids"])
+    append_vector("patch_ids", patch_values[appended_indices])
+    append_vector("segment_ids", np.asarray(new_segment_ids, dtype=np.int64))
+    append_vector("travel_speeds_mm_s", np.asarray(new_speeds, dtype=float))
+    append_vector("trajectory_time_s", np.asarray(new_times, dtype=float))
+
+    # Rebuild right-handed nozzle frames independently per correction stroke.
+    frames = np.empty((len(appended_indices), 3, 3), dtype=float)
+    offset = 0
+    for group in expanded:
+        for j, local_index in enumerate(group):
+            z = directions[local_index] / np.linalg.norm(directions[local_index])
+            if j == 0:
+                reference = np.array([1.0, 0.0, 0.0])
+                x = reference - np.dot(reference, z) * z
+                if np.linalg.norm(x) < 1e-8:
+                    reference = np.array([0.0, 1.0, 0.0])
+                    x = reference - np.dot(reference, z) * z
+                x /= np.linalg.norm(x)
+            else:
+                x = frames[offset - 1, :, 0].copy()
+                x -= np.dot(x, z) * z
+                x /= max(np.linalg.norm(x), 1e-12)
+            y = np.cross(z, x)
+            y /= max(np.linalg.norm(y), 1e-12)
+            frames[offset] = np.column_stack((x, y, z))
+            offset += 1
+    if "nozzle_frames" in trajectory:
+        append_vector("nozzle_frames", frames)
+
+    # World arrays are intentionally not generated here: Viewer owns the
+    # CAD-to-WORLD display transform and rebuilds these arrays from CAD data.
+    for key in (
+        "surface_points_world", "surface_normals_world", "nozzle_points_world",
+        "spray_directions_world", "nozzle_frames_world",
+    ):
+        out.pop(key, None)
+    out["correction_path_metadata"] = {
+        "status": "PREVIEW_ONLY_REQUIRES_VISIBILITY_IK_COLLISION_VALIDATION",
+        "added_sample_count": int(len(appended_indices)),
+        "added_stroke_count": int(len(expanded)),
+        "coordinate_frame": "PRODUCT_CAD",
+        "coordinate_unit": "source_mesh_unit",
+        "spray_off_at_each_stroke_start": True,
+    }
+    if len(np.asarray(out["trajectory_time_s"])) != total:
+        raise RuntimeError("Correction append produced inconsistent trajectory length.")
+    return out
+
+
 def analyze_surface_deficits(
     *,
     sample_area_mm2,
