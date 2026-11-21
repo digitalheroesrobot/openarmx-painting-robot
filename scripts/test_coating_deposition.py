@@ -73,6 +73,27 @@ class DoubleBetaDepositionTests(unittest.TestCase):
         source = viewer_path.read_text(encoding="utf-8")
         compile(source, str(viewer_path), "exec")
 
+    def test_viewer_film_legend_uses_the_render_palette_and_active_target(self):
+        # The legend must document the exact stops used by the 3D interpolation.
+        viewer_path = ROOT / "ui" / "viewer_3d.py"
+        source = viewer_path.read_text(encoding="utf-8")
+        self.assertIn(
+            "FILM_THICKNESS_COLOR_STOPS = (0.0, 0.5, 0.8, 1.0, 1.5)",
+            source,
+        )
+        self.assertIn(
+            'FILM_THICKNESS_COLOR_HEX = ("#23394E", "#0091D2", "#00BE7D", "#FFCD2D", "#EB372D")',
+            source,
+        )
+        self.assertIn("stops = np.asarray(FILM_THICKNESS_COLOR_STOPS", source)
+        self.assertIn("self._update_film_thickness_legend(target)", source)
+        self.assertIn(
+            'coating_process["target_dry_film_thickness_um"]',
+            source,
+        )
+        self.assertIn("playback_layout.addWidget(self.trajectory_thickness_legend_label)", source)
+        self.assertIn("150%+ — OVERSPRAY", source)
+
     def _args(self):
         return {"sample_normalized_xy_by_path": np.zeros((2,2,2)), "sample_area_mm2": np.array([10.,10.]), "sample_facing_cosine_by_path": np.ones((2,2)), "sample_face_ids": np.array([0,1]), "trajectory_time_s": np.array([0.,1.]), "spray_on_mask": np.array([False,True]), "hit_sample_indices_by_path": [np.array([],dtype=int),np.array([0,1])], "fluid_flow_ml_min":60., "transfer_efficiency_percent":50., "volume_solids_percent":40., "footprint_width_mm":10., "footprint_thickness_mm":10.}
     def test_uniform_kernel_integrates_to_one(self):
