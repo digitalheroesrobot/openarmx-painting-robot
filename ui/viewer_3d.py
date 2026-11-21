@@ -2160,16 +2160,19 @@ class ProductViewer(QWidget):
     def _update_trajectory_surface_visibility(self):
         """Update planar/curved styling in-place without restarting playback."""
         polydata = self._trajectory_surface_polydata
-        if polydata is None or self.face_surface_types is None:
+        if polydata is None:
             self.plotter.render()
             return
 
         face_count = len(self.current_mesh.faces)
-        surface_types = np.char.lower(
-            np.asarray(self.face_surface_types).astype(str)
-        )
-        if len(surface_types) != face_count:
-            return
+        if self.face_surface_types is None:
+            surface_types = np.full(face_count, "unknown", dtype="<U16")
+        else:
+            surface_types = np.char.lower(
+                np.asarray(self.face_surface_types).astype(str)
+            )
+            if len(surface_types) != face_count:
+                return
 
         base_rgb = np.tile(
             np.asarray([178, 188, 195], dtype=np.uint8),
