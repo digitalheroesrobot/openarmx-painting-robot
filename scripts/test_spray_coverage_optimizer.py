@@ -293,6 +293,12 @@ class DeficitCorrectionStrokeTests(unittest.TestCase):
 
 
 class ViewerCorrectionIntegrationTests(unittest.TestCase):
+    def test_viewer_exposes_explicit_correction_preview_append(self):
+        source = (ROOT / "ui" / "viewer_3d.py").read_text(encoding="utf-8")
+        self.assertIn("APPEND CORRECTION STROKES TO PREVIEW", source)
+        self.assertIn("def _apply_coverage_correction_preview(self):", source)
+        self.assertIn("append_correction_strokes_to_trajectory(", source)
+        self.assertIn("source_face_ids = np.repeat(", source)
     def test_viewer_runs_deficit_analysis_after_full_playback(self):
         source = (ROOT / "ui" / "viewer_3d.py").read_text(encoding="utf-8")
         self.assertIn("from core.spray_coverage_optimizer import build_coverage_correction_plan", source)
