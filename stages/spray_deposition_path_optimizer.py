@@ -117,6 +117,7 @@ def select_track_spacing_by_relative_deposition(
     spray_speed: float,
     minimum_relative_dose_fraction: float = 0.15,
     minimum_area_coverage: float = 0.95,
+    lane_orientation_candidates_deg: Sequence[float] = (0.0, 45.0, 90.0, 135.0),
 ) -> dict[str, Any]:
     """Choose the shortest raster candidate meeting relative area coverage.
 
@@ -128,25 +129,31 @@ def select_track_spacing_by_relative_deposition(
         raise ValueError("track_spacing_candidates must be finite positive values.")
     if not 0.0 <= minimum_area_coverage <= 1.0:
         raise ValueError("minimum_area_coverage must be in [0, 1].")
+    angles = sorted(set(float(x) % 180.0 for x in lane_orientation_candidates_deg))
+    if not angles or any(not np.isfinite(x) for x in angles):
+        raise ValueError("lane_orientation_candidates_deg must contain finite values.")
     evaluations = []
-    for spacing in spacings:
-        candidate = generate_patchwise_raster_candidates(
-            mesh, face_indices, patch_ids, face_normals,
-            standoff, sample_spacing, spacing,
-        )
-        score = evaluate_raster_candidate(
-            mesh, candidate, deposition_config, spray_speed,
-            minimum_relative_dose_fraction,
-        )
-        evaluations.append({
-            "track_spacing": spacing,
-            "candidate": candidate,
-            "evaluation": score,
-            "meets_coverage": bool(
-                score.get("valid") and
-                score["area_weighted_relative_coverage"] >= minimum_area_coverage
-            ),
-        })
+    for angle in angles:
+        for spacing in spacings:
+            candidate = generate_patchwise_raster_candidates(
+                mesh, face_indices, patch_ids, face_normals,
+                standoff, sample_spacing, spacing,
+                lane_orientation_angle_deg=angle,
+            )
+            score = evaluate_raster_candidate(
+                mesh, candidate, deposition_config, spray_speed,
+                minimum_relative_dose_fraction,
+            )
+            evaluations.append({
+                "track_spacing": spacing,
+                "lane_orientation_angle_deg": angle,
+                "candidate": candidate,
+                "evaluation": score,
+                "meets_coverage": bool(
+                    score.get("valid") and
+                    score["area_weighted_relative_coverage"] >= minimum_area_coverage
+                ),
+            })
     feasible = [item for item in evaluations if item["meets_coverage"]]
     if feasible:
         selected = min(
@@ -169,17 +176,21 @@ def select_track_spacing_by_relative_deposition(
         selection_status = "NO_SPACING_MET_COVERAGE_REQUIREMENT"
     return {
         "selected_track_spacing": selected["track_spacing"],
+        "selected_lane_orientation_angle_deg": selected["lane_orientation_angle_deg"],
         "selected_candidate": selected["candidate"],
         "selected_evaluation": selected["evaluation"],
         "selection_status": selection_status,
         "minimum_area_coverage": float(minimum_area_coverage),
-        "evaluated_spacing_count": len(evaluations),
+        "evaluated_spacing_count": len(spacings),
+        "evaluated_orientation_count": len(angles),
+        "evaluated_candidate_count": len(evaluations),
         "spacing_evaluations": [
             {key: value for key, value in item.items() if key != "candidate"}
             for item in evaluations
         ],
-        "optimizer": "RELATIVE_DEPOSITION_TRACK_SPACING_SEARCH_V1",
+        "optimizer": "RELATIVE_DEPOSITION_ORIENTATION_SPACING_SEARCH_V2",
         "calibration_status": "UNCALIBRATED_RELATIVE_DOSE_ONLY",
-        "orientation_search_performed": False,
+        "orientation_search_performed": True,
+        "orientation_search_scope": "PLANAR_PATCH_PCA_AXIS_ROTATION",
         "route_order_optimization_performed": False,
     }
