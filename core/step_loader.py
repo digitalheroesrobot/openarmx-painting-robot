@@ -261,7 +261,10 @@ def get_step_brep_context(mesh):
     if not isinstance(metadata, dict):
         return None
 
-    context = metadata.get("_step_brep_context")
+    # Open CASCADE wrappers are not deepcopy/pickle compatible. Keep the
+    # live context as a runtime attribute, never inside Trimesh metadata:
+    # Trimesh.copy() deep-copies metadata for viewer/display meshes.
+    context = getattr(mesh, "_step_brep_context", None)
     if context is None:
         return None
     if not isinstance(context, dict):
@@ -648,10 +651,14 @@ def load_step(
         "unit_detection": "opencascade_target_unit_mm",
         "step_geometry_report": report,
         "triangle_face_ids": triangle_face_ids,
-        "_step_brep_context": brep_context,
         "source_geometry_preserved": True,
         "source_coordinates_modified": False,
     })
+
+    # Store Open CASCADE objects as a non-metadata runtime attribute. This
+    # keeps the original mesh available to Stage 3 while allowing Trimesh and
+    # the 3D viewer to deepcopy the ordinary serializable metadata safely.
+    mesh._step_brep_context = brep_context
 
     # Validate the runtime mapping before returning the imported mesh.
     assert get_step_brep_context(mesh) is brep_context
@@ -792,10 +799,15 @@ END-ISO-10303-21;
         "face_adjacency": {"1": [2], "2": [1]},
         "schema_identifier": "AUTOMOTIVE_DESIGN",
     }
-    fake_mesh.metadata["_step_brep_context"] = fake_context
+    fake_mesh._step_brep_context = fake_context
     assert get_step_brep_context(fake_mesh) is fake_context
 
-    fake_mesh.metadata["_step_brep_context"]["triangle_face_ids"] = np.asarray(
+    # The ordinary Trimesh metadata remains deepcopy-safe for the viewer.
+    from copy import deepcopy
+    copied_metadata = deepcopy(fake_mesh.metadata)
+    assert "_step_brep_context" not in copied_metadata
+
+    fake_mesh._step_brep_context["triangle_face_ids"] = np.asarray(
         [1], dtype=np.int64
     )
     try:
@@ -805,10 +817,11 @@ END-ISO-10303-21;
     else:
         raise AssertionError("Mismatched B-Rep triangle mapping was accepted.")
 
-    fake_mesh.metadata.pop("_step_brep_context")
+    del fake_mesh._step_brep_context
     assert get_step_brep_context(fake_mesh) is None
     print("[PASS] Live STEP B-Rep runtime context validation")
     print("[PASS] B-Rep triangle-to-Face ID mapping validation")
+    print("[PASS] Trimesh metadata deepcopy compatibility")
 
     # Pure topology test: shared B-Rep edge, open boundary, and seam use.
     class _FakeEdge:
