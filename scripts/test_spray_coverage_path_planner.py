@@ -85,10 +85,13 @@ class PatchwiseSprayPlannerTests(unittest.TestCase):
         self.assertGreater(long_axis_lane_count, 0)
         self.assertGreater(short_axis_lane_count, 0)
         self.assertNotEqual(long_axis_lane_count, short_axis_lane_count)
-        self.assertFalse(np.allclose(
-            along_long_axis["nozzle_points"],
-            along_short_axis["nozzle_points"],
-        ))
+        long_nozzles = along_long_axis["nozzle_points"]
+        short_nozzles = along_short_axis["nozzle_points"]
+        geometry_differs = (
+            long_nozzles.shape != short_nozzles.shape
+            or not np.allclose(long_nozzles, short_nozzles)
+        )
+        self.assertTrue(geometry_differs)
         self.assertAlmostEqual(
             float(np.mean(np.linalg.norm(
                 along_long_axis["nozzle_points"] -
