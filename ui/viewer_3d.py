@@ -2165,6 +2165,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_locator.BuildLocator()
         self._interactive_spray_latest_pose = None
         self._interactive_spray_records = []
+        self._interactive_spray_stroke_id = -1
         self._interactive_spray_painted_actors = []
         self._interactive_spray_live_actors = []
         self._interactive_spray_active = True
