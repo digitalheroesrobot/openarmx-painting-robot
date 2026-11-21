@@ -93,6 +93,8 @@ class DoubleBetaDepositionTests(unittest.TestCase):
         )
         self.assertIn("playback_layout.addWidget(self.trajectory_thickness_legend_label)", source)
         self.assertIn("150%+ — OVERSPRAY", source)
+        self.assertIn("WHEN FILM THICKNESS IS OFF: COVERAGE COLORS SHOW GEOMETRIC REACH", source)
+        self.assertNotIn("GEOMETRIC REACH ONLY - NO FILM THICKNESS", source)
 
     def _args(self):
         return {"sample_normalized_xy_by_path": np.zeros((2,2,2)), "sample_area_mm2": np.array([10.,10.]), "sample_facing_cosine_by_path": np.ones((2,2)), "sample_face_ids": np.array([0,1]), "trajectory_time_s": np.array([0.,1.]), "spray_on_mask": np.array([False,True]), "hit_sample_indices_by_path": [np.array([],dtype=int),np.array([0,1])], "fluid_flow_ml_min":60., "transfer_efficiency_percent":50., "volume_solids_percent":40., "footprint_width_mm":10., "footprint_thickness_mm":10.}
