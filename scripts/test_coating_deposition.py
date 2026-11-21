@@ -9,6 +9,7 @@ from core.coating_deposition import (
     accumulate_double_beta_deposition_step,
     double_beta_spatial_density,
     simulate_double_beta_deposition,
+    update_face_thickness_from_changed_samples,
 )
 class DoubleBetaDepositionTests(unittest.TestCase):
     def test_sparse_step_doubles_with_flow_and_duration(self):
@@ -219,4 +220,36 @@ class DoubleBetaDepositionTests(unittest.TestCase):
     def test_nonmonotonic_time_is_rejected(self):
         a=self._args(); a["trajectory_time_s"]=np.array([1.,0.]);
         with self.assertRaises(ValueError): simulate_double_beta_deposition(**a)
+
+    def test_incremental_face_thickness_updates_only_touched_faces(self):
+        samples = np.array([10., 20., 30., 40., 5., 15., 25., 35.])
+        faces = np.array([-1., 0., -1., 0., -1.])
+        target_ids = np.array([1, 3], dtype=np.int64)
+        changed = np.array([0, 5], dtype=np.int64)
+        updated = update_face_thickness_from_changed_samples(
+            samples, faces, target_ids, changed, 4
+        )
+        np.testing.assert_array_equal(updated, np.array([1, 3]))
+        self.assertEqual(faces[1], 25.0)
+        self.assertEqual(faces[3], 20.0)
+        self.assertEqual(faces[0], -1.0)
+        self.assertEqual(faces[2], -1.0)
+        self.assertEqual(faces[4], -1.0)
+
+    def test_incremental_face_thickness_empty_change_is_noop(self):
+        samples = np.arange(8, dtype=float)
+        faces = np.array([2., 3., 4.])
+        before = faces.copy()
+        updated = update_face_thickness_from_changed_samples(
+            samples, faces, np.array([0, 2]), np.empty(0, dtype=np.int64), 4
+        )
+        self.assertEqual(len(updated), 0)
+        np.testing.assert_array_equal(faces, before)
+
+    def test_incremental_face_thickness_rejects_invalid_sample_ids(self):
+        with self.assertRaises(ValueError):
+            update_face_thickness_from_changed_samples(
+                np.zeros(4), np.zeros(1), np.array([0]), np.array([4]), 4
+            )
+
 if __name__ == "__main__": unittest.main(verbosity=2)
