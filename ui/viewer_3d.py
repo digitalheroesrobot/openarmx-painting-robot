@@ -14,6 +14,7 @@ from core.spray_coverage import (
 )
 from core.coating_deposition import (
     accumulate_double_beta_deposition_step,
+    calculate_cone_deposition_step,
     calculate_film_thickness_statistics,
     update_face_thickness_from_changed_samples,
 )
@@ -400,6 +401,8 @@ class ProductViewer(QWidget):
         self._interactive_spray_face_thickness_um = None
         self._interactive_spray_face_area_mm2 = None
         self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_spray_paint_target_um = 50.0
         self._interactive_spray_paint_state_dirty = False
         self._interactive_spray_live_actors = []
@@ -2180,6 +2183,8 @@ class ProductViewer(QWidget):
         )
         self._interactive_spray_face_area_mm2 = None
         self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_spray_paint_state_dirty = False
         self._interactive_coating_process = dict(coating_process or {})
         try:
@@ -2360,7 +2365,7 @@ class ProductViewer(QWidget):
         }
 
     def _interactive_apply_paint_deposition(self, patch, pose):
-        """Accumulate one spray interval into the persistent per-face coating field."""
+        """Accumulate geometry-aware deposition for one sampled spray interval."""
         if self.current_mesh is None:
             return
         ids = patch.cell_data.get("InteractiveOriginalCellId")
@@ -2371,75 +2376,64 @@ class ProductViewer(QWidget):
             return
 
         timestamp = float(pose["timestamp"])
+        nozzle_world = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
         if self._interactive_spray_last_deposition_timestamp is None:
             self._interactive_spray_last_deposition_timestamp = timestamp
+            self._interactive_spray_previous_nozzle_world = nozzle_world.copy()
             return
-        dt = timestamp - float(self._interactive_spray_last_deposition_timestamp)
+        raw_dt = timestamp - float(self._interactive_spray_last_deposition_timestamp)
         self._interactive_spray_last_deposition_timestamp = timestamp
-        if not np.isfinite(dt) or dt <= 0.0:
+        previous_nozzle = self._interactive_spray_previous_nozzle_world
+        self._interactive_spray_previous_nozzle_world = nozzle_world.copy()
+        if previous_nozzle is None or not np.isfinite(raw_dt) or raw_dt <= 0.0:
             return
-
+        dt = min(raw_dt, 0.10)
+        source_factor = self._get_source_mm_factor()
+        if source_factor is None:
+            source_factor = 1.0
+        travel_distance_mm = float(np.linalg.norm(nozzle_world - previous_nozzle)) * float(source_factor)
+        travel_speed_mm_s = travel_distance_mm / dt if dt > 1e-9 else 0.0
+        self._interactive_spray_last_speed_mm_s = travel_speed_mm_s
         process = dict(DEFAULT_COATING_PROCESS)
         process.update(self._interactive_coating_process or {})
         try:
-            flow = max(float(process["fluid_flow_ml_min"]), 0.0)
-            efficiency = np.clip(float(process["transfer_efficiency_percent"]) / 100.0, 0.0, 1.0)
-            solids = np.clip(float(process["volume_solids_percent"]) / 100.0, 0.0, 1.0)
-            coats = max(1, int(process["number_of_coats"]))
+            flow = float(process["fluid_flow_ml_min"])
+            efficiency = float(process["transfer_efficiency_percent"])
+            solids = float(process["volume_solids_percent"])
+            coats = int(process["number_of_coats"])
         except (KeyError, TypeError, ValueError):
-            return
-        if not all(np.isfinite(v) for v in (flow, efficiency, solids)):
             return
         if flow <= 0.0 or efficiency <= 0.0 or solids <= 0.0:
             return
-
-        if self._interactive_spray_face_area_mm2 is None:
-            areas = np.asarray(self.current_mesh.area_faces, dtype=np.float64)
-            source_factor = self._get_source_mm_factor()
-            if source_factor is not None:
-                areas = areas * float(source_factor) ** 2
-            self._interactive_spray_face_area_mm2 = areas
-
-        areas = np.asarray(self._interactive_spray_face_area_mm2, dtype=np.float64)
-        normals = np.asarray(self.current_mesh.face_normals, dtype=np.float64)
+        areas = np.asarray(self.current_mesh.area_faces, dtype=np.float64) * float(source_factor) ** 2
+        local_faces = np.asarray(self.current_mesh.faces[ids], dtype=np.int64)
+        vertices = np.asarray(self.current_mesh.vertices, dtype=np.float64)
+        centroids_local = np.mean(vertices[local_faces], axis=1)
         transform = self._actor_matrix_array()
-        normal_world = normals[ids] @ transform[:3, :3].T
-        normal_lengths = np.linalg.norm(normal_world, axis=1)
-        axis = np.asarray(pose["spray_direction_world"], dtype=np.float64)
-        axis_length = float(np.linalg.norm(axis))
-        if axis_length <= 1e-12:
-            return
-        normal_world /= np.maximum(normal_lengths[:, None], 1e-12)
-        incidence = np.clip(normal_world @ (-axis / axis_length), 0.0, 1.0)
-        valid = (
-            (ids >= 0) & (ids < len(areas))
-            & np.isfinite(areas[ids]) & (areas[ids] > 0.0)
-            & np.isfinite(incidence) & (incidence > 0.0)
+        centroids_world = centroids_local @ transform[:3, :3].T + transform[:3, 3]
+        normals_local = np.asarray(self.current_mesh.face_normals[ids], dtype=np.float64)
+        normals_world = normals_local @ transform[:3, :3].T
+        normals_world /= np.maximum(np.linalg.norm(normals_world, axis=1)[:, None], 1e-12)
+        result = calculate_cone_deposition_step(
+            surface_points_mm=centroids_world * float(source_factor),
+            surface_normals=normals_world,
+            sample_area_mm2=areas[ids],
+            nozzle_position_mm=nozzle_world * float(source_factor),
+            spray_direction=pose["spray_direction_world"],
+            cone_angle_deg=self._interactive_spray_cone_angle_deg,
+            duration_s=dt,
+            fluid_flow_ml_min=flow,
+            transfer_efficiency_percent=efficiency,
+            volume_solids_percent=solids,
+            number_of_coats=coats,
+            travel_speed_mm_s=travel_speed_mm_s,
         )
-        if not np.any(valid):
+        deposited = np.asarray(result.get("deposited_volume_mm3", np.zeros(len(ids))), dtype=np.float64)
+        if deposited.shape != (len(ids),):
             return
-
-        ids = ids[valid]
-        incidence = incidence[valid]
-        hit_area = areas[ids]
-        weighted_area = hit_area / np.maximum(incidence, 1e-6)
-        total_area = float(np.sum(weighted_area))
-        if total_area <= 0.0:
-            return
-
-        input_dry_volume_mm3 = (
-            flow * dt / 60.0 * 1000.0 * efficiency * solids * coats
-        )
-        if input_dry_volume_mm3 <= 0.0:
-            return
-
-        volume = input_dry_volume_mm3 * weighted_area / total_area
-        increment_um = volume / hit_area * 1000.0
         if self._interactive_spray_face_thickness_um is None:
-            self._interactive_spray_face_thickness_um = np.zeros(
-                len(self.current_mesh.faces), dtype=np.float64
-            )
-        self._interactive_spray_face_thickness_um[ids] += increment_um
+            self._interactive_spray_face_thickness_um = np.zeros(len(self.current_mesh.faces), dtype=np.float64)
+        self._interactive_spray_face_thickness_um[ids] += deposited / np.maximum(areas[ids], 1e-12) * 1000.0
         self._interactive_spray_paint_state_dirty = True
 
     def _interactive_update_cursor(self, pose):
