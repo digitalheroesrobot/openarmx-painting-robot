@@ -6,7 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QPolygon
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -38,8 +38,6 @@ DEFAULT_SPRAYER_PROFILE = {
     "tcp_to_nozzle_tip_mm": 0.0,
     "standoff_mm": 180.0,
     "spray_cone_angle_deg": 45.0,
-    "fan_reference_distance_mm": 200.0,
-    "fan_thickness_at_reference_mm": 0.0,
     "overlap_percent": 50.0,
     "sampling_spacing_mm": 20.0,
     "travel_speed_mm_s": 150.0,
@@ -205,7 +203,7 @@ class SprayPatternPreview(QWidget):
         standoff = max(1.0, float(profile.get("standoff_mm", 180.0)))
         angle = max(
             1.0,
-            min(150.0, float(profile.get("spray_cone_angle_deg", 74.0))),
+            min(150.0, float(profile.get("spray_cone_angle_deg", 45.0))),
         )
         overlap = max(
             0.0, min(90.0, float(profile.get("overlap_percent", 50.0)))
@@ -213,7 +211,6 @@ class SprayPatternPreview(QWidget):
         sample_spacing = max(
             0.1, float(profile.get("sampling_spacing_mm", 20.0))
         )
-        pattern_type = "round_cone"
 
         spray_width_mm = (
             2.0 * standoff * math.tan(math.radians(angle * 0.5))
@@ -233,31 +230,29 @@ class SprayPatternPreview(QWidget):
             ),
         )
         pitch_px = visual_half_width * 2.0 * (1.0 - overlap / 100.0)
-        visual_depth = surface_y - tip_y
 
-        def envelope_polygon(center_x):
-            if pattern_type == "round_cone":
-                return QPolygon([
-                    self._point(center_x, tip_y),
-                    self._point(center_x - visual_half_width, surface_y),
-                    self._point(center_x + visual_half_width, surface_y),
-                ])
-            return QPolygon([
-                self._point(center_x - 5, tip_y),
-                self._point(center_x + 5, tip_y),
-                self._point(center_x + visual_half_width, surface_y),
-                self._point(center_x - visual_half_width, surface_y),
-            ])
-
-        # Neighboring passes are outlines; the center pass is emphasized.
+        # The side-view cone ends in an ellipse representing the circular
+        # footprint viewed obliquely on the target surface.
         for offset in (-pitch_px, pitch_px):
             painter.setPen(QPen(QColor("#4C9EAE"), 1.4, Qt.DashLine))
             painter.setBrush(QColor(0, 150, 180, 18))
-            painter.drawPolygon(envelope_polygon(cx + offset))
+            painter.drawLine(
+                int(cx + offset), int(tip_y),
+                int(cx + offset - visual_half_width), int(surface_y - 8),
+            )
+            painter.drawLine(
+                int(cx + offset), int(tip_y),
+                int(cx + offset + visual_half_width), int(surface_y - 8),
+            )
 
         painter.setPen(QPen(QColor("#00E5FF"), 2))
         painter.setBrush(QColor(0, 190, 220, 62))
-        painter.drawPolygon(envelope_polygon(cx))
+        painter.drawLine(int(cx), int(tip_y), int(cx - visual_half_width), int(surface_y - 8))
+        painter.drawLine(int(cx), int(tip_y), int(cx + visual_half_width), int(surface_y - 8))
+        painter.drawEllipse(
+            int(cx - visual_half_width), int(surface_y - 9),
+            int(2.0 * visual_half_width), 18,
+        )
 
         # Nozzle tip and spray centerline are references only; mechanical
         # nozzle dimensions do not affect the trajectory envelope.
@@ -542,17 +537,6 @@ class SprayerSettingsDialog(QDialog):
                 spin.setToolTip(
                     "Distance between calculated nozzle samples along a pass. "
                     "This does not set the distance between adjacent spray passes."
-                )
-            elif key == "fan_reference_distance_mm":
-                spin.setToolTip(
-                    "Distance at which the measured flat-fan thickness was recorded. "
-                    "Required when a nonzero measured fan thickness is entered."
-                )
-            elif key == "fan_thickness_at_reference_mm":
-                spin.setToolTip(
-                    "Measured narrow dimension of the flat-fan footprint at the "
-                    "reference distance. Required for flat-fan footprint and "
-                    "coverage visualization. No circular-cone substitute is used."
                 )
             spin.valueChanged.connect(self._refresh_preview)
             self.fields[key] = spin
