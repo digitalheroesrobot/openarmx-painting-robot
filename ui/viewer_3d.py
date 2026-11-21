@@ -15,6 +15,7 @@ from core.spray_coverage import (
 from core.coating_deposition import (
     accumulate_double_beta_deposition_step,
     calculate_film_thickness_statistics,
+    update_face_thickness_from_changed_samples,
 )
 from core.coating_process import coating_model_readiness
 from core.coating_process import DEFAULT_COATING_PROCESS
@@ -2912,6 +2913,9 @@ class ProductViewer(QWidget):
         spray_on_mask = np.ones(len(segment_ids), dtype=bool)
         if len(segment_ids) > 1:
             spray_on_mask[1:] = segment_ids[1:] == segment_ids[:-1]
+        # Precompute spray-OFF boundaries once; playback ticks must not scan
+        # the complete trajectory to rediscover the same indices.
+        spray_off_boundary_indices = np.flatnonzero(~spray_on_mask)
 
         self._playback_cache = {
             "nozzle_points": nozzle_points,
@@ -2919,6 +2923,7 @@ class ProductViewer(QWidget):
             "nozzle_frames": nozzle_frames,
             "segment_ids": segment_ids,
             "spray_on_mask": spray_on_mask,
+            "spray_off_boundary_indices": spray_off_boundary_indices,
             "travel_speeds_mm_s": np.asarray(
                 data.get("travel_speeds_mm_s", np.full(len(nozzle_points), 150.0)),
                 dtype=float,
@@ -3267,12 +3272,12 @@ class ProductViewer(QWidget):
         cache["deposition_input_volume_mm3"] += increment["input_dry_volume_mm3"]
         cache["deposition_total_volume_mm3"] += increment["deposited_volume_mm3"]
         cache["deposition_processed_index"] = int(path_index)
-        sample_face_thickness = cache["deposition_sample_thickness_um"].reshape(
-            -1, cache["sample_count_per_face"]
-        ).mean(axis=1)
-        cache["deposition_face_thickness_um"].fill(0.0)
-        cache["deposition_face_thickness_um"][cache["target_face_ids"]] = (
-            sample_face_thickness
+        update_face_thickness_from_changed_samples(
+            sample_thickness_um=cache["deposition_sample_thickness_um"],
+            face_thickness_um=cache["deposition_face_thickness_um"],
+            target_face_ids=cache["target_face_ids"],
+            changed_sample_ids=hit_ids,
+            sample_count_per_face=cache["sample_count_per_face"],
         )
 
     def _update_film_thickness_legend(self, target_um):
@@ -4188,12 +4193,12 @@ class ProductViewer(QWidget):
                 return
 
         # Never skip a spray-OFF boundary, even at high visual playback speed.
-        off_boundaries = np.flatnonzero(~cache["spray_on_mask"])
-        future_boundaries = off_boundaries[
-            off_boundaries > self._playback_index
-        ]
-        if len(future_boundaries):
-            next_off_boundary = int(future_boundaries[0])
+        off_boundaries = cache["spray_off_boundary_indices"]
+        boundary_position = int(np.searchsorted(
+            off_boundaries, self._playback_index, side="right"
+        ))
+        if boundary_position < len(off_boundaries):
+            next_off_boundary = int(off_boundaries[boundary_position])
             if next_index >= next_off_boundary:
                 next_index = next_off_boundary
 
