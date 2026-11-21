@@ -37,6 +37,29 @@ class SprayCoverageTests(unittest.TestCase):
         self.assertAlmostEqual(target, 4.0)
         self.assertAlmostEqual(percent, 0.0)
 
+    def test_excluded_area_is_not_in_the_coverage_denominator(self):
+        labels = np.asarray([1, 0, 1], dtype=np.uint8)
+        all_areas = np.asarray([1.0, 100.0, 1.0])
+        target_mask = build_paintable_face_mask(labels, 3)
+        target_areas = all_areas[target_mask]
+        # First approved face is fully reached; second approved face is not.
+        hits = np.asarray([True, True, True, True, False, False, False, False])
+        _, reached, target, percent = calculate_area_weighted_coverage(
+            target_areas, hits, 4
+        )
+        self.assertAlmostEqual(reached, 1.0)
+        self.assertAlmostEqual(target, 2.0)
+        self.assertAlmostEqual(percent, 50.0)
+
+    def test_full_reach_is_one_hundred_percent_only_when_all_target_samples_hit(self):
+        hits = np.ones(8, dtype=bool)
+        _, reached, target, percent = calculate_area_weighted_coverage(
+            np.asarray([2.5, 7.5]), hits, 4
+        )
+        self.assertAlmostEqual(reached, 10.0)
+        self.assertAlmostEqual(target, 10.0)
+        self.assertAlmostEqual(percent, 100.0)
+
     def test_half_reached_area_is_fifty_percent(self):
         hits = np.asarray([
             True, True, True, True,   # face 0: 1.0 / 1.0
