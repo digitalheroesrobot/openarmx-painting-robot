@@ -3559,6 +3559,8 @@ class ProductViewer(QWidget):
         except Exception:
             pass
         self.plotter.clear()
+        # Actors from the previous scene are no longer in the renderer.
+        self._hole_overlay_actors = []
         self.plotter.set_background("#07111D", top="#142B40")
 
         # -------------------------------------------------
