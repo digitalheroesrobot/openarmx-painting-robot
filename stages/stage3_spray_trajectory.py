@@ -11,6 +11,10 @@ import trimesh
 
 from core.result_manager import ResultManager
 from core.coating_process import validate_coating_process
+from stages.trajectory_safety import (
+    SprayGunEnvelopeConfig,
+    evaluate_spray_gun_clearance,
+)
 
 
 # ============================================================
@@ -4683,6 +4687,7 @@ def _build_saved_report(
         "segments": trajectory["segments"],
         "path_statistics": trajectory.get("path_statistics", {}),
         "trajectory_validation": trajectory.get("trajectory_validation", {}),
+        "trajectory_safety": trajectory.get("trajectory_safety", {}),
         "rasterization": trajectory.get("rasterization", {}),
         "advanced_geometry_analysis": trajectory[
             "advanced_geometry_analysis"
@@ -4811,6 +4816,37 @@ def execute_stage3(
         sprayer_profile=sprayer_profile,
         coating_process=coating_process,
         product_transform=product_transform,
+    )
+
+    # Safety is evaluated in the unchanged PRODUCT_CAD coordinate frame.
+    # nozzle_points are already nozzle-tip positions; TCP offset is retained
+    # as profile metadata but must not be applied a second time here.
+    profile_data = trajectory["parameters"].get("sprayer_profile", {})
+    safety_config = SprayGunEnvelopeConfig(
+        gun_body_length_mm=float(profile_data.get("gun_body_length_mm", 220.0)),
+        gun_body_diameter_mm=float(profile_data.get("gun_body_diameter_mm", 45.0)),
+        nozzle_length_mm=float(profile_data.get("nozzle_length_mm", 25.0)),
+        minimum_surface_clearance_mm=float(standoff_mm),
+        nozzle_outer_diameter_mm=(
+            float(profile_data["nozzle_outer_diameter_mm"])
+            if profile_data.get("nozzle_outer_diameter_mm") not in (None, "", 0, 0.0)
+            else None
+        ),
+        tcp_to_nozzle_tip_mm=(
+            float(profile_data["tcp_to_nozzle_tip_mm"])
+            if profile_data.get("tcp_to_nozzle_tip_mm") not in (None, "")
+            else None
+        ),
+        dimensions_are_estimate=bool(
+            profile_data.get("gun_body_dimensions_are_estimate", True)
+        ),
+    )
+    trajectory["trajectory_safety"] = evaluate_spray_gun_clearance(
+        mesh=mesh,
+        nozzle_points=trajectory["nozzle_points"],
+        nozzle_frames=trajectory["nozzle_frames"],
+        config=safety_config,
+        coordinate_unit=trajectory["parameters"]["coordinate_unit"],
     )
 
     stage_directory = result_manager.stage_dir(
