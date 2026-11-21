@@ -99,7 +99,7 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             "face_status_labels": self.status.copy(),
             "patch_labels": np.asarray([7, 9], dtype=np.int64),
             "standoff_mm": 100.0,
-            "sampling_spacing_mm": 100.0,
+            "sampling_spacing_mm": 20.0,
             "spray_angle_deg": 45.0,
             "coordinate_unit": "mm",
         }
@@ -111,8 +111,8 @@ class Stage3GlobalSweepTests(unittest.TestCase):
         )
 
         width = 2.0 * 100.0 * np.tan(np.deg2rad(45.0 / 2.0))
-        expected_half_overlap_spacing = min(100.0, width * 0.5, width * 0.5)
-        expected_high_overlap_spacing = min(100.0, width * 0.25, width * 0.5)
+        expected_half_overlap_spacing = min(width * 0.5, width * 0.5)
+        expected_high_overlap_spacing = min(width * 0.25, width * 0.5)
 
         self.assertAlmostEqual(
             half_overlap["sampling"]["coverage_spacing_mm"],
@@ -134,7 +134,11 @@ class Stage3GlobalSweepTests(unittest.TestCase):
         )
         self.assertEqual(
             high_overlap["sampling"]["configured_sampling_spacing_mm"],
-            100.0,
+            20.0,
+        )
+        self.assertEqual(
+            high_overlap["sampling"]["configured_sampling_spacing_role"],
+            "FALLBACK_ONLY_WHEN_FOOTPRINT_UNAVAILABLE",
         )
 
         # Dense probes over the flat target must lie inside at least one
