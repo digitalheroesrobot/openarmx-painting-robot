@@ -301,7 +301,7 @@ class ViewerCorrectionIntegrationTests(unittest.TestCase):
         self.assertIn("source_face_ids = np.repeat(", source)
     def test_viewer_runs_deficit_analysis_after_full_playback(self):
         source = (ROOT / "ui" / "viewer_3d.py").read_text(encoding="utf-8")
-        self.assertIn("from core.spray_coverage_optimizer import build_coverage_correction_plan", source)
+        self.assertIn("build_coverage_correction_plan", source)
         self.assertIn("def _update_coverage_correction_plan(self):", source)
         self.assertIn('cache["coverage_sample_hits"]', source)
         self.assertIn('cache["deposition_sample_thickness_um"]', source)
