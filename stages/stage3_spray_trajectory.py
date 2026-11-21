@@ -4212,8 +4212,44 @@ def generate_spray_trajectory(
         source_unit,
     )
 
-    spacing_coordinate_units = _mm_to_coordinate_units(
+    configured_sampling_spacing_coordinate_units = _mm_to_coordinate_units(
         sampling_spacing_mm,
+        source_unit,
+    )
+
+    # The active sprayer profile defines the nominal footprint. Surface
+    # sampling is then driven by footprint diameter and overlap, not by an
+    # arbitrary fixed point interval alone.
+    profile_for_path = (
+        dict(sprayer_profile) if isinstance(sprayer_profile, dict) else {}
+    )
+    profile_for_path.setdefault("spray_cone_angle_deg", spray_angle_deg)
+    spray_footprint = _calculate_spray_footprint(
+        profile_for_path,
+        standoff_mm,
+    )
+    path_spray_width_mm = float(spray_footprint["width_mm"])
+    path_track_spacing_mm = float(
+        spray_footprint["nominal_track_spacing_mm"]
+    )
+
+    if path_spray_width_mm > 0.0 and path_track_spacing_mm > 0.0:
+        # A triangular surface lattice has a finite covering radius. Capping
+        # the lattice interval at half the footprint diameter prevents holes
+        # even when the requested track overlap is very small.
+        coverage_spacing_mm = min(
+            path_track_spacing_mm,
+            0.5 * path_spray_width_mm,
+        )
+        coverage_spacing_basis = "SPRAY_FOOTPRINT_AND_OVERLAP"
+    else:
+        # A zero cone angle has no defined footprint. Retain the user spacing,
+        # but explicitly mark physical coverage spacing as unavailable.
+        coverage_spacing_mm = float(sampling_spacing_mm)
+        coverage_spacing_basis = "USER_SPACING_FALLBACK_NO_FOOTPRINT"
+
+    spacing_coordinate_units = _mm_to_coordinate_units(
+        coverage_spacing_mm,
         source_unit,
     )
 
@@ -4314,16 +4350,6 @@ def generate_spray_trajectory(
     # 7. Build one spatially connected global serpentine sweep plan.
     # CAD face and patch IDs remain metadata; they do not create stroke
     # boundaries. Only a true 3D spatial gap separates sweep segments.
-    profile_for_path = (
-        dict(sprayer_profile) if isinstance(sprayer_profile, dict) else {}
-    )
-    profile_for_path.setdefault("spray_cone_angle_deg", spray_angle_deg)
-    spray_footprint = _calculate_spray_footprint(
-        profile_for_path,
-        standoff_mm,
-    )
-    path_spray_width_mm = spray_footprint["width_mm"]
-    path_track_spacing_mm = spray_footprint["nominal_track_spacing_mm"]
     # A zero/unspecified cone angle cannot define a footprint lane spacing.
     # In that case, use the configured point spacing as a geometric fallback
     # and report that coverage spacing is not physically established.
@@ -4517,7 +4543,7 @@ def generate_spray_trajectory(
         source_face_indices=face_indices,
         trajectory=ordered,
         coordinate_unit=source_unit,
-        sample_spacing_mm=sampling_spacing_mm,
+        sample_spacing_mm=coverage_spacing_mm,
         track_spacing_mm=path_track_spacing_mm,
     )
 
@@ -4604,7 +4630,7 @@ def generate_spray_trajectory(
         orientation_info=orientation_info,
         path_metrics=path_metrics,
         standoff_mm=standoff_mm,
-        spacing_mm=sampling_spacing_mm,
+        spacing_mm=coverage_spacing_mm,
         standoff_coordinate_units=standoff_coordinate_units,
         spacing_coordinate_units=spacing_coordinate_units,
         coordinate_unit=source_unit,
@@ -4623,6 +4649,8 @@ def generate_spray_trajectory(
         "parameters": {
             "standoff_mm": standoff_mm,
             "sampling_spacing_mm": sampling_spacing_mm,
+            "effective_coverage_sampling_spacing_mm": coverage_spacing_mm,
+            "coverage_spacing_basis": coverage_spacing_basis,
             "spray_angle_deg": spray_angle_deg,
             "sprayer_profile": profile_data,
             "coating_process": coating_process_data,
@@ -4686,6 +4714,8 @@ def generate_spray_trajectory(
             "rasterized_curved_patch_ids": ordered.get("rasterized_curved_patch_ids", []),
             "nearest_neighbor_fallback_patch_ids": ordered.get("nearest_neighbor_fallback_patch_ids", []),
             "lane_spacing_mm": effective_lane_spacing_mm,
+            "surface_sample_spacing_mm": coverage_spacing_mm,
+            "coverage_spacing_basis": coverage_spacing_basis,
             "nominal_footprint_track_spacing_mm": path_track_spacing_mm,
             "lane_spacing_coordinate_units": path_track_spacing_units,
             "lane_direction_policy": "global_principal_axis_projection",
@@ -4702,8 +4732,12 @@ def generate_spray_trajectory(
         },
         "sampling": {
             "coordinate_unit": source_unit,
-            "sampling_spacing_mm": sampling_spacing_mm,
+            "sampling_spacing_mm": coverage_spacing_mm,
+            "configured_sampling_spacing_mm": sampling_spacing_mm,
+            "coverage_spacing_mm": coverage_spacing_mm,
+            "coverage_spacing_basis": coverage_spacing_basis,
             "sampling_spacing_coordinate_units": spacing_coordinate_units,
+            "configured_sampling_spacing_coordinate_units": configured_sampling_spacing_coordinate_units,
             "candidate_face_count": sampling_result["candidate_face_count"],
             "sample_count": sampling_result["sample_count"],
             "skipped_invalid_normals": sampling_result[
