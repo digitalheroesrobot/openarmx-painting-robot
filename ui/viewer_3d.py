@@ -3361,6 +3361,15 @@ class ProductViewer(QWidget):
             )
             cache["coverage_correction_plan"] = None
             return None
+        if (
+            cache["pattern_type"] == "flat_fan"
+            and cache["fan_thickness_units"] <= 0.0
+        ):
+            self.trajectory_correction_label.setText(
+                "COVERAGE CORRECTION | N/A — MEASURED FLAT-FAN THICKNESS REQUIRED"
+            )
+            cache["coverage_correction_plan"] = None
+            return None
 
         process = cache["coating_process"]
         parameters = self.trajectory_data.get("parameters", {})
