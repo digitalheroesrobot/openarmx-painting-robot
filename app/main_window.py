@@ -31,7 +31,6 @@ from PySide6.QtWidgets import (
     QStyle
 )
 
-from core.stl_loader import load_stl
 from core.step_loader import load_step, convert_step_report_units
 from core.result_manager import ResultManager
 from core.geometry_analyzer import detect_hole_candidates
@@ -3319,10 +3318,16 @@ class MainWindow(QMainWindow):
             return
 
         selected_path = Path(file_path).expanduser().resolve()
-        is_step = selected_path.suffix.lower() in (".step", ".stp")
+        if selected_path.suffix.lower() not in (".step", ".stp"):
+            QMessageBox.warning(
+                self,
+                "Unsupported Product Format",
+                "OpenArmX accepts STEP AP214 files only (.step / .stp).",
+            )
+            return
 
         try:
-            mesh = load_step(selected_path) if is_step else load_stl(selected_path)
+            mesh = load_step(selected_path)
         except Exception as exc:
             QMessageBox.critical(
                 self,
@@ -3333,9 +3338,7 @@ class MainWindow(QMainWindow):
 
         self.current_mesh = mesh
         self.current_stl_path = selected_path
-        self.current_step_report = (
-            mesh.metadata.get("step_geometry_report") if is_step else None
-        )
+        self.current_step_report = mesh.metadata.get("step_geometry_report")
         self.current_step_report_path = None
         if self.current_step_report is not None:
             self.current_step_report_path = self.result_manager.save_json(
@@ -3401,21 +3404,20 @@ class MainWindow(QMainWindow):
                     12000,
                 )
         self.viewer.set_hole_candidates(hole_candidates)
-        if is_step:
-            diagnostics = mesh.metadata.get("hole_detection_diagnostics", {})
-            if hole_candidates:
+        diagnostics = mesh.metadata.get("hole_detection_diagnostics", {})
+        if hole_candidates:
                 self.status_bar.showMessage(
                     f"STEP hole-axis candidates detected: {len(hole_candidates)}",
                     10000,
                 )
-            else:
-                self.status_bar.showMessage(
-                    "STEP loaded, but no internal-cylinder candidates were classified. "
-                    f"B-Rep cylinders: {diagnostics.get('cylindrical_face_count', 'unknown')}; "
-                    f"orientation counts: {diagnostics.get('cylinder_orientation_counts', {})}. "
-                    "See terminal output for exact B-Rep diagnostics.",
-                    15000,
-                )
+        else:
+            self.status_bar.showMessage(
+                "STEP loaded, but no internal-cylinder candidates were classified. "
+                f"B-Rep cylinders: {diagnostics.get('cylindrical_face_count', 'unknown')}; "
+                f"orientation counts: {diagnostics.get('cylinder_orientation_counts', {})}. "
+                "See terminal output for exact B-Rep diagnostics.",
+                15000,
+            )
 
         self.part_name_label.setText(
             self.current_stl_path.name
@@ -3444,13 +3446,9 @@ class MainWindow(QMainWindow):
                 f"STEP CAD LOADED\n"
                 f"{topo['faces']:,} CAD FACES"
             )
-        elif self.coordinate_unit == "unknown":
-            self.analysis_summary.setText(
-                "STL LOADED\nCOORDINATE UNIT REQUIRED"
-            )
         else:
             self.analysis_summary.setText(
-                f"STL LOADED\nUNIT: {self.coordinate_unit.upper()}"
+                f"STEP LOADED\nUNIT: {self.coordinate_unit.upper()}"
             )
 
         self.summary_section.setText("STAGE SUMMARY")
@@ -4039,7 +4037,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Coordinate Unit Required",
-                "Select the actual STL coordinate unit first.",
+                "Select the actual coordinate unit for the STEP model first.",
             )
             return
 
