@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Integration checks for VTK BSP-tree spray line-of-sight queries."""
+"""Integration checks for VTK OBB-tree spray line-of-sight queries."""
 from __future__ import annotations
 
 import numpy as np
 import pyvista as pv
 
 from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
-from vtkmodules.vtkFiltersFlowPaths import vtkModifiedBSPTree
+from vtkmodules.vtkFiltersGeneral import vtkOBBTree
 
 from core.spray_coverage import is_line_of_sight_occluded
 
@@ -42,11 +42,11 @@ def main() -> None:
 
     # An open triangle at z=4 must occlude the target at z=10.
     blocker = build_triangle_plane(4.0)
-    locator = vtkModifiedBSPTree()
+    locator = vtkOBBTree()
     locator.SetDataSet(blocker)
     locator.BuildLocator()
     hits = intersect(locator, origin, target)
-    assert len(hits) >= 1, "BSP tree failed to find the open-triangle intersection"
+    assert len(hits) >= 1, "OBB tree failed to find the open-triangle intersection"
     assert is_line_of_sight_occluded(hits, origin, target, tolerance)
     
     # A triangle only at the target endpoint is not an earlier occluder.
@@ -71,7 +71,7 @@ def main() -> None:
         off_axis_hits, origin, target, tolerance
     )
 
-    print("VTK SPRAY OCCLUSION INTEGRATION: 3/3 PASS")
+    print("VTK OBB-TREE SPRAY OCCLUSION INTEGRATION: 3/3 PASS")
 
 
 if __name__ == "__main__":
