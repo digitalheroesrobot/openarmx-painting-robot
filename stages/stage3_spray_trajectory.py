@@ -15,6 +15,7 @@ from stages.human_like_spray_planner import (
     SweepPlanningConfig,
     plan_human_like_sweeps,
 )
+from stages.spray_footprint_optimizer import optimize_redundant_spray_points
 
 
 # ============================================================
@@ -3585,6 +3586,10 @@ def _build_analysis(
             "robot_reachability_checked": False,
             "collision_checked": False,
             "coverage_verified": False,
+            "sampled_coverage_preserved": bool(
+                footprint_optimization.get("coverage_preserved", False)
+            ),
+            "footprint_optimization": footprint_optimization,
         },
         "metrics_explanation": explanation,
         "warnings": warnings,
@@ -4391,6 +4396,59 @@ def generate_spray_trajectory(
         + standoff_coordinate_units * ordered["surface_normals"]
     )
 
+    # Evaluate the actual 3-D spray cone against area-weighted probes on the
+    # product mesh. Delete a candidate only when its footprint overlap meets
+    # Track overlap (%) and no previously covered probe becomes uncovered.
+    cone_angle_for_optimization = float(spray_footprint["included_angle_deg"])
+    if cone_angle_for_optimization > 0.0:
+        face_sample_counts = np.bincount(
+            ordered["face_indices"], minlength=len(mesh.faces)
+        )
+        face_areas = np.asarray(mesh.area_faces, dtype=np.float64)
+        sample_face_counts = face_sample_counts[ordered["face_indices"]]
+        sample_face_areas = face_areas[ordered["face_indices"]]
+        sample_area_weights = np.zeros(len(ordered["face_indices"]), dtype=np.float64)
+        valid_area_samples = (
+            np.isfinite(sample_face_areas)
+            & (sample_face_areas > 0.0)
+            & (sample_face_counts > 0)
+        )
+        sample_area_weights[valid_area_samples] = (
+            sample_face_areas[valid_area_samples]
+            / sample_face_counts[valid_area_samples]
+        )
+        footprint_optimization = optimize_redundant_spray_points(
+            surface_points=ordered["surface_points"],
+            nozzle_points=ordered["nozzle_points"],
+            spray_directions=ordered["spray_directions"],
+            sample_area_weights=sample_area_weights,
+            standoff_coordinate_units=standoff_coordinate_units,
+            cone_angle_deg=cone_angle_for_optimization,
+            overlap_percent=float(spray_footprint["overlap_percent"]),
+            sample_spacing_coordinate_units=spacing_coordinate_units,
+        )
+        keep_indices = footprint_optimization["keep_indices"]
+        removed_count = len(ordered["surface_points"]) - len(keep_indices)
+        if removed_count:
+            for key in (
+                "surface_points", "surface_normals", "face_indices",
+                "patch_ids", "segment_ids", "spray_directions",
+                "nozzle_frames", "nozzle_points",
+            ):
+                ordered[key] = ordered[key][keep_indices]
+            sweep["lane_ids"] = sweep["lane_ids"][keep_indices]
+        footprint_optimization["removed_point_count"] = int(removed_count)
+        footprint_optimization["retained_point_count"] = int(len(keep_indices))
+    else:
+        footprint_optimization = {
+            "status": "SKIPPED_ZERO_CONE_ANGLE",
+            "overlap_threshold_percent": float(spray_footprint["overlap_percent"]),
+            "removed_point_count": 0,
+            "retained_point_count": int(len(ordered["surface_points"])),
+            "coverage_preserved": None,
+            "area_measurement": "UNAVAILABLE_ZERO_CONE_ANGLE",
+        }
+
     segment_metadata = []
     for segment_id in np.unique(ordered["segment_ids"]):
         indices = np.flatnonzero(ordered["segment_ids"] == segment_id)
@@ -4426,8 +4484,8 @@ def generate_spray_trajectory(
     }
     ordered["travel_ordering"] = {
         "algorithm": sweep["algorithm"],
-        "lane_count": int(sweep["lane_count"]),
-        "segment_count": int(sweep["segment_count"]),
+        "lane_count": int(len(np.unique(sweep["lane_ids"]))),
+        "segment_count": int(len(segment_metadata)),
         "ordering_optimization": "PCA_PROJECTED_SERPENTINE",
         "gap_split_threshold_coordinate_units": float(
             sweep["gap_split_threshold"]
@@ -4455,6 +4513,9 @@ def generate_spray_trajectory(
         })
     ordered["path_statistics"] = {
         "source_candidate_sample_count": int(len(surface_points)),
+        "footprint_optimizer_removed_sample_count": int(
+            footprint_optimization.get("removed_point_count", 0)
+        ),
         "playback_sample_count": int(len(ordered["surface_points"])),
         "global_sweep_sample_count": int(len(ordered["surface_points"])),
         "global_sweep_segment_count": int(len(segment_metadata)),
@@ -4471,7 +4532,8 @@ def generate_spray_trajectory(
         "per_patch": per_patch_statistics,
         "algorithm": sweep["algorithm"],
         "note": (
-            "Every Stage 2 candidate sample is preserved exactly once. "
+            "Candidate samples are reduced only when their sampled cone "
+            "footprints are redundant without reducing sampled surface coverage. "
             "Path segments are separated only by 3D spatial gaps, not by "
             "source face or patch identity. This geometric ordering does not "
             "constitute a verified spray-coverage result."
@@ -4742,7 +4804,13 @@ def generate_spray_trajectory(
             "sampling_spacing_coordinate_units": spacing_coordinate_units,
             "configured_sampling_spacing_coordinate_units": configured_sampling_spacing_coordinate_units,
             "candidate_face_count": sampling_result["candidate_face_count"],
-            "sample_count": sampling_result["sample_count"],
+            "sample_count": int(len(ordered["surface_points"])),
+            "source_sample_count_before_footprint_optimization": int(
+                sampling_result["sample_count"]
+            ),
+            "footprint_optimizer_removed_sample_count": int(
+                footprint_optimization.get("removed_point_count", 0)
+            ),
             "skipped_invalid_normals": sampling_result[
                 "skipped_invalid_normals"
             ],
