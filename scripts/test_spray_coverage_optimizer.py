@@ -203,5 +203,22 @@ class DeficitCorrectionStrokeTests(unittest.TestCase):
             )
 
 
+class ViewerCorrectionIntegrationTests(unittest.TestCase):
+    def test_viewer_runs_deficit_analysis_after_full_playback(self):
+        source = (ROOT / "ui" / "viewer_3d.py").read_text(encoding="utf-8")
+        self.assertIn("from core.spray_coverage_optimizer import build_coverage_correction_plan", source)
+        self.assertIn("def _update_coverage_correction_plan(self):", source)
+        self.assertIn('cache["coverage_sample_hits"]', source)
+        self.assertIn('cache["deposition_sample_thickness_um"]', source)
+        self.assertIn('cache["sample_area_mm2"]', source)
+        self.assertIn('cache["sample_patch_ids"]', source)
+        self.assertIn("self._update_coverage_correction_plan()", source)
+
+    def test_main_window_passes_stage1_patch_labels_to_viewer(self):
+        source = (ROOT / "app" / "main_window.py").read_text(encoding="utf-8")
+        self.assertIn('self.current_stage1_result.get("patch_labels")', source)
+        self.assertIn("patch_labels=patch_labels", source)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
