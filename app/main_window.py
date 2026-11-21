@@ -247,8 +247,6 @@ def _compute_optimized_spray_point_preview(
     coating_process,
 ):
     """Build an isolated optimized nozzle-point preview from approved faces."""
-    from stages.spray_stroke_route_optimizer import optimize_stroke_order
-
     if coordinate_unit not in MM_PER_UNIT:
         raise ValueError("A known source coordinate unit is required.")
     labels = np.asarray(face_status_labels, dtype=np.int64)
@@ -283,6 +281,10 @@ def _compute_optimized_spray_point_preview(
     normals, normal_info = _determine_normal_orientation(mesh, normals)
     if not np.all(np.isfinite(normals[paintable_faces])):
         raise ValueError("Paintable faces contain invalid surface normals.")
+    # The component splitter validates the full face-normal array. Invalid
+    # normals on excluded/non-paintable triangles are neutralized; approved
+    # target normals above remain strictly validated.
+    planner_normals = np.nan_to_num(normals, nan=0.0, posinf=0.0, neginf=0.0)
 
     speed = float(coating_process["base_travel_speed_mm_s"]) / mm_per_unit
     config = SprayDepositionConfig(cone_angle_deg=cone_angle)
@@ -290,7 +292,7 @@ def _compute_optimized_spray_point_preview(
         mesh=mesh,
         face_indices=paintable_faces,
         patch_ids=patches,
-        face_normals=normals,
+        face_normals=planner_normals,
         standoff=standoff,
         sample_spacing=sample_spacing,
         track_spacing_candidates=spacing_candidates,
