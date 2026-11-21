@@ -1020,6 +1020,7 @@ def convert_step_report_units(report: dict, display_unit: str) -> dict:
 
 def run_step_loader_tests():
     """Run input-validation tests; full B-Rep tests require a STEP fixture."""
+    global evaluate_step_face_surface
     import tempfile
 
     # STEP AP214 header variants accepted by common CAD exporters.
