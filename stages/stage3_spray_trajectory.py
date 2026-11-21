@@ -4235,12 +4235,11 @@ def generate_spray_trajectory(
     )
 
     if path_spray_width_mm > 0.0 and path_track_spacing_mm > 0.0:
-        # Treat the user sampling interval as a maximum-resolution constraint.
-        # The footprint/overlap spacing can force a denser lattice, while a
-        # finer user-selected interval is always preserved. Capping at half
-        # the footprint diameter provides a conservative geometric cover.
+        # For a circular footprint, use the overlap-derived pitch in both
+        # surface-lattice dimensions. A half-diameter cap is a conservative
+        # geometric sampling interval. The legacy user spacing is retained
+        # only as a fallback when no physical footprint can be calculated.
         coverage_spacing_mm = min(
-            float(sampling_spacing_mm),
             path_track_spacing_mm,
             0.5 * path_spray_width_mm,
         )
@@ -4737,6 +4736,7 @@ def generate_spray_trajectory(
             "coordinate_unit": source_unit,
             "sampling_spacing_mm": coverage_spacing_mm,
             "configured_sampling_spacing_mm": sampling_spacing_mm,
+            "configured_sampling_spacing_role": "FALLBACK_ONLY_WHEN_FOOTPRINT_UNAVAILABLE",
             "coverage_spacing_mm": coverage_spacing_mm,
             "coverage_spacing_basis": coverage_spacing_basis,
             "sampling_spacing_coordinate_units": spacing_coordinate_units,
