@@ -57,6 +57,33 @@ class DoubleBetaDepositionTests(unittest.TestCase):
         self.assertAlmostEqual(stats["max_um"], 100.0)
         self.assertAlmostEqual(stats["area_at_or_above_target_percent"], 50.0)
         self.assertAlmostEqual(stats["area_below_target_percent"], 50.0)
+        self.assertAlmostEqual(stats["area_in_target_band_percent"], 25.0)
+        self.assertAlmostEqual(stats["area_below_target_band_percent"], 50.0)
+        self.assertAlmostEqual(stats["area_above_target_band_percent"], 25.0)
+        self.assertAlmostEqual(
+            stats["area_in_target_band_percent"]
+            + stats["area_below_target_band_percent"]
+            + stats["area_above_target_band_percent"],
+            100.0,
+        )
+
+    def test_film_thickness_band_includes_exact_boundaries(self):
+        from core.coating_deposition import calculate_film_thickness_statistics
+        stats = calculate_film_thickness_statistics(
+            np.array([45.0, 55.0, 44.999, 55.001]),
+            np.ones(4),
+            50.0,
+        )
+        self.assertAlmostEqual(stats["area_in_target_band_percent"], 50.0)
+        self.assertAlmostEqual(stats["area_below_target_band_percent"], 25.0)
+        self.assertAlmostEqual(stats["area_above_target_band_percent"], 25.0)
+
+    def test_film_thickness_band_rejects_invalid_ratios(self):
+        from core.coating_deposition import calculate_film_thickness_statistics
+        with self.assertRaises(ValueError):
+            calculate_film_thickness_statistics(
+                np.array([50.0]), np.array([1.0]), 50.0, 1.1, 0.9
+            )
 
     def test_film_statistics_reject_invalid_geometry_and_values(self):
         from core.coating_deposition import calculate_film_thickness_statistics
