@@ -37,6 +37,10 @@ on:
       - "scripts/test_spray_footprint_optimizer.py"
       - "stages/spray_deposition_model.py"
       - "scripts/test_spray_deposition_model.py"
+      - "stages/spray_coverage_path_planner.py"
+      - "scripts/test_spray_coverage_path_planner.py"
+      - "stages/spray_deposition_path_optimizer.py"
+      - "scripts/test_spray_deposition_path_optimizer.py"
       - ".github/workflows/spray-coverage-optimizer.yml"
 
 jobs:
