@@ -143,6 +143,7 @@ class DoubleBetaDepositionTests(unittest.TestCase):
         self.assertIn("self.viewer.playback_state_changed_callback", main_source)
         self.assertIn("def _on_viewer_playback_state_changed(self, is_playing):", main_source)
         self.assertIn("not bool(is_playing)", main_source)
+        self.assertIn("and not self.viewer.is_trajectory_playing()", main_source)
         self.assertIn("if self.viewer.is_trajectory_playing():", main_source)
 
     def _args(self):
