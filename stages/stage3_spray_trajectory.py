@@ -1990,6 +1990,7 @@ def _order_trajectory_with_planar_raster(
     standoff_coordinate_units: float,
     sampling_spacing_coordinate_units: float,
     track_spacing_coordinate_units: float,
+    coordinate_unit: str = "mm",
 ) -> dict:
     """Rasterize planar and smooth curved patches with explicit fallback metadata."""
     keys = (
@@ -2127,6 +2128,13 @@ def _order_trajectory_with_planar_raster(
         raise RuntimeError("No trajectory segments were generated.")
 
     result = {key: np.concatenate(values, axis=0) for key, values in collected.items()}
+    result, step_surface_refinement = _refine_trajectory_with_step_brep(
+        mesh=mesh,
+        trajectory=result,
+        standoff_coordinate_units=standoff_coordinate_units,
+        coordinate_unit=coordinate_unit,
+    )
+    result["step_surface_refinement"] = step_surface_refinement
     step_geometry_report = mesh.metadata.get("step_geometry_report", {})
     step_topology = (
         step_geometry_report.get("topology", {})
@@ -2443,6 +2451,210 @@ def _calculate_path_metrics(
     }
 
 
+
+def _barycentric_coordinates_on_triangle(
+    point: np.ndarray,
+    triangle: np.ndarray,
+    tolerance: float = 1e-6,
+) -> np.ndarray | None:
+    """Return barycentric weights for a 3D point projected onto a triangle plane."""
+    point = np.asarray(point, dtype=np.float64)
+    triangle = np.asarray(triangle, dtype=np.float64)
+    if point.shape != (3,) or triangle.shape != (3, 3):
+        raise ValueError("Point and triangle must have shapes (3,) and (3, 3).")
+    if not np.all(np.isfinite(point)) or not np.all(np.isfinite(triangle)):
+        raise ValueError("Point and triangle coordinates must be finite.")
+
+    edge_a = triangle[1] - triangle[0]
+    edge_b = triangle[2] - triangle[0]
+    offset = point - triangle[0]
+    d00 = float(np.dot(edge_a, edge_a))
+    d01 = float(np.dot(edge_a, edge_b))
+    d11 = float(np.dot(edge_b, edge_b))
+    d20 = float(np.dot(offset, edge_a))
+    d21 = float(np.dot(offset, edge_b))
+    denominator = d00 * d11 - d01 * d01
+    scale = max(d00 * d11, 1.0)
+    if not math.isfinite(denominator) or abs(denominator) <= 1e-14 * scale:
+        return None
+
+    weight_b = (d11 * d20 - d01 * d21) / denominator
+    weight_c = (d00 * d21 - d01 * d20) / denominator
+    weights = np.asarray(
+        [1.0 - weight_b - weight_c, weight_b, weight_c],
+        dtype=np.float64,
+    )
+    if (
+        not np.all(np.isfinite(weights))
+        or float(np.min(weights)) < -float(tolerance)
+        or float(np.max(weights)) > 1.0 + float(tolerance)
+    ):
+        return None
+    weights = np.clip(weights, 0.0, 1.0)
+    total = float(np.sum(weights))
+    if total <= NORMAL_EPSILON:
+        return None
+    return weights / total
+
+
+def _refine_trajectory_with_step_brep(
+    mesh: trimesh.Trimesh,
+    trajectory: dict,
+    standoff_coordinate_units: float,
+    coordinate_unit: str,
+) -> tuple[dict, dict]:
+    """Replace mesh-interpolated path samples with exact STEP B-Rep evaluations.
+
+    Refinement is atomic: if any sample cannot be mapped to its original STEP
+    face, the complete original trajectory is retained.
+    """
+    summary = {
+        "status": "NOT_APPLICABLE",
+        "method": "OPENCASCADE_BREP_ADAPTOR_D1_WITH_TRIANGULATION_UV_MAPPING",
+        "sample_count": int(len(trajectory.get("surface_points", []))),
+        "evaluated_sample_count": 0,
+        "failed_sample_count": 0,
+        "median_position_correction_mm": None,
+        "p95_position_correction_mm": None,
+        "maximum_position_correction_mm": None,
+        "maximum_mesh_to_brep_normal_change_deg": None,
+        "normal_source": "DISPLAY_MESH",
+    }
+    if _normalize_unit(coordinate_unit) != "mm":
+        summary["status"] = "SKIPPED_NON_MM_COORDINATE_UNIT"
+        summary["reason"] = (
+            "STEP B-Rep coordinates are canonical millimetres; exact path "
+            "refinement is enabled only when Stage 3 coordinates are configured as mm."
+        )
+        return dict(trajectory), summary
+
+    try:
+        from core.step_loader import (
+            evaluate_step_triangle_sample,
+            get_step_brep_context,
+        )
+        context = get_step_brep_context(mesh)
+    except Exception as exc:
+        summary["status"] = "FALLBACK_INVALID_STEP_CONTEXT"
+        summary["reason"] = f"{type(exc).__name__}: {exc}"
+        return dict(trajectory), summary
+    if context is None:
+        return dict(trajectory), summary
+
+    points = np.asarray(trajectory["surface_points"], dtype=np.float64)
+    normals = np.asarray(trajectory["surface_normals"], dtype=np.float64)
+    triangle_indices = np.asarray(trajectory["face_indices"], dtype=np.int64)
+    segment_ids = np.asarray(trajectory["segment_ids"], dtype=np.int64)
+    if (
+        points.shape != (len(triangle_indices), 3)
+        or normals.shape != points.shape
+        or segment_ids.shape != (len(points),)
+    ):
+        raise ValueError("STEP refinement requires aligned trajectory sample arrays.")
+
+    mesh_faces = np.asarray(mesh.faces, dtype=np.int64)
+    mesh_vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    exact_points = np.empty_like(points)
+    exact_normals = np.empty_like(normals)
+    position_corrections = np.empty(len(points), dtype=np.float64)
+    normal_changes = np.empty(len(points), dtype=np.float64)
+
+    for sample_index, (point, triangle_index) in enumerate(zip(points, triangle_indices)):
+        triangle_index = int(triangle_index)
+        if triangle_index < 0 or triangle_index >= len(mesh_faces):
+            summary["failed_sample_count"] = 1
+            summary["failed_sample_index"] = int(sample_index)
+            summary["failure_reason"] = "invalid_source_triangle_index"
+            return dict(trajectory), summary
+        triangle = mesh_vertices[mesh_faces[triangle_index]]
+        weights = _barycentric_coordinates_on_triangle(
+            point, triangle, tolerance=2e-5
+        )
+        if weights is None:
+            summary["failed_sample_count"] = 1
+            summary["failed_sample_index"] = int(sample_index)
+            summary["failure_reason"] = "sample_outside_source_triangle"
+            return dict(trajectory), summary
+        try:
+            evaluated = evaluate_step_triangle_sample(mesh, triangle_index, weights)
+        except Exception as exc:
+            summary["failed_sample_count"] = 1
+            summary["failed_sample_index"] = int(sample_index)
+            summary["failure_reason"] = f"{type(exc).__name__}: {exc}"
+            return dict(trajectory), summary
+
+        exact_point = np.asarray(evaluated["point_mm"], dtype=np.float64)
+        exact_normal = np.asarray(evaluated["normal"], dtype=np.float64)
+        exact_normal_length = float(np.linalg.norm(exact_normal))
+        reference_normal = normals[sample_index]
+        reference_length = float(np.linalg.norm(reference_normal))
+        if (
+            exact_point.shape != (3,)
+            or exact_normal.shape != (3,)
+            or not np.all(np.isfinite(exact_point))
+            or not np.all(np.isfinite(exact_normal))
+            or exact_normal_length <= NORMAL_EPSILON
+            or reference_length <= NORMAL_EPSILON
+        ):
+            summary["failed_sample_count"] = 1
+            summary["failed_sample_index"] = int(sample_index)
+            summary["failure_reason"] = "non_finite_or_degenerate_exact_surface_result"
+            return dict(trajectory), summary
+
+        exact_normal /= exact_normal_length
+        reference_normal = reference_normal / reference_length
+        # Preserve the established outward-normal convention if the CAD face
+        # orientation differs from the display mesh's global orientation.
+        if float(np.dot(exact_normal, reference_normal)) < 0.0:
+            exact_normal *= -1.0
+        exact_points[sample_index] = exact_point
+        exact_normals[sample_index] = exact_normal
+        position_corrections[sample_index] = float(np.linalg.norm(exact_point - point))
+        normal_changes[sample_index] = math.degrees(math.acos(float(np.clip(
+            np.dot(exact_normal, reference_normal), -1.0, 1.0
+        ))))
+
+    # Smooth exact normals only within each existing spray stroke. Raw CAD
+    # normals remain available for crease classification and audit reporting.
+    smoothed_normals = exact_normals.copy()
+    maximum_smoothing_deviation = 0.0
+    for segment_id in np.unique(segment_ids):
+        indices = np.flatnonzero(segment_ids == segment_id)
+        local_normals, local_deviation = _smooth_normals_with_deviation_limit(
+            exact_normals[indices], max_deviation_deg=8.0, iterations=6
+        )
+        smoothed_normals[indices] = local_normals
+        maximum_smoothing_deviation = max(
+            maximum_smoothing_deviation, float(local_deviation)
+        )
+
+    refined = dict(trajectory)
+    refined["surface_points"] = exact_points
+    refined["source_surface_normals"] = exact_normals
+    refined["surface_normals"] = smoothed_normals
+    refined["spray_directions"] = -smoothed_normals
+    refined["nozzle_points"] = (
+        exact_points + float(standoff_coordinate_units) * smoothed_normals
+    )
+    refined["nozzle_frames"] = _build_nozzle_frames(refined["spray_directions"])
+    summary.update({
+        "status": "PASS",
+        "evaluated_sample_count": int(len(points)),
+        "failed_sample_count": 0,
+        "median_position_correction_mm": float(np.median(position_corrections)),
+        "p95_position_correction_mm": float(np.percentile(position_corrections, 95)),
+        "maximum_position_correction_mm": float(np.max(position_corrections)),
+        "maximum_mesh_to_brep_normal_change_deg": float(np.max(normal_changes)),
+        "mean_mesh_to_brep_normal_change_deg": float(np.mean(normal_changes)),
+        "maximum_normal_smoothing_deviation_deg": float(maximum_smoothing_deviation),
+        "normal_source": "EXACT_STEP_BREP_FIRST_DERIVATIVES",
+        "position_source": "EXACT_STEP_BREP_SURFACE_EVALUATION",
+        "atomic_fallback": False,
+    })
+    return refined, summary
+
+
+
 def _split_strokes_at_surface_discontinuities(
     mesh: trimesh.Trimesh,
     trajectory: dict,
@@ -2466,6 +2678,10 @@ def _split_strokes_at_surface_discontinuities(
         raise ValueError("Maximum normal change must be in (0, 180] degrees.")
 
     face_normals = np.asarray(mesh.face_normals, dtype=np.float64)
+    source_sample_normals = np.asarray(
+        trajectory.get("source_surface_normals", np.empty((0, 3))), dtype=np.float64
+    )
+    has_exact_sample_normals = source_sample_normals.shape == (len(face_indices), 3)
     use_exact_brep = source_face_ids is not None and isinstance(source_face_adjacency, dict)
     cad_face_ids = None
     brep_adjacency_pairs: set[tuple[int, int]] = set()
@@ -2518,10 +2734,14 @@ def _split_strokes_at_surface_discontinuities(
                     split_after.append(index + 1)
                     split_reasons["non_adjacent_source_faces"] += 1
                     continue
-                # Use the local tessellation normals at these path samples
-                # for the crease angle; topology itself comes from exact B-Rep.
-                normal_a = face_normals[face_a]
-                normal_b = face_normals[face_b]
+                # Prefer exact first-derivative normals for crease angles;
+                # exact B-Rep shared-edge topology remains authoritative.
+                if has_exact_sample_normals:
+                    normal_a = source_sample_normals[index]
+                    normal_b = source_sample_normals[index + 1]
+                else:
+                    normal_a = face_normals[face_a]
+                    normal_b = face_normals[face_b]
             else:
                 if face_a == face_b:
                     continue
@@ -2571,6 +2791,7 @@ def _split_strokes_at_surface_discontinuities(
     sample_keys = (
         "surface_points", "surface_normals", "nozzle_points",
         "spray_directions", "nozzle_frames", "face_indices", "patch_ids",
+        "source_surface_normals",
     )
     updated = dict(trajectory)
     new_ids = np.empty(len(old_segments), dtype=np.int64)
@@ -2637,6 +2858,7 @@ def _optimize_stroke_order_for_travel(
         "nozzle_frames",
         "face_indices",
         "patch_ids",
+        "source_surface_normals",
     )
     segments = np.asarray(trajectory["segment_ids"], dtype=np.int64)
     if segments.ndim != 1 or len(segments) == 0:
@@ -3899,6 +4121,7 @@ def generate_spray_trajectory(
             standoff_coordinate_units=standoff_coordinate_units,
             sampling_spacing_coordinate_units=spacing_coordinate_units,
             track_spacing_coordinate_units=path_track_spacing_units,
+            coordinate_unit=source_unit,
         )
     else:
         ordered = _order_trajectory_by_patch(
@@ -3914,6 +4137,13 @@ def generate_spray_trajectory(
         ordered["nearest_neighbor_fallback_patch_ids"] = [
             int(value) for value in np.unique(patch_ids)
         ]
+        ordered, step_surface_refinement = _refine_trajectory_with_step_brep(
+            mesh=mesh,
+            trajectory=ordered,
+            standoff_coordinate_units=standoff_coordinate_units,
+            coordinate_unit=source_unit,
+        )
+        ordered["step_surface_refinement"] = step_surface_refinement
 
     # 7a. Transform CAD-local samples and nozzle frames into World XYZ.
     # The source mesh and CAD-local arrays remain unchanged.
@@ -4136,6 +4366,9 @@ def generate_spray_trajectory(
         "trajectory_time_s": trajectory_time_s,
         "segments": ordered["segments"],
         "surface_boundary_splits": ordered.get("surface_boundary_splits", {}),
+        "step_surface_refinement": ordered.get("step_surface_refinement", {
+            "status": "NOT_APPLICABLE", "normal_source": "DISPLAY_MESH"
+        }),
         "path_statistics": ordered.get("path_statistics", {}),
         "trajectory_validation": trajectory_validation,
         "inter_segment_travel_plan": inter_segment_travel_plan,
@@ -4514,6 +4747,18 @@ def run_stage3_numerical_tests() -> dict:
     except ValueError:
         negative_thickness_rejected = True
     assert negative_thickness_rejected, "Negative fan thickness must be rejected."
+
+    # 3D barycentric mapping used to transfer path samples to STEP UV nodes.
+    barycentric_test = _barycentric_coordinates_on_triangle(
+        np.asarray([0.25, 0.25, 0.0], dtype=np.float64),
+        np.asarray([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64),
+    )
+    assert barycentric_test is not None
+    assert np.allclose(barycentric_test, [0.5, 0.25, 0.25], atol=1e-9)
+    assert _barycentric_coordinates_on_triangle(
+        np.asarray([1.5, 1.5, 0.0], dtype=np.float64),
+        np.asarray([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64),
+    ) is None
 
     test_mesh = _make_test_mesh(1.0)
 
