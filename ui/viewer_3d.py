@@ -2463,11 +2463,10 @@ class ProductViewer(QWidget):
                 np.asarray(patch.points) @ self._interactive_spray_transform[:3, :3].T
                 + self._interactive_spray_transform[:3, 3]
             )
-            actor = self.plotter.add_mesh(
-                patch, color="#FFC857", opacity=0.16,
-                lighting=False, show_edges=False, pickable=False,
-            )
-            self._interactive_spray_live_actors.append(actor)
+            # Do not draw a translucent coincident surface here.  The
+            # persistent paint field already shows the deposited coating;
+            # a second surface actor would z-fight and make paint appear
+            # to flash or disappear while the cursor moves.
             if boundary.n_cells:
                 boundary.points = (
                     np.asarray(boundary.points) @ self._interactive_spray_transform[:3, :3].T
