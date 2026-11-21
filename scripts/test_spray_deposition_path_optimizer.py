@@ -47,7 +47,10 @@ class RelativeDepositionPathOptimizerTests(unittest.TestCase):
         )
         self.assertIn(result["selected_track_spacing"], [20., 30., 40.])
         self.assertEqual(result["evaluated_spacing_count"], 3)
-        self.assertFalse(result["orientation_search_performed"])
+        self.assertEqual(result["evaluated_orientation_count"], 4)
+        self.assertEqual(result["evaluated_candidate_count"], 12)
+        self.assertTrue(result["orientation_search_performed"])
+        self.assertIn(result["selected_lane_orientation_angle_deg"], [0., 45., 90., 135.])
         self.assertIn("selected_candidate", result)
 
     def test_invalid_optimizer_inputs_are_rejected(self):
@@ -57,6 +60,7 @@ class RelativeDepositionPathOptimizerTests(unittest.TestCase):
                 standoff=80., sample_spacing=20.,
                 track_spacing_candidates=[0.],
                 deposition_config=self.config, spray_speed=100.,
+                lane_orientation_candidates_deg=[0., 45.],
             )
 
 
