@@ -190,148 +190,167 @@ class SprayPatternPreview(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.fillRect(self.rect(), QColor("#0A151E"))
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.fillRect(self.rect(), QColor("#0A151E"))
 
-        width = self.width()
-        height = self.height()
-        cx = width * 0.50
-        tip_y = 76.0
-        surface_y = max(tip_y + 70.0, height - 132.0)
+            width = self.width()
+            height = self.height()
+            cx = width * 0.50
+            tip_y = 76.0
 
-        profile = self.profile
-        standoff = max(1.0, float(profile.get("standoff_mm", 180.0)))
-        angle = max(
-            1.0,
-            min(150.0, float(profile.get("spray_cone_angle_deg", 45.0))),
-        )
-        overlap = max(
-            0.0, min(90.0, float(profile.get("overlap_percent", 50.0)))
-        )
-        fallback_sample_spacing = max(
-            0.1, float(profile.get("sampling_spacing_mm", 20.0))
-        )
+            profile = self.profile
+            standoff = max(1.0, float(profile.get("standoff_mm", 180.0)))
+            angle = max(
+                1.0,
+                min(150.0, float(profile.get("spray_cone_angle_deg", 45.0))),
+            )
+            overlap = max(
+                0.0, min(90.0, float(profile.get("overlap_percent", 50.0)))
+            )
+            fallback_sample_spacing = max(
+                0.1, float(profile.get("sampling_spacing_mm", 20.0))
+            )
 
-        spray_width_mm = (
-            2.0 * standoff * math.tan(math.radians(angle * 0.5))
-        )
-        track_pitch_mm = spray_width_mm * (1.0 - overlap / 100.0)
-        effective_sample_spacing = (
-            min(track_pitch_mm, 0.5 * spray_width_mm)
-            if spray_width_mm > 0.0 and track_pitch_mm > 0.0
-            else fallback_sample_spacing
-        )
+            # Full included cone angle: diameter = 2 * distance * tan(angle / 2).
+            spray_width_mm = (
+                2.0 * standoff * math.tan(math.radians(angle * 0.5))
+            )
+            track_pitch_mm = spray_width_mm * (1.0 - overlap / 100.0)
+            effective_sample_spacing = (
+                min(track_pitch_mm, 0.5 * spray_width_mm)
+                if spray_width_mm > 0.0 and track_pitch_mm > 0.0
+                else fallback_sample_spacing
+            )
 
-        # Map the calculated physical spray width to screen pixels.
-        # A fixed pixel width here would make the preview ignore angle changes.
-        # Keep one consistent scale while allowing very wide patterns to fit.
-        preview_pixels_per_mm = 0.32
-        max_half_width_px = max(12.0, width * 0.32)
-        visual_half_width = max(
-            6.0,
-            min(
-                0.5 * spray_width_mm * preview_pixels_per_mm,
-                max_half_width_px,
-            ),
-        )
-        pitch_px = visual_half_width * 2.0 * (1.0 - overlap / 100.0)
+            # Use a consistent physical-to-screen scale. The old 0.32 px/mm
+            # scale made a 149 mm footprint only ~48 px in radius, visually
+            # understating the spray area. The cap prevents clipping.
+            preview_pixels_per_mm = 2.0
+            max_half_width_px = max(12.0, width * 0.42)
+            visual_half_width = max(
+                6.0,
+                min(
+                    0.5 * spray_width_mm * preview_pixels_per_mm,
+                    max_half_width_px,
+                ),
+            )
+            pitch_px = visual_half_width * 2.0 * (1.0 - overlap / 100.0)
 
-        # The side-view cone ends in an ellipse representing the circular
-        # footprint viewed obliquely on the target surface.
-        for offset in (-pitch_px, pitch_px):
+            # Working distance also changes the visible nozzle-to-surface gap.
+            # Keep enough room for the labels and clamp only at the widget edge.
+            vertical_gap_px = max(70.0, standoff * 0.75)
+            surface_y = min(tip_y + vertical_gap_px, float(height - 112))
+            surface_y = max(tip_y + 70.0, surface_y)
+
+            # Adjacent pass boundaries, cone edges and target footprint.
             painter.setPen(QPen(QColor("#4C9EAE"), 1.4, Qt.DashLine))
             painter.setBrush(QColor(0, 150, 180, 18))
+            for offset in (-pitch_px, pitch_px):
+                painter.drawLine(
+                    int(cx + offset), int(tip_y),
+                    int(cx + offset - visual_half_width), int(surface_y - 8),
+                )
+                painter.drawLine(
+                    int(cx + offset), int(tip_y),
+                    int(cx + offset + visual_half_width), int(surface_y - 8),
+                )
+
+            painter.setPen(QPen(QColor("#00E5FF"), 2))
+            painter.setBrush(QColor(0, 190, 220, 62))
             painter.drawLine(
-                int(cx + offset), int(tip_y),
-                int(cx + offset - visual_half_width), int(surface_y - 8),
+                int(cx), int(tip_y), int(cx - visual_half_width), int(surface_y - 8)
             )
             painter.drawLine(
-                int(cx + offset), int(tip_y),
-                int(cx + offset + visual_half_width), int(surface_y - 8),
+                int(cx), int(tip_y), int(cx + visual_half_width), int(surface_y - 8)
+            )
+            painter.drawEllipse(
+                int(cx - visual_half_width), int(surface_y - 9),
+                int(2.0 * visual_half_width), 18,
             )
 
-        painter.setPen(QPen(QColor("#00E5FF"), 2))
-        painter.setBrush(QColor(0, 190, 220, 62))
-        painter.drawLine(int(cx), int(tip_y), int(cx - visual_half_width), int(surface_y - 8))
-        painter.drawLine(int(cx), int(tip_y), int(cx + visual_half_width), int(surface_y - 8))
-        painter.drawEllipse(
-            int(cx - visual_half_width), int(surface_y - 9),
-            int(2.0 * visual_half_width), 18,
-        )
+            # Nozzle tip and centerline are references; mechanical dimensions
+            # do not change the theoretical spray footprint.
+            painter.setPen(QPen(QColor("#DCEAF1"), 2))
+            painter.drawLine(int(cx), int(tip_y - 18), int(cx), int(tip_y - 2))
+            painter.setBrush(QColor("#00E5FF"))
+            painter.drawEllipse(int(cx - 5), int(tip_y - 5), 10, 10)
+            painter.setPen(QPen(QColor("#A9C2D0"), 1, Qt.DashLine))
+            painter.drawLine(int(cx), int(tip_y + 4), int(cx), int(surface_y))
 
-        # Nozzle tip and spray centerline are references only; mechanical
-        # nozzle dimensions do not affect the trajectory envelope.
-        painter.setPen(QPen(QColor("#DCEAF1"), 2))
-        painter.drawLine(int(cx), int(tip_y - 18), int(cx), int(tip_y - 2))
-        painter.setBrush(QColor("#00E5FF"))
-        painter.drawEllipse(int(cx - 5), int(tip_y - 5), 10, 10)
-        painter.setPen(QPen(QColor("#A9C2D0"), 1, Qt.DashLine))
-        painter.drawLine(int(cx), int(tip_y + 4), int(cx), int(surface_y))
+            # Target-surface sample markers use the same effective spacing
+            # shown numerically below. This fixes the undefined sample_spacing.
+            painter.setPen(QPen(QColor("#DCEAF1"), 2))
+            painter.drawLine(12, int(surface_y), width - 12, int(surface_y))
+            painter.setPen(QPen(QColor("#00F5A0"), 1.5))
+            painter.setBrush(QColor("#00F5A0"))
+            sample_count = max(
+                2,
+                min(
+                    14,
+                    int(round(spray_width_mm / effective_sample_spacing)) + 1,
+                ),
+            )
+            for index in range(sample_count):
+                ratio = index / max(1, sample_count - 1)
+                x = cx - visual_half_width + ratio * 2.0 * visual_half_width
+                painter.drawEllipse(int(x - 2), int(surface_y - 3), 4, 6)
 
-        # Surface reference and sample-spacing markers.
-        painter.setPen(QPen(QColor("#DCEAF1"), 2))
-        painter.drawLine(12, int(surface_y), width - 12, int(surface_y))
-        painter.setPen(QPen(QColor("#00F5A0"), 1.5))
-        painter.setBrush(QColor("#00F5A0"))
-        sample_count = max(
-            2, min(14, int(round(spray_width_mm / sample_spacing)) + 1)
-        )
-        for index in range(sample_count):
-            ratio = index / max(1, sample_count - 1)
-            x = cx - visual_half_width + ratio * 2.0 * visual_half_width
-            painter.drawEllipse(int(x - 2), int(surface_y - 3), 4, 6)
+            # Width and adjacent-track pitch dimension lines.
+            painter.setPen(QPen(QColor("#00E5FF"), 1.5))
+            painter.drawLine(
+                int(cx - visual_half_width), int(surface_y + 10),
+                int(cx + visual_half_width), int(surface_y + 10),
+            )
+            painter.drawLine(
+                int(cx - visual_half_width), int(surface_y + 5),
+                int(cx - visual_half_width), int(surface_y + 15),
+            )
+            painter.drawLine(
+                int(cx + visual_half_width), int(surface_y + 5),
+                int(cx + visual_half_width), int(surface_y + 15),
+            )
 
-        # Dimension arrows for spray width and adjacent-track spacing.
-        painter.setPen(QPen(QColor("#00E5FF"), 1.5))
-        painter.drawLine(
-            int(cx - visual_half_width), int(surface_y + 10),
-            int(cx + visual_half_width), int(surface_y + 10),
-        )
-        painter.drawLine(
-            int(cx - visual_half_width), int(surface_y + 5),
-            int(cx - visual_half_width), int(surface_y + 15),
-        )
-        painter.drawLine(
-            int(cx + visual_half_width), int(surface_y + 5),
-            int(cx + visual_half_width), int(surface_y + 15),
-        )
+            pitch_start = cx + visual_half_width
+            pitch_end = pitch_start + pitch_px
+            painter.setPen(QPen(QColor("#FFB000"), 1.5))
+            painter.drawLine(
+                int(pitch_start), int(surface_y + 25),
+                int(pitch_end), int(surface_y + 25),
+            )
+            painter.drawLine(
+                int(pitch_start), int(surface_y + 20),
+                int(pitch_start), int(surface_y + 30),
+            )
+            painter.drawLine(
+                int(pitch_end), int(surface_y + 20),
+                int(pitch_end), int(surface_y + 30),
+            )
 
-        pitch_start = cx + visual_half_width
-        pitch_end = pitch_start + pitch_px
-        painter.setPen(QPen(QColor("#FFB000"), 1.5))
-        painter.drawLine(
-            int(pitch_start), int(surface_y + 25),
-            int(pitch_end), int(surface_y + 25),
-        )
-        painter.drawLine(
-            int(pitch_start), int(surface_y + 20),
-            int(pitch_start), int(surface_y + 30),
-        )
-        painter.drawLine(
-            int(pitch_end), int(surface_y + 20),
-            int(pitch_end), int(surface_y + 30),
-        )
-
-        painter.setPen(QColor("#EAF7FC"))
-        painter.drawText(14, 24, "TRAJECTORY SPRAY ENVELOPE")
-        painter.setPen(QColor("#00E5FF"))
-        painter.drawText(14, 45, f"WORKING DISTANCE: {standoff:.1f} mm")
-        painter.setPen(QColor("#EAF7FC"))
-        painter.drawText(
-            14, int(surface_y + 48),
-            f"SPRAY WIDTH: {spray_width_mm:.1f} mm  |  ANGLE: {angle:.1f} deg"
-        )
-        painter.setPen(QColor("#FFB000"))
-        painter.drawText(
-            14, int(surface_y + 68),
-            f"TRACK PITCH: {track_pitch_mm:.1f} mm  |  OVERLAP: {overlap:.1f}%"
-        )
-        painter.setPen(QColor("#00F5A0"))
-        painter.drawText(
-            14, int(surface_y + 88),
-            f"EFFECTIVE POINT SPACING: {effective_sample_spacing:.1f} mm"
-        )
-        painter.end()
+            painter.setPen(QColor("#EAF7FC"))
+            painter.drawText(14, 24, "TRAJECTORY SPRAY ENVELOPE")
+            painter.setPen(QColor("#00E5FF"))
+            painter.drawText(14, 45, f"WORKING DISTANCE: {standoff:.1f} mm")
+            painter.setPen(QColor("#EAF7FC"))
+            painter.drawText(
+                14, int(surface_y + 48),
+                f"SPRAY WIDTH: {spray_width_mm:.1f} mm  |  ANGLE: {angle:.1f} deg"
+            )
+            painter.setPen(QColor("#FFB000"))
+            painter.drawText(
+                14, int(surface_y + 68),
+                f"TRACK PITCH: {track_pitch_mm:.1f} mm  |  OVERLAP: {overlap:.1f}%"
+            )
+            painter.setPen(QColor("#00F5A0"))
+            painter.drawText(
+                14, int(surface_y + 88),
+                f"EFFECTIVE POINT SPACING: {effective_sample_spacing:.1f} mm"
+            )
+        finally:
+            # Qt requires every active painter to be ended even if drawing
+            # or profile parsing raises an exception.
+            if painter.isActive():
+                painter.end()
 
     @staticmethod
     def _point(x: float, y: float):
