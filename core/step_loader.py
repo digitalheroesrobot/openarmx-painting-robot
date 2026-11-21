@@ -276,6 +276,8 @@ def get_step_brep_context(mesh):
         "faces",
         "face_records",
         "triangle_face_ids",
+        "triangle_uvs",
+        "triangle_uv_valid",
         "face_adjacency",
         "schema_identifier",
     }
@@ -302,7 +304,62 @@ def get_step_brep_context(mesh):
             "STEP B-Rep triangle mapping contains an invalid one-based Face ID."
         )
 
+    triangle_uvs = np.asarray(context["triangle_uvs"], dtype=np.float64)
+    triangle_uv_valid = np.asarray(context["triangle_uv_valid"], dtype=bool)
+    if triangle_uvs.shape != (len(mesh.faces), 3, 2):
+        raise ValueError("STEP triangle UV mapping does not match mesh triangles.")
+    if triangle_uv_valid.shape != (len(mesh.faces),):
+        raise ValueError("STEP triangle UV validity mapping does not match mesh triangles.")
+    if np.any(triangle_uv_valid & ~np.isfinite(triangle_uvs).all(axis=(1, 2))):
+        raise ValueError("Valid STEP triangle UV coordinates must be finite.")
+
     return context
+
+
+def get_step_triangle_surface_coordinates(
+    mesh, triangle_index: int, barycentric: np.ndarray | list
+) -> dict:
+    """Map a point inside a STEP-derived mesh triangle back to its source Face UV.
+
+    The triangle's UV corners originate from Open CASCADE triangulation.
+    Barycentric interpolation is local to that triangle; it is not a global
+    parameterization and must not cross triangle or face boundaries.
+    """
+    context = get_step_brep_context(mesh)
+    if context is None:
+        raise ValueError("Mesh does not contain a live STEP B-Rep context.")
+    triangle_index = int(triangle_index)
+    if triangle_index < 0 or triangle_index >= len(mesh.faces):
+        raise IndexError("Triangle index is outside the mesh.")
+    if not bool(context["triangle_uv_valid"][triangle_index]):
+        raise ValueError(
+            f"Triangle {triangle_index} has no valid STEP UV-node mapping."
+        )
+
+    weights = np.asarray(barycentric, dtype=np.float64)
+    if weights.shape != (3,) or not np.isfinite(weights).all():
+        raise ValueError("Barycentric coordinates must be three finite values.")
+    if np.any(weights < -1e-8) or np.any(weights > 1.0 + 1e-8):
+        raise ValueError("Barycentric coordinates lie outside the source triangle.")
+    total = float(weights.sum())
+    if not math.isfinite(total) or abs(total - 1.0) > 1e-6:
+        raise ValueError("Barycentric coordinates must sum to one.")
+    weights = weights / total
+
+    uv_corners = np.asarray(
+        context["triangle_uvs"][triangle_index], dtype=np.float64
+    )
+    uv = weights @ uv_corners
+    if not np.isfinite(uv).all():
+        raise ValueError("Barycentric UV interpolation produced non-finite values.")
+    face_id = int(context["triangle_face_ids"][triangle_index])
+    return {
+        "triangle_index": triangle_index,
+        "face_id": face_id,
+        "uv": uv,
+        "barycentric": weights,
+        "mapping_method": "SOURCE_TRIANGULATION_UVNODE_BARYCENTRIC",
+    }
 
 
 def _surface_normal_from_derivatives(du, dv, reversed_face=False):
@@ -618,6 +675,8 @@ def load_step(
     mesh_vertices = []
     mesh_faces = []
     triangle_face_ids = []
+    triangle_uvs = []
+    triangle_uv_valid = []
     vertex_lookup = {}
     merge_tolerance = 1e-8
     BRep_Tool = ocp["BRep_Tool"]
@@ -641,18 +700,44 @@ def load_step(
             continue
 
         reversed_face = face.Orientation() == ocp["TopAbs_REVERSED"]
+        has_uv_nodes = (
+            bool(triangulation.HasUVNodes())
+            if hasattr(triangulation, "HasUVNodes") else False
+        )
         for triangle_index in range(1, triangulation.NbTriangles() + 1):
             n1, n2, n3 = triangulation.Triangle(triangle_index).Get()
+            node_ids = [n1, n2, n3]
             tri = [
-                add_vertex(triangulation.Node(n1), location),
-                add_vertex(triangulation.Node(n2), location),
-                add_vertex(triangulation.Node(n3), location),
+                add_vertex(triangulation.Node(node_id), location)
+                for node_id in node_ids
             ]
+            uv_corners = None
+            if has_uv_nodes:
+                try:
+                    uv_corners = [
+                        [
+                            float(triangulation.UVNode(node_id).X()),
+                            float(triangulation.UVNode(node_id).Y()),
+                        ]
+                        for node_id in node_ids
+                    ]
+                    if not np.isfinite(np.asarray(uv_corners)).all():
+                        uv_corners = None
+                except (AttributeError, TypeError, ValueError):
+                    uv_corners = None
+
             if reversed_face:
                 tri[1], tri[2] = tri[2], tri[1]
+                if uv_corners is not None:
+                    uv_corners[1], uv_corners[2] = uv_corners[2], uv_corners[1]
             if len(set(tri)) == 3:
                 mesh_faces.append(tri)
                 triangle_face_ids.append(face_id)
+                triangle_uvs.append(
+                    uv_corners if uv_corners is not None
+                    else [[np.nan, np.nan]] * 3
+                )
+                triangle_uv_valid.append(uv_corners is not None)
 
     if not mesh_vertices or not mesh_faces:
         raise ValueError("STEP B-Rep was read, but no display triangles were generated.")
@@ -733,6 +818,8 @@ def load_step(
         "face_records": tuple(face_records),
         "face_adjacency": brep_adjacency["face_adjacency"],
         "triangle_face_ids": np.asarray(triangle_face_ids, dtype=np.int64),
+        "triangle_uvs": np.asarray(triangle_uvs, dtype=np.float64),
+        "triangle_uv_valid": np.asarray(triangle_uv_valid, dtype=bool),
         "schema_identifier": schema_identifier,
         "linear_unit": "mm",
     }
