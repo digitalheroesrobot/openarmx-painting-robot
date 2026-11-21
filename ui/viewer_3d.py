@@ -2462,41 +2462,44 @@ class ProductViewer(QWidget):
 
         records = list(self._interactive_spray_records)
         route_length = 0.0
+        route_optimization = None
         if len(records) >= 2:
-            # Reorder complete strokes (never individual surface samples) so
-            # the spray-off transitions between strokes are as short as the
-            # orientation-aware route heuristic can find.
-            from stages.spray_stroke_route_optimizer import optimize_stroke_order
-            candidate = {
-                "nozzle_points": np.asarray(
-                    [item["nozzle_point_product"] for item in records], dtype=float
-                ),
-                "spray_directions": np.asarray(
-                    [item["spray_direction_product"] for item in records], dtype=float
-                ),
-                "segment_ids": np.asarray(
-                    [item["stroke_id"] for item in records], dtype=np.int64
-                ),
-            }
-            optimized = optimize_stroke_order(
-                candidate,
-                orientation_weight_coordinate_units_per_rad=0.0,
-                max_2opt_passes=1,
+            source_ids = np.asarray(
+                [item["stroke_id"] for item in records], dtype=np.int64
             )
-            ordered_indices = []
-            ordered_segments = optimized["segment_ids"]
-            source_ids = np.asarray(candidate["segment_ids"], dtype=np.int64)
-            for segment_id in np.unique(ordered_segments):
-                source_id = optimized["route_optimization"]["strokes"][int(segment_id)]["source_segment_id"]
-                indices = np.flatnonzero(source_ids == source_id)
-                if optimized["route_optimization"]["strokes"][int(segment_id)]["reversed"]:
-                    indices = indices[::-1]
-                ordered_indices.extend(indices.tolist())
-            records = [records[index] for index in ordered_indices]
+            stroke_count = int(len(np.unique(source_ids)))
+            if stroke_count > 1:
+                # Reorder complete strokes, never individual surface samples.
+                # A single continuous stroke needs no route optimization.
+                from stages.spray_stroke_route_optimizer import optimize_stroke_order
+                candidate = {
+                    "nozzle_points": np.asarray(
+                        [item["nozzle_point_product"] for item in records], dtype=float
+                    ),
+                    "spray_directions": np.asarray(
+                        [item["spray_direction_product"] for item in records], dtype=float
+                    ),
+                    "segment_ids": source_ids,
+                }
+                optimized = optimize_stroke_order(
+                    candidate,
+                    orientation_weight_coordinate_units_per_rad=0.0,
+                    max_2opt_passes=1 if stroke_count <= 30 else 0,
+                )
+                route_optimization = optimized["route_optimization"]
+                ordered_indices = []
+                for route_stroke in route_optimization["strokes"]:
+                    indices = np.flatnonzero(
+                        source_ids == route_stroke["source_segment_id"]
+                    )
+                    if route_stroke["reversed"]:
+                        indices = indices[::-1]
+                    ordered_indices.extend(indices.tolist())
+                records = [records[index] for index in ordered_indices]
+
             points = np.asarray([item["nozzle_point_world"] for item in records])
-            line_cells = [len(points), *range(len(points))]
             path = pv.PolyData(points)
-            path.lines = np.asarray(line_cells, dtype=np.int64)
+            path.lines = np.asarray([len(points), *range(len(points))], dtype=np.int64)
             self._interactive_spray_path_actor = self.plotter.add_mesh(
                 path, color="#00E5FF", line_width=3.0,
                 lighting=False, pickable=False,
@@ -2505,7 +2508,6 @@ class ProductViewer(QWidget):
                 np.asarray([item["nozzle_point_product"] for item in records]), axis=0
             ), axis=1).sum())
 
-        inverse = np.linalg.inv(self._interactive_spray_transform)
         result = {
             "schema": "INTERACTIVE_SURFACE_FOLLOWING_SPRAY_PATH_V1",
             "coordinate_frame": "PRODUCT_CAD_AND_WORLD",
@@ -2542,10 +2544,7 @@ class ProductViewer(QWidget):
                 [item["stroke_id"] for item in records], dtype=np.int64
             ),
             "route_length_product_units": route_length,
-            "route_optimization": (
-                optimized.get("route_optimization")
-                if len(records) >= 2 else None
-            ),
+            "route_optimization": route_optimization,
             "product_transform_4x4": self._interactive_spray_transform.copy(),
         }
         self.plotter.add_text(
