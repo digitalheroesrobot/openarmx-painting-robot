@@ -31,6 +31,8 @@ on:
       - "stages/human_like_spray_planner.py"
       - "stages/spray_footprint_optimizer.py"
       - "scripts/test_spray_footprint_optimizer.py"
+      - "stages/spray_deposition_model.py"
+      - "scripts/test_spray_deposition_model.py"
       - ".github/workflows/spray-coverage-optimizer.yml"
 
 jobs:
