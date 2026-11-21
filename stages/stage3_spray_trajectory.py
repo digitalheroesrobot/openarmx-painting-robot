@@ -805,17 +805,26 @@ def _triangle_sample_points(
         + (j + 1.0 / (3.0 * n))[:, None] * c
     )
 
-    # Second sub-triangle centroid exists for cells strictly below the edge.
-    second_mask = (i_grid + j_grid) < (n - 1)
+    # Preserve the original per-cell ordering (first centroid, then optional
+    # second centroid) while computing all coordinates in vectorized batches.
+    second_mask = (i_grid[valid] + j_grid[valid]) < (n - 1)
     if np.any(second_mask):
-        i2 = i_grid[second_mask].astype(np.float64) / n
-        j2 = j_grid[second_mask].astype(np.float64) / n
+        i2 = i[second_mask]
+        j2 = j[second_mask]
         second = (
             (1.0 - i2 - j2 - 4.0 / (3.0 * n))[:, None] * a
             + (i2 + 2.0 / (3.0 * n))[:, None] * b
             + (j2 + 2.0 / (3.0 * n))[:, None] * c
         )
-        return np.concatenate((first, second), axis=0)
+        second_before = np.concatenate((
+            np.asarray([0], dtype=np.int64),
+            np.cumsum(second_mask[:-1], dtype=np.int64),
+        ))
+        first_positions = np.arange(len(i), dtype=np.int64) + second_before
+        samples = np.empty((n * n, 3), dtype=np.float64)
+        samples[first_positions] = first
+        samples[first_positions[second_mask] + 1] = second
+        return samples
     return first
 
 
