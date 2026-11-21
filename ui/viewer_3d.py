@@ -293,19 +293,44 @@ class ProductViewer(QWidget):
             self._render_product(reset_camera=False)
 
     def _filtered_hole_candidates(self):
+        """
+        Keep hook-compatible bore candidates whose centers lie inside
+        the product's original source-coordinate bounding box.
+        The bounding box is derived from the unposed source mesh, so
+        display RPY rotations do not change this geometric test.
+        """
+        if self.current_mesh is None or not self.hole_candidates:
+            return []
+
+        bounds = np.asarray(self.current_mesh.bounds, dtype=np.float64)
+        if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
+            return []
+
+        minimum = bounds[0]
+        maximum = bounds[1]
+        extent = maximum - minimum
+        tolerance = max(float(np.linalg.norm(extent)) * 1e-8, 1e-9)
+
         minimum_diameter = self.hook_diameter_mm + self.hole_clearance_mm
         result = []
         for item in self.hole_candidates:
             try:
                 diameter = float(item["diameter_coordinate_units"])
                 length = float(item["hole_length_coordinate_units"])
-                center = np.asarray(item["opening_center_coordinate_units"], dtype=float)
+                center = np.asarray(item["opening_center_coordinate_units"], dtype=np.float64)
             except (KeyError, TypeError, ValueError):
                 continue
+
             if (not np.isfinite(diameter) or diameter < minimum_diameter
                     or not np.isfinite(length) or length <= 0.0
                     or center.shape != (3,) or not np.all(np.isfinite(center))):
                 continue
+
+            # Reject candidate centers outside the product dimensions.
+            # Coordinates are checked before the viewer's RPY transform.
+            if np.any(center < minimum - tolerance) or np.any(center > maximum + tolerance):
+                continue
+
             result.append(item)
         return result
 
