@@ -580,17 +580,11 @@ class ProductViewer(QWidget):
         display_row.addWidget(QLabel("3D DISPLAY:"))
         self.trajectory_checkboxes = {}
 
-        # Keep the three primary simulation layers first:
-        # painted planar surface, painted curved surface, and trajectory path.
-        # Secondary diagnostic overlays follow after these.
+        # Show only the three primary spray-trajectory layers.
         checkbox_items = [
             ("planar", "Planar surface"),
             ("curved", "Curved surface"),
             ("paths", "Trajectory path"),
-            ("nozzle", "Nozzle positions"),
-            ("arrows", "Direction arrows"),
-            ("samples", "Surface samples"),
-            ("frames", "Nozzle frames"),
         ]
 
         for key, label_text in checkbox_items:
