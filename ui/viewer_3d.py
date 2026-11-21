@@ -3459,21 +3459,22 @@ class ProductViewer(QWidget):
                 )
                 planar_mask = surface_types == "planar"
                 curved_mask = surface_types == "curved"
+                classified_mask = planar_mask | curved_mask
                 planar_selected = bool(self.trajectory_visibility["planar"])
                 curved_selected = bool(self.trajectory_visibility["curved"])
 
-                # The selected surface class stays fully opaque. The other
-                # classified class is faded, not recolored. Unknown faces
-                # remain visible at full opacity so the product is complete.
+                # Color only the selected surface class. Unselected
+                # classified faces remain in the mesh but become translucent.
+                # When both classes are selected, show the original neutral CAD
+                # appearance without any classification colors.
                 if planar_selected and curved_selected:
-                    face_opacity[planar_mask] = 1.0
-                    face_opacity[curved_mask] = 0.55
+                    pass
                 elif planar_selected:
-                    face_opacity[planar_mask] = 1.0
-                    face_opacity[curved_mask] = 0.25
+                    base_rgb[planar_mask] = [75, 155, 220]  # soft blue
+                    face_opacity[classified_mask & ~planar_mask] = 0.20
                 elif curved_selected:
-                    face_opacity[curved_mask] = 1.0
-                    face_opacity[planar_mask] = 0.25
+                    base_rgb[curved_mask] = [230, 150, 75]  # soft orange
+                    face_opacity[classified_mask & ~curved_mask] = 0.20
 
             # VTK/PyVista handles per-cell alpha reliably when it is part
             # of the direct RGBA color array. Do not also pass an opacity
