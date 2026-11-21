@@ -121,8 +121,10 @@ def select_track_spacing_by_relative_deposition(
 ) -> dict[str, Any]:
     """Choose the shortest raster candidate meeting relative area coverage.
 
-    This compares lane spacings for the raster generator's current local sweep
-    direction. It is not yet a global orientation or route-order optimizer.
+    Track spacing and planar-patch lane rotation are evaluated jointly. The
+    orientation search currently rotates the PCA lane axis for planar patches;
+    curved-surface fallback paths retain their native direction. This is not
+    a global multi-patch orientation or route-order optimizer.
     """
     spacings = sorted(set(float(x) for x in track_spacing_candidates))
     if not spacings or any(not np.isfinite(x) or x <= 0 for x in spacings):
