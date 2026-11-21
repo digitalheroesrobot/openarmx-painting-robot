@@ -167,6 +167,7 @@ class ProductViewer(QWidget):
         self._trajectory_surface_polydata = None
         self._trajectory_surface_face_mask = None
         self._trajectory_surface_base_rgb = None
+        self._trajectory_surface_base_alpha = None
         self._playback_timer = QTimer(self)
         self._playback_timer.setInterval(100)
         self._playback_timer.timeout.connect(self._advance_trajectory_playback)
@@ -2362,19 +2363,29 @@ class ProductViewer(QWidget):
         }
         return self._playback_cache
 
-    def _restore_trajectory_surface_base_colors(self):
+    def _set_trajectory_surface_rgb(self, rgb):
+        """Update paint-preview RGB while preserving each face's alpha."""
         polydata = self._trajectory_surface_polydata
+        alpha = self._trajectory_surface_base_alpha
+        if polydata is None or alpha is None:
+            return
+        rgb = np.asarray(rgb, dtype=np.uint8)
+        if rgb.shape != (len(alpha), 3):
+            return
+        rgba = np.column_stack((rgb, alpha)).astype(np.uint8, copy=False)
+        polydata.cell_data["Paint Preview RGBA"] = rgba
+        array = polydata.GetCellData().GetArray("Paint Preview RGBA")
+        if array is not None:
+            array.Modified()
+        polydata.Modified()
+
+    def _restore_trajectory_surface_base_colors(self):
         base_rgb = self._trajectory_surface_base_rgb
-        if polydata is None or base_rgb is None:
+        if base_rgb is None:
             return
         try:
-            polydata.cell_data["Paint Preview RGB"] = base_rgb.copy()
-            array = polydata.GetCellData().GetArray("Paint Preview RGB")
-            if array is not None:
-                array.Modified()
-            polydata.Modified()
+            self._set_trajectory_surface_rgb(base_rgb)
             if self._pose_actor is not None:
-                self._pose_actor.GetMapper().SetInputData(polydata)
                 self._pose_actor.GetMapper().Update()
         except Exception:
             pass
@@ -2521,12 +2532,7 @@ class ProductViewer(QWidget):
                 + cache["paint_rgb"][None, :] * face_fraction[:, None]
             )
             colors = np.clip(np.rint(painted), 0, 255).astype(np.uint8)
-            polydata = self._trajectory_surface_polydata
-            polydata.cell_data["Paint Preview RGB"] = colors
-            array = polydata.GetCellData().GetArray("Paint Preview RGB")
-            if array is not None:
-                array.Modified()
-            polydata.Modified()
+            self._set_trajectory_surface_rgb(colors)
             # The mapper already references this polydata. Marking the changed
             # VTK array is sufficient; avoid rebuilding/updating the mapper.
             cache["coverage_last_render_index"] = index
@@ -3469,18 +3475,27 @@ class ProductViewer(QWidget):
                     face_opacity[curved_mask] = 1.0
                     face_opacity[planar_mask] = 0.25
 
+            # VTK/PyVista handles per-cell alpha reliably when it is part
+            # of the direct RGBA color array. Do not also pass an opacity
+            # scalar to add_mesh: that multiplies the RGBA alpha a second
+            # time and causes a shape-broadcasting error in some versions.
+            face_alpha = np.clip(
+                np.rint(face_opacity * 255.0), 0, 255
+            ).astype(np.uint8)
+
             self._trajectory_surface_face_mask = np.ones(face_count, dtype=bool)
             self._trajectory_surface_base_rgb = base_rgb.copy()
+            self._trajectory_surface_base_alpha = face_alpha.copy()
             self._trajectory_surface_polydata = polydata
-            polydata.cell_data["Paint Preview RGB"] = base_rgb.copy()
-            polydata.cell_data["Surface Opacity"] = face_opacity
+            polydata.cell_data["Paint Preview RGBA"] = np.column_stack(
+                (base_rgb, face_alpha)
+            ).astype(np.uint8)
 
             self._pose_actor = self.plotter.add_mesh(
                 polydata,
-                scalars="Paint Preview RGB",
+                scalars="Paint Preview RGBA",
                 rgb=True,
                 preference="cell",
-                opacity="Surface Opacity",
                 show_edges=True,
                 edge_color="#35434B",
                 line_width=0.7,
