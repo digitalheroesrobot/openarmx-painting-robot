@@ -55,6 +55,52 @@ class PatchwiseSprayPlannerTests(unittest.TestCase):
             100., atol=1e-7,
         )
 
+
+    def test_lane_orientation_changes_rectangular_patch_geometry(self):
+        rectangle = trimesh.Trimesh(
+            vertices=np.array([
+                [0., 0., 0.], [180., 0., 0.],
+                [180., 60., 0.], [0., 60., 0.],
+            ]),
+            faces=np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int64),
+            process=False,
+        )
+        normals = np.asarray(rectangle.face_normals, dtype=np.float64)
+        common = (
+            rectangle, np.array([0, 1]), np.array([3, 3]), normals,
+        )
+        along_long_axis = generate_patchwise_raster_candidates(
+            *common, standoff=80., sample_spacing=10., track_spacing=25.,
+            lane_orientation_angle_deg=0.,
+        )
+        along_short_axis = generate_patchwise_raster_candidates(
+            *common, standoff=80., sample_spacing=10., track_spacing=25.,
+            lane_orientation_angle_deg=90.,
+        )
+
+        self.assertEqual(along_long_axis["rasterized_component_count"], 1)
+        self.assertEqual(along_short_axis["rasterized_component_count"], 1)
+        self.assertEqual(along_long_axis["components"][0]["lane_count"], 2)
+        self.assertEqual(along_short_axis["components"][0]["lane_count"], 7)
+        self.assertFalse(np.allclose(
+            along_long_axis["nozzle_points"],
+            along_short_axis["nozzle_points"],
+        ))
+        self.assertAlmostEqual(
+            float(np.mean(np.linalg.norm(
+                along_long_axis["nozzle_points"] -
+                along_long_axis["surface_points"], axis=1
+            ))),
+            80., places=7,
+        )
+        self.assertAlmostEqual(
+            float(np.mean(np.linalg.norm(
+                along_short_axis["nozzle_points"] -
+                along_short_axis["surface_points"], axis=1
+            ))),
+            80., places=7,
+        )
+
     def test_invalid_spacing_is_rejected(self):
         with self.assertRaises(ValueError):
             generate_patchwise_raster_candidates(
