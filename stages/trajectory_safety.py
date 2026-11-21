@@ -284,14 +284,12 @@ def evaluate_spray_gun_clearance(
 
     if len(collision_samples):
         status = "UNSAFE"
-    elif (
-        inside_test != "PASS"
-        or config.nozzle_outer_diameter_mm is None
-        or config.dimensions_are_estimate
-    ):
-        status = "UNCERTAIN"
     else:
-        status = "CLEAR"
+        # The current envelope explicitly checks the gun-body cylinder only.
+        # A nozzle radial model and calibrated tool/wrist geometry are not yet
+        # part of this implementation, so a green/full-clearance claim would
+        # be unjustified even when body dimensions and mesh are verified.
+        status = "UNCERTAIN"
 
     sample_status = np.full(len(tips), "GREEN", dtype=object)
     if status == "UNCERTAIN":
@@ -325,7 +323,7 @@ def evaluate_spray_gun_clearance(
         "dimensions_are_estimate": bool(config.dimensions_are_estimate),
         "limitations": [
             "Gun body is represented by a sampled cylindrical/capsule envelope.",
-            "Nozzle shaft radial clearance is unknown unless nozzle_outer_diameter_mm is supplied.",
+            "Nozzle shaft radial clearance is not yet geometrically evaluated; nozzle_outer_diameter_mm is metadata only.",
             "Robot links, wrist, fixtures, hoses, and external obstacles are not checked.",
             "This geometric approximation is not a certified robot safety assessment.",
         ],
