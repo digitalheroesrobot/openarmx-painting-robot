@@ -104,6 +104,32 @@ class CoatingProcessTests(unittest.TestCase):
             again = load_coating_process(path)
             self.assertEqual(again["fluid_flow_ml_min"], 275.0)
 
+    def test_untouched_legacy_factory_motion_defaults_are_upgraded(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "coating_process.json"
+            old_factory = {
+                "name": "default coating process",
+                "target_dry_film_thickness_um": 60.0,
+                "fluid_flow_ml_min": 0.0,
+                "transfer_efficiency_percent": 0.0,
+                "volume_solids_percent": 0.0,
+                "base_travel_speed_mm_s": 150.0,
+                "min_travel_speed_mm_s": 40.0,
+                "max_travel_acceleration_mm_s2": 500.0,
+                "number_of_coats": 1,
+                "spray_on_delay_ms": 0.0,
+                "spray_off_delay_ms": 0.0,
+            }
+            path.write_text(
+                json.dumps({"schema_version": 1, "process": old_factory}),
+                encoding="utf-8",
+            )
+            loaded = load_coating_process(path)
+            self.assertEqual(loaded["base_travel_speed_mm_s"], 500.0)
+            self.assertEqual(loaded["min_travel_speed_mm_s"], 300.0)
+            self.assertEqual(loaded["max_travel_acceleration_mm_s2"], 1000.0)
+
     def test_legacy_sprayer_settings_are_migrated_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "coating_process.json"
