@@ -23,6 +23,7 @@ from core.spray_coverage_optimizer import (
     append_correction_strokes_to_trajectory,
     build_coverage_correction_plan,
 )
+from stages.trajectory_safety import aggregate_sample_safety_by_face
 
 from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
 from vtkmodules.util.numpy_support import vtk_to_numpy
@@ -190,6 +191,7 @@ class ProductViewer(QWidget):
             "paths": False,
             "samples": False,
             "frames": False,
+            "safety": True,
         }
         self.trajectory_product_transform = np.eye(4, dtype=float)
         self._last_product_transform = np.eye(4, dtype=float)
@@ -211,6 +213,8 @@ class ProductViewer(QWidget):
         self._trajectory_surface_face_mask = None
         self._trajectory_surface_base_rgb = None
         self._trajectory_surface_base_alpha = None
+        self.trajectory_safety = {}
+        self._trajectory_safety_actor = None
         self._playback_timer = QTimer(self)
         self._playback_timer.setInterval(100)
         self._playback_timer.timeout.connect(self._advance_trajectory_playback)
@@ -646,6 +650,7 @@ class ProductViewer(QWidget):
             ("planar", "Planar surface"),
             ("curved", "Curved surface"),
             ("paths", "Trajectory path"),
+            ("safety", "Safety overlay"),
         ]
 
         for key, label_text in checkbox_items:
@@ -742,6 +747,20 @@ class ProductViewer(QWidget):
 
         display_row.addStretch()
         root.addLayout(display_row)
+
+        self.trajectory_safety_label = QLabel(
+            "SAFETY CHECK | No Stage 3 safety data"
+        )
+        self.trajectory_safety_label.setWordWrap(True)
+        self.trajectory_safety_label.setStyleSheet(
+            "color: #E6C36A; font-size: 9px; font-weight: 700; padding-left: 4px;"
+        )
+        self.trajectory_safety_label.setToolTip(
+            "RED = configured gun-body clearance violation. YELLOW = incomplete "
+            "geometry checks. GREEN = all configured tool geometry checks complete. "
+            "This is not a robot-cell safety certification."
+        )
+        root.addWidget(self.trajectory_safety_label)
 
         # Spray playback controls are hosted in the right sidebar.
         # Keep only 3D layer visibility controls above the viewport.
@@ -1039,6 +1058,29 @@ class ProductViewer(QWidget):
         )
         return panel
 
+    def _update_trajectory_safety_label(self):
+        safety = self.trajectory_safety if isinstance(self.trajectory_safety, dict) else {}
+        statuses = np.asarray(safety.get("sample_status", []), dtype=str)
+        if statuses.ndim != 1 or len(statuses) == 0:
+            self.trajectory_safety_label.setText(
+                "SAFETY CHECK | NOT AVAILABLE — regenerate Stage 3"
+            )
+            return
+        normalized = np.char.upper(np.char.strip(statuses))
+        red = int(np.count_nonzero(normalized == "RED"))
+        yellow = int(np.count_nonzero(normalized == "YELLOW"))
+        green = int(np.count_nonzero(normalized == "GREEN"))
+        status = str(safety.get("status", "UNKNOWN")).upper()
+        self.trajectory_safety_label.setText(
+            f"SAFETY CHECK | {status} | RED {red:,} · YELLOW {yellow:,} · GREEN {green:,}"
+        )
+        limitations = safety.get("limitations", [])
+        self.trajectory_safety_label.setToolTip(
+            "RED = configured gun-body clearance violation. YELLOW = incomplete "
+            "geometry checks. GREEN = all configured tool geometry checks complete.\n"
+            + "\n".join(str(item) for item in limitations)
+        )
+
     def _update_trajectory_validation_label(self):
         validation = self.trajectory_validation
         if not hasattr(self, "trajectory_validation_label"):
@@ -1087,6 +1129,10 @@ class ProductViewer(QWidget):
         elif key == "paths":
             if self._playback_path_actor is not None:
                 self._playback_path_actor.SetVisibility(bool(checked))
+            self.plotter.render()
+        elif key == "safety":
+            if self._trajectory_safety_actor is not None:
+                self._trajectory_safety_actor.SetVisibility(bool(checked))
             self.plotter.render()
 
     def _set_trajectory_controls_visible(self, visible):
@@ -2169,6 +2215,21 @@ class ProductViewer(QWidget):
         ):
             raise ValueError("Trajectory product transform must contain a rigid rotation.")
         data["parameters"] = parameters
+        safety_data = trajectory_data.get("trajectory_safety", {})
+        if not isinstance(safety_data, dict):
+            safety_data = {}
+        sample_status = safety_data.get("sample_status")
+        if sample_status is not None:
+            sample_status = np.asarray(sample_status, dtype=str)
+            if sample_status.shape != (count,):
+                raise ValueError(
+                    "trajectory_safety.sample_status must contain one status per trajectory sample."
+                )
+            safety_data = dict(safety_data)
+            safety_data["sample_status"] = sample_status.tolist()
+        self.trajectory_safety = dict(safety_data)
+        data["trajectory_safety"] = self.trajectory_safety
+        self._update_trajectory_safety_label()
         self._trajectory_timing_stale = False
         travel_plan = trajectory_data.get("inter_segment_travel_plan", {})
         data["inter_segment_travel_plan"] = (
@@ -2385,6 +2446,61 @@ class ProductViewer(QWidget):
     # STAGE 3 TRAJECTORY RENDERING
     # =========================================================
 
+    def _add_trajectory_safety_overlay(self):
+        """Render sample safety states on their original PRODUCT_CAD faces."""
+        self._trajectory_safety_actor = None
+        data = self.trajectory_data
+        safety = self.trajectory_safety
+        if not isinstance(data, dict) or not isinstance(safety, dict):
+            return
+        sample_status = safety.get("sample_status")
+        if sample_status is None:
+            return
+
+        face_status = aggregate_sample_safety_by_face(
+            data["face_indices"], sample_status, len(self.current_mesh.faces)
+        )
+        display_face_ids = np.flatnonzero(face_status > 0)
+        if len(display_face_ids) == 0:
+            return
+
+        # Offset the diagnostic membrane slightly along source-face normals to
+        # avoid z-fighting. CAD-to-World transform is display-only.
+        triangles = np.asarray(self.current_mesh.triangles, dtype=float)[display_face_ids].copy()
+        normals = np.asarray(self.current_mesh.face_normals, dtype=float)[display_face_ids]
+        diagonal = float(np.linalg.norm(np.ptp(self.current_mesh.vertices, axis=0)))
+        offset = max(diagonal * 1e-6, 1e-7)
+        triangles += normals[:, None, :] * offset
+        transform = self.trajectory_product_transform
+        world_triangles = triangles @ transform[:3, :3].T + transform[:3, 3]
+        points = world_triangles.reshape(-1, 3)
+        cell_count = len(display_face_ids)
+        faces = np.column_stack((
+            np.full(cell_count, 3, dtype=np.int64),
+            np.arange(cell_count, dtype=np.int64) * 3,
+            np.arange(cell_count, dtype=np.int64) * 3 + 1,
+            np.arange(cell_count, dtype=np.int64) * 3 + 2,
+        )).reshape(-1)
+        polydata = pv.PolyData(points, faces)
+        rgba = np.zeros((cell_count, 4), dtype=np.uint8)
+        local_status = face_status[display_face_ids]
+        rgba[local_status == 1] = [40, 220, 120, 150]
+        rgba[local_status == 2] = [255, 190, 35, 175]
+        rgba[local_status == 3] = [255, 55, 55, 210]
+        polydata.cell_data["Trajectory Safety RGBA"] = rgba
+        self._trajectory_safety_actor = self.plotter.add_mesh(
+            polydata,
+            scalars="Trajectory Safety RGBA",
+            rgba=True,
+            preference="cell",
+            lighting=False,
+            show_edges=False,
+            pickable=False,
+        )
+        self._trajectory_safety_actor.SetVisibility(
+            bool(self.trajectory_visibility.get("safety", True))
+        )
+
     def _add_trajectory_visualization(self):
         data = self.trajectory_data
 
@@ -2587,6 +2703,8 @@ class ProductViewer(QWidget):
                         lighting=False,
                         pickable=False,
                     )
+
+        self._add_trajectory_safety_overlay()
 
         # Keep the 3D viewport free of diagnostic text. Stage 3 metrics
         # belong in the Summary panel, not over the product geometry.
@@ -4503,6 +4621,7 @@ class ProductViewer(QWidget):
         except Exception:
             pass
         self.plotter.clear()
+        self._trajectory_safety_actor = None
         # Actors from the previous scene are no longer in the renderer.
         self._hole_overlay_actors = []
         self.plotter.set_background("#07111D", top="#142B40")
