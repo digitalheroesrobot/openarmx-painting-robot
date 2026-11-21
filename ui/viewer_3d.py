@@ -177,8 +177,10 @@ def _build_spray_footprint_overlay(
             footprints.append((pv.PolyData(), pv.PolyData()))
             continue
 
-        patch = surface.extract_cells(np.asarray(sorted(hit_cell_ids), dtype=np.int64))
-        patch = patch.extract_surface().clean()
+        hit_ids = np.asarray(sorted(hit_cell_ids), dtype=np.int64)
+        # Preserve the exact source triangle IDs for the persistent coating field.
+        patch = surface.extract_cells(hit_ids)
+        patch.cell_data["InteractiveOriginalCellId"] = hit_ids
         boundary = patch.extract_feature_edges(
             boundary_edges=True,
             feature_edges=False,
@@ -392,7 +394,14 @@ class ProductViewer(QWidget):
         self._interactive_spray_stroke_id = -1
         self._interactive_spray_surface = None
         self._interactive_spray_locator = None
+        # Persistent coating state: one per-face field, never one coincident
+        # transparent VTK actor per mouse sample.
         self._interactive_spray_painted_actors = []
+        self._interactive_spray_face_thickness_um = None
+        self._interactive_spray_face_area_mm2 = None
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_paint_target_um = 50.0
+        self._interactive_spray_paint_state_dirty = False
         self._interactive_spray_live_actors = []
         self._interactive_spray_path_actor = None
         self._interactive_saved_style_enabled = True
@@ -2165,13 +2174,32 @@ class ProductViewer(QWidget):
         self.patch_labels = None
         self.face_status_labels = None
         self.face_surface_types = None
+
+        self._interactive_spray_face_thickness_um = np.zeros(
+            len(self.current_mesh.faces), dtype=np.float64
+        )
+        self._interactive_spray_face_area_mm2 = None
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_paint_state_dirty = False
+        self._interactive_coating_process = dict(coating_process or {})
+        try:
+            self._interactive_spray_paint_target_um = max(
+                float(self._interactive_coating_process.get(
+                    "target_dry_film_thickness_um",
+                    DEFAULT_COATING_PROCESS["target_dry_film_thickness_um"],
+                )),
+                1e-9,
+            )
+        except (TypeError, ValueError):
+            self._interactive_spray_paint_target_um = DEFAULT_COATING_PROCESS[
+                "target_dry_film_thickness_um"
+            ]
         self._render_product(reset_camera=False)
 
         self._interactive_spray_standoff = float(standoff)
         self._interactive_spray_cone_angle_deg = float(cone_angle_deg)
         self._interactive_spray_sampling_spacing = float(sampling_spacing)
         self._interactive_sprayer_profile = dict(sprayer_profile or {})
-        self._interactive_coating_process = dict(coating_process or {})
         self._interactive_spray_transform = self._actor_matrix_array().copy()
         self._interactive_spray_surface = self._to_polydata(self.current_mesh).clean()
         self._interactive_spray_locator = vtkOBBTree()
@@ -2208,15 +2236,45 @@ class ProductViewer(QWidget):
         )
         self.plotter.render()
 
+    def _interactive_paint_rgb(self):
+        """Build stable per-face RGB values from accumulated coating thickness."""
+        if self.current_mesh is None:
+            return None
+        thickness = self._interactive_spray_face_thickness_um
+        if thickness is None or len(thickness) != len(self.current_mesh.faces):
+            return None
+        base = np.array([168.0, 168.0, 168.0], dtype=np.float64)
+        color = QColor(self._trajectory_paint_color_hex or "#D95B43")
+        paint = np.array([color.red(), color.green(), color.blue()], dtype=np.float64)
+        target = max(float(self._interactive_spray_paint_target_um), 1e-9)
+        mix = np.clip(thickness / target, 0.0, 1.0)[:, None]
+        return np.asarray(
+            np.rint(base[None, :] * (1.0 - mix) + paint[None, :] * mix),
+            dtype=np.uint8,
+        )
+
+    def _interactive_refresh_paint_visual(self, render=True):
+        """Refresh the single persistent product actor after coating changes."""
+        if self._pose_actor is None:
+            return
+        rgb = self._interactive_paint_rgb()
+        if rgb is None:
+            return
+        try:
+            polydata = self._pose_actor.GetMapper().GetInput()
+            if polydata is None or polydata.GetNumberOfCells() != len(rgb):
+                return
+            polydata.cell_data["Interactive Paint RGB"] = rgb
+            polydata.Modified()
+            self._pose_actor.GetMapper().Modified()
+            if render:
+                self.plotter.render()
+        except Exception:
+            self._interactive_spray_paint_state_dirty = True
+
     def _interactive_refresh_recorded_paint_color(self):
-        """Recolor already recorded footprint actors after a paint-color change."""
-        color = self._trajectory_paint_color_hex or "#D95B43"
-        for actor in self._interactive_spray_painted_actors:
-            try:
-                actor.GetProperty().SetColor(QColor(color).redF(), QColor(color).greenF(), QColor(color).blueF())
-            except Exception:
-                pass
-        self.plotter.render()
+        """Recolor accumulated paint without replacing any geometry."""
+        self._interactive_refresh_paint_visual(render=True)
 
     def _interactive_remove_live_actors(self):
         for actor in self._interactive_spray_live_actors:
@@ -2301,6 +2359,89 @@ class ProductViewer(QWidget):
             "spray_direction": inverse[:3, :3] @ pose["spray_direction_world"],
         }
 
+    def _interactive_apply_paint_deposition(self, patch, pose):
+        """Accumulate one spray interval into the persistent per-face coating field."""
+        if self.current_mesh is None:
+            return
+        ids = patch.cell_data.get("InteractiveOriginalCellId")
+        if ids is None:
+            return
+        ids = np.asarray(ids, dtype=np.int64).reshape(-1)
+        if ids.size == 0:
+            return
+
+        timestamp = float(pose["timestamp"])
+        if self._interactive_spray_last_deposition_timestamp is None:
+            self._interactive_spray_last_deposition_timestamp = timestamp
+            return
+        dt = timestamp - float(self._interactive_spray_last_deposition_timestamp)
+        self._interactive_spray_last_deposition_timestamp = timestamp
+        if not np.isfinite(dt) or dt <= 0.0:
+            return
+
+        process = dict(DEFAULT_COATING_PROCESS)
+        process.update(self._interactive_coating_process or {})
+        try:
+            flow = max(float(process["fluid_flow_ml_min"]), 0.0)
+            efficiency = np.clip(float(process["transfer_efficiency_percent"]) / 100.0, 0.0, 1.0)
+            solids = np.clip(float(process["volume_solids_percent"]) / 100.0, 0.0, 1.0)
+            coats = max(1, int(process["number_of_coats"]))
+        except (KeyError, TypeError, ValueError):
+            return
+        if not all(np.isfinite(v) for v in (flow, efficiency, solids)):
+            return
+        if flow <= 0.0 or efficiency <= 0.0 or solids <= 0.0:
+            return
+
+        if self._interactive_spray_face_area_mm2 is None:
+            areas = np.asarray(self.current_mesh.area_faces, dtype=np.float64)
+            source_factor = self._get_source_mm_factor()
+            if source_factor is not None:
+                areas = areas * float(source_factor) ** 2
+            self._interactive_spray_face_area_mm2 = areas
+
+        areas = np.asarray(self._interactive_spray_face_area_mm2, dtype=np.float64)
+        normals = np.asarray(self.current_mesh.face_normals, dtype=np.float64)
+        transform = self._actor_matrix_array()
+        normal_world = normals[ids] @ transform[:3, :3].T
+        normal_lengths = np.linalg.norm(normal_world, axis=1)
+        axis = np.asarray(pose["spray_direction_world"], dtype=np.float64)
+        axis_length = float(np.linalg.norm(axis))
+        if axis_length <= 1e-12:
+            return
+        normal_world /= np.maximum(normal_lengths[:, None], 1e-12)
+        incidence = np.clip(normal_world @ (-axis / axis_length), 0.0, 1.0)
+        valid = (
+            (ids >= 0) & (ids < len(areas))
+            & np.isfinite(areas[ids]) & (areas[ids] > 0.0)
+            & np.isfinite(incidence) & (incidence > 0.0)
+        )
+        if not np.any(valid):
+            return
+
+        ids = ids[valid]
+        incidence = incidence[valid]
+        hit_area = areas[ids]
+        weighted_area = hit_area / np.maximum(incidence, 1e-6)
+        total_area = float(np.sum(weighted_area))
+        if total_area <= 0.0:
+            return
+
+        input_dry_volume_mm3 = (
+            flow * dt / 60.0 * 1000.0 * efficiency * solids * coats
+        )
+        if input_dry_volume_mm3 <= 0.0:
+            return
+
+        volume = input_dry_volume_mm3 * weighted_area / total_area
+        increment_um = volume / hit_area * 1000.0
+        if self._interactive_spray_face_thickness_um is None:
+            self._interactive_spray_face_thickness_um = np.zeros(
+                len(self.current_mesh.faces), dtype=np.float64
+            )
+        self._interactive_spray_face_thickness_um[ids] += increment_um
+        self._interactive_spray_paint_state_dirty = True
+
     def _interactive_update_cursor(self, pose):
         self._interactive_remove_live_actors()
         self._interactive_spray_latest_pose = pose
@@ -2342,14 +2483,8 @@ class ProductViewer(QWidget):
                     pose, local_pose
                 )
             if recorded_new_pose:
-                painted = patch.copy(deep=True)
-                actor = self.plotter.add_mesh(
-                    painted,
-                    color=self._trajectory_paint_color_hex or "#D95B43",
-                    opacity=0.42,
-                    lighting=False, show_edges=False, pickable=False,
-                )
-                self._interactive_spray_painted_actors.append(actor)
+                self._interactive_apply_paint_deposition(patch, pose)
+                self._interactive_refresh_paint_visual(render=False)
 
         nozzle = pose["nozzle_point_world"]
         hit = pose["surface_point_world"]
@@ -5484,18 +5619,53 @@ class ProductViewer(QWidget):
             # actor. The World box, axes, and reference grid are static.
             # The product is the only movable 3D actor. World reference
             # geometry is rendered separately and remains fixed.
-            self._pose_actor = self.plotter.add_mesh(
-                self.current_mesh,
-                color="#A8A8A8",
-                opacity=1.0,
-                show_edges=True,
-                edge_color="#555555",
-                line_width=1.0,
-                smooth_shading=False,
-                specular=0.35,
-                specular_power=25,
-                pickable=True,
-            )
+            if (
+                self.display_mode == "spray_point_preview"
+                and self._interactive_spray_face_thickness_um is not None
+            ):
+                polydata = self._to_polydata(self.current_mesh)
+                paint_rgb = self._interactive_paint_rgb()
+                if paint_rgb is not None and len(paint_rgb) == polydata.n_cells:
+                    polydata.cell_data["Interactive Paint RGB"] = paint_rgb
+                    self._pose_actor = self.plotter.add_mesh(
+                        polydata,
+                        scalars="Interactive Paint RGB",
+                        rgb=True,
+                        opacity=1.0,
+                        show_edges=True,
+                        edge_color="#555555",
+                        line_width=1.0,
+                        smooth_shading=False,
+                        specular=0.35,
+                        specular_power=25,
+                        pickable=True,
+                    )
+                else:
+                    self._pose_actor = self.plotter.add_mesh(
+                        self.current_mesh,
+                        color="#A8A8A8",
+                        opacity=1.0,
+                        show_edges=True,
+                        edge_color="#555555",
+                        line_width=1.0,
+                        smooth_shading=False,
+                        specular=0.35,
+                        specular_power=25,
+                        pickable=True,
+                    )
+            else:
+                self._pose_actor = self.plotter.add_mesh(
+                    self.current_mesh,
+                    color="#A8A8A8",
+                    opacity=1.0,
+                    show_edges=True,
+                    edge_color="#555555",
+                    line_width=1.0,
+                    smooth_shading=False,
+                    specular=0.35,
+                    specular_power=25,
+                    pickable=True,
+                )
             # CAD (0,0,0) is the rotation pivot and is aligned exactly
             # with World (0,0,0) at initial load.
             self.rotation_pivot = np.zeros(3, dtype=float)
