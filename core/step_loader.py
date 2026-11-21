@@ -1225,6 +1225,56 @@ END-ISO-10303-21;
     print("[PASS] Reversed STEP face normal orientation")
     print("[PASS] Degenerate surface derivative rejection")
 
+    # Triangle-to-exact-surface orchestration test with a deterministic
+    # analytic plane evaluator; actual Open CASCADE evaluation is exercised
+    # separately during STEP file loading.
+    class _TriangleMesh:
+        vertices = np.asarray([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ], dtype=np.float64)
+        faces = np.asarray([[0, 1, 2]], dtype=np.int64)
+        metadata = {}
+    triangle_mesh = _TriangleMesh()
+    triangle_mesh._step_brep_context = {
+        "shape": object(),
+        "faces": (object(),),
+        "face_records": ({
+            "face_id": 1,
+            "surface_type": "PLANE",
+            "orientation": "FORWARD",
+            "parameter_bounds": {"u": [0.0, 1.0], "v": [0.0, 1.0]},
+        },),
+        "triangle_face_ids": np.asarray([1], dtype=np.int64),
+        "triangle_uvs": np.asarray(
+            [[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]], dtype=np.float64
+        ),
+        "triangle_uv_valid": np.asarray([True], dtype=bool),
+        "face_adjacency": {},
+        "schema_identifier": "AUTOMOTIVE_DESIGN",
+    }
+    original_surface_evaluator = evaluate_step_face_surface
+    try:
+        def _fake_plane_evaluator(_mesh, face_id, u, v):
+            return {
+                "face_id": face_id,
+                "surface_type": "PLANE",
+                "point_mm": np.asarray([u, v, 0.0]),
+                "normal": np.asarray([0.0, 0.0, 1.0]),
+                "evaluation_method": "MOCK_ANALYTIC_PLANE",
+            }
+        evaluate_step_face_surface = _fake_plane_evaluator
+        exact_sample = evaluate_step_triangle_sample(
+            triangle_mesh, 0, [0.25, 0.25, 0.50]
+        )
+        assert np.allclose(exact_sample["point_mm"], [0.25, 0.50, 0.0])
+        assert np.allclose(exact_sample["mesh_point_mm"], [0.25, 0.50, 0.0])
+        assert exact_sample["mesh_to_brep_deviation_mm"] < 1e-12
+    finally:
+        evaluate_step_face_surface = original_surface_evaluator
+    print("[PASS] Mesh triangle sample to exact B-Rep evaluation pipeline")
+
     # Display conversion tests: exact source report remains in millimetres.
     sample_report = {
         "bounding_box": {"dimensions_mm": [100.0, 200.0, 300.0]},
