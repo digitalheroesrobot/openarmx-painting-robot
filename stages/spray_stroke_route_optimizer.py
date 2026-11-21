@@ -16,10 +16,13 @@ _SAMPLE_FIELDS = (
 
 
 def _unit(vector: np.ndarray) -> np.ndarray:
-    norm = float(np.linalg.norm(vector))
+    value = np.asarray(vector, dtype=np.float64)
+    if value.shape != (3,) or not np.all(np.isfinite(value)):
+        raise ValueError("Spray direction vectors must be finite 3-vectors.")
+    norm = float(np.linalg.norm(value))
     if not np.isfinite(norm) or norm <= 1e-12:
         raise ValueError("Spray direction vectors must be finite and non-zero.")
-    return vector / norm
+    return value / norm
 
 
 def _angle(a: np.ndarray, b: np.ndarray) -> float:
