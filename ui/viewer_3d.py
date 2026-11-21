@@ -3488,6 +3488,12 @@ class ProductViewer(QWidget):
         # -------------------------------------------------
         # Fixed World XYZ box and moving Product CAD frame.
         self._add_pose_coordinate_frames()
+
+        # Overall dimensions are a permanent, subdued reference in the
+        # product viewer. Keep this call in the common render path so the
+        # dimensions appear in product, patch, and trajectory views.
+        self._add_dimension_box()
+
         self._add_hole_candidate_overlay()
 
         # -------------------------------------------------
@@ -3906,19 +3912,19 @@ class ProductViewer(QWidget):
         ])
 
         labels = [
-            f"W: {width:.3f} {unit_label}",
-            f"D: {depth:.3f} {unit_label}",
-            f"H: {height:.3f} {unit_label}",
+            f"LENGTH (X): {width:.2f} {unit_label}",
+            f"WIDTH (Y): {depth:.2f} {unit_label}",
+            f"HEIGHT (Z): {height:.2f} {unit_label}",
         ]
 
         self.plotter.add_point_labels(
             label_points,
             labels,
-            font_size=11,
-            text_color="#AAB5BD",
+            font_size=12,
+            text_color="#B8C4CC",
             shape="rounded_rect",
             shape_color="#101B24",
-            shape_opacity=0.42,
+            shape_opacity=0.58,
             always_visible=True,
             show_points=False,
             margin=4,
@@ -3926,15 +3932,15 @@ class ProductViewer(QWidget):
 
         self.plotter.add_text(
             (
-                f"PRODUCT SIZE  |  "
-                f"W {width:.3f}  "
-                f"D {depth:.3f}  "
-                f"H {height:.3f} "
+                f"PRODUCT DIMENSIONS  |  "
+                f"LENGTH {width:.2f}  "
+                f"WIDTH {depth:.2f}  "
+                f"HEIGHT {height:.2f} "
                 f"{unit_label}"
             ),
             position="upper_left",
-            font_size=9,
-            color="#82919B",
+            font_size=11,
+            color="#AAB5BD",
         )
 
     # =========================================================
