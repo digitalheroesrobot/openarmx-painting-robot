@@ -3436,25 +3436,51 @@ class ProductViewer(QWidget):
             self.display_mode == "trajectory"
             and self.trajectory_data is not None
         ):
-            # Render the complete CAD product as an opaque, unpainted base.
-            # Neutral satin-metal gray gives simulated coating good contrast.
+            # Keep every CAD face in ONE actor. This prevents gaps where
+            # face classification is unknown or where separate overlay meshes
+            # would otherwise fail to cover the original product.
             polydata = self._to_polydata(self.current_mesh)
             face_count = len(self.current_mesh.faces)
             base_rgb = np.tile(
                 np.asarray([178, 188, 195], dtype=np.uint8),
                 (face_count, 1),
             )
+
+            face_opacity = np.ones(face_count, dtype=np.float32)
+            if self.face_surface_types is not None:
+                surface_types = np.char.lower(
+                    np.asarray(self.face_surface_types).astype(str)
+                )
+                planar_mask = surface_types == "planar"
+                curved_mask = surface_types == "curved"
+                planar_selected = bool(self.trajectory_visibility["planar"])
+                curved_selected = bool(self.trajectory_visibility["curved"])
+
+                # The selected surface class stays fully opaque. The other
+                # classified class is faded, not recolored. Unknown faces
+                # remain visible at full opacity so the product is complete.
+                if planar_selected and curved_selected:
+                    face_opacity[planar_mask] = 1.0
+                    face_opacity[curved_mask] = 0.55
+                elif planar_selected:
+                    face_opacity[planar_mask] = 1.0
+                    face_opacity[curved_mask] = 0.25
+                elif curved_selected:
+                    face_opacity[curved_mask] = 1.0
+                    face_opacity[planar_mask] = 0.25
+
             self._trajectory_surface_face_mask = np.ones(face_count, dtype=bool)
             self._trajectory_surface_base_rgb = base_rgb.copy()
             self._trajectory_surface_polydata = polydata
             polydata.cell_data["Paint Preview RGB"] = base_rgb.copy()
+            polydata.cell_data["Surface Opacity"] = face_opacity
 
             self._pose_actor = self.plotter.add_mesh(
                 polydata,
                 scalars="Paint Preview RGB",
                 rgb=True,
                 preference="cell",
-                opacity=1.0,
+                opacity="Surface Opacity",
                 show_edges=True,
                 edge_color="#35434B",
                 line_width=0.7,
@@ -3466,42 +3492,8 @@ class ProductViewer(QWidget):
                 self._vtk_matrix_from_numpy(self.trajectory_product_transform)
             )
 
-            # Optional surface coating overlays sit on top of the base CAD.
-            # Planar preview is fully opaque; curved preview is translucent.
-            if self.face_surface_types is not None:
-                surface_types = np.char.lower(
-                    np.asarray(self.face_surface_types).astype(str)
-                )
-                for surface_key, color, opacity in (
-                    ("planar", "#38AFA0", 1.0),
-                    ("curved", "#D99A45", 0.55),
-                ):
-                    if not self.trajectory_visibility[surface_key]:
-                        continue
-                    mask = surface_types == surface_key
-                    if not np.any(mask):
-                        continue
-                    overlay_mesh = self._to_polydata(
-                        self.current_mesh, face_mask=mask
-                    )
-                    if overlay_mesh.n_cells == 0:
-                        continue
-                    overlay_actor = self.plotter.add_mesh(
-                        overlay_mesh,
-                        color=color,
-                        opacity=opacity,
-                        show_edges=False,
-                        smooth_shading=True,
-                        pickable=False,
-                    )
-                    overlay_actor.SetOrigin(0.0, 0.0, 0.0)
-                    overlay_actor.SetUserMatrix(
-                        self._vtk_matrix_from_numpy(self.trajectory_product_transform)
-                    )
-
             self._add_trajectory_visualization()
 
-        # -------------------------------------------------
         # DEFAULT PRODUCT MODE
         # -------------------------------------------------
         else:
