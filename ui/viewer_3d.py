@@ -8,8 +8,12 @@ import pyvista as pv
 from core.spray_coverage import (
     build_paintable_face_mask,
     calculate_area_weighted_coverage,
+    is_line_of_sight_occluded,
     mark_sample_hits,
 )
+
+from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
+from vtkmodules.vtkFiltersGeneral import vtkOBBTree
 
 from PySide6.QtCore import QEvent, Qt, Signal, QTimer
 from PySide6.QtGui import QColor
@@ -2573,6 +2577,24 @@ class ProductViewer(QWidget):
         except Exception:
             surface_tree = None
 
+        # Build a spatially accelerated locator over the COMPLETE product
+        # mesh. Non-target faces still physically occlude the spray.
+        mesh_faces = np.asarray(self.current_mesh.faces, dtype=np.int64)
+        mesh_cell_array = np.column_stack((
+            np.full(len(mesh_faces), 3, dtype=np.int64),
+            mesh_faces,
+        )).reshape(-1)
+        mesh_vertices_world = vertices @ rotation.T + translation
+        occlusion_polydata = pv.PolyData(
+            mesh_vertices_world, mesh_cell_array
+        )
+        occlusion_locator = vtkOBBTree()
+        occlusion_locator.SetDataSet(occlusion_polydata)
+        occlusion_locator.BuildLocator()
+        mesh_bounds = np.asarray(self.current_mesh.bounds, dtype=np.float64)
+        mesh_diagonal = float(np.linalg.norm(mesh_bounds[1] - mesh_bounds[0]))
+        ray_tolerance = max(mesh_diagonal * 1e-7, 1e-8)
+
         source_unit = self.source_unit
         mm_per_unit = MM_PER_UNIT.get(source_unit, 1.0)
         standoff_units = float(parameters.get(
@@ -2658,6 +2680,11 @@ class ProductViewer(QWidget):
                 "m²" if source_unit in MM_PER_UNIT else "coordinate units²"
             ),
             "surface_tree": surface_tree,
+            "occlusion_polydata": occlusion_polydata,
+            "occlusion_locator": occlusion_locator,
+            "ray_tolerance": ray_tolerance,
+            "last_hit_path_index": -1,
+            "last_hit_sample_indices": np.empty(0, dtype=np.int64),
             "target_triangles_world": triangles_world,
             "coverage_sample_hits": np.zeros(len(face_samples), dtype=bool),
             "coverage_processed_index": -1,
@@ -2709,9 +2736,18 @@ class ProductViewer(QWidget):
             pass
 
     def _get_surface_sample_hits_from_spray(self, path_index):
-        """Return mesh-surface samples inside the configured spray footprint."""
+        """Return visible mesh samples inside the spray footprint.
+
+        The footprint test is only the geometric envelope. A VTK OBBTree
+        ray query then rejects samples whose nozzle-to-surface segment
+        intersects any nearer product triangle, including non-paintable faces.
+        """
         cache = self._prepare_trajectory_playback_cache()
-        if cache is None or cache["cone_tangent"] <= 0.0:
+        if cache is None:
+            return np.empty(0, dtype=np.int64)
+        if cache["last_hit_path_index"] == int(path_index):
+            return cache["last_hit_sample_indices"].copy()
+        if cache["cone_tangent"] <= 0.0:
             return np.empty(0, dtype=np.int64)
         # Never invent a circular footprint for a flat fan with unknown thickness.
         if cache["pattern_type"] == "flat_fan" and cache["fan_thickness_units"] <= 0.0:
@@ -2733,6 +2769,8 @@ class ProductViewer(QWidget):
                 np.einsum("ij,ij->i", delta_all, delta_all) <= search_radius * search_radius
             )
         if len(candidates) == 0:
+            cache["last_hit_path_index"] = int(path_index)
+            cache["last_hit_sample_indices"] = np.empty(0, dtype=np.int64)
             return np.empty(0, dtype=np.int64)
 
         delta = cache["face_samples"][candidates] - nozzle
@@ -2761,7 +2799,37 @@ class ProductViewer(QWidget):
             (axial > 0.0) & (axial <= max_axial)
             & inside_pattern & facing
         )
-        return candidates[inside]
+        footprint_candidates = candidates[inside]
+        if len(footprint_candidates) == 0:
+            visible = np.empty(0, dtype=np.int64)
+        else:
+            locator = cache["occlusion_locator"]
+            tolerance = cache["ray_tolerance"]
+            visible_indices = []
+            for sample_index in footprint_candidates:
+                target = cache["face_samples"][sample_index]
+                intersection_points = vtkPoints()
+                intersection_cell_ids = vtkIdList()
+                locator.IntersectWithLine(
+                    tuple(float(v) for v in nozzle),
+                    tuple(float(v) for v in target),
+                    intersection_points,
+                    intersection_cell_ids,
+                )
+                intersections = np.asarray([
+                    intersection_points.GetPoint(point_index)
+                    for point_index in range(intersection_points.GetNumberOfPoints())
+                ], dtype=np.float64).reshape(-1, 3)
+                if not is_line_of_sight_occluded(
+                    intersections, nozzle, target, tolerance
+                ):
+                    visible_indices.append(int(sample_index))
+            visible = np.asarray(visible_indices, dtype=np.int64)
+
+        cache["last_hit_path_index"] = int(path_index)
+        cache["last_hit_sample_indices"] = visible.copy()
+        return visible
+
 
     def _mark_surface_samples_from_spray(self, path_index):
         cache = self._prepare_trajectory_playback_cache()
