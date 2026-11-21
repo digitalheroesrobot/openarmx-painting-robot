@@ -89,6 +89,12 @@ def simulate_double_beta_deposition(*, sample_normalized_xy_by_path: np.ndarray,
         incidence = np.clip(facing[p, ids], 0.0, 1.0)
         fraction = np.clip(density * area_scale * areas[ids] * incidence, 0.0, 1.0)
         volume = input_dry * fraction
+        # Coarse surface quadrature can over-integrate a narrow kernel.
+        # Enforce the physical upper bound: deposited paint cannot exceed
+        # the dry paint supplied during this trajectory interval.
+        interval_deposited = float(np.sum(volume))
+        if interval_deposited > input_dry and interval_deposited > 0.0:
+            volume *= input_dry / interval_deposited
         sample_volume[ids] += volume
         sample_thickness[ids] += volume / areas[ids] * 1000.0
         deposited_by_path[p] = float(np.sum(volume))
