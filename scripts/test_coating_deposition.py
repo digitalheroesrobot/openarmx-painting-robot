@@ -130,6 +130,21 @@ class DoubleBetaDepositionTests(unittest.TestCase):
         self.assertIn('"max_travel_acceleration_mm_s2"', source)
         self.assertIn("not force", source)
 
+    def test_regeneration_is_disabled_during_playback_and_enabled_when_stopped(self):
+        viewer_path = ROOT / "ui" / "viewer_3d.py"
+        viewer_source = viewer_path.read_text(encoding="utf-8")
+        main_path = ROOT / "app" / "main_window.py"
+        main_source = main_path.read_text(encoding="utf-8")
+        compile(viewer_source, str(viewer_path), "exec")
+        compile(main_source, str(main_path), "exec")
+        self.assertIn("def is_trajectory_playing(self):", viewer_source)
+        self.assertIn("def _notify_playback_state_changed(self):", viewer_source)
+        self.assertIn("self._notify_playback_state_changed()", viewer_source)
+        self.assertIn("self.viewer.playback_state_changed_callback", main_source)
+        self.assertIn("def _on_viewer_playback_state_changed(self, is_playing):", main_source)
+        self.assertIn("not bool(is_playing)", main_source)
+        self.assertIn("if self.viewer.is_trajectory_playing():", main_source)
+
     def _args(self):
         return {"sample_normalized_xy_by_path": np.zeros((2,2,2)), "sample_area_mm2": np.array([10.,10.]), "sample_facing_cosine_by_path": np.ones((2,2)), "sample_face_ids": np.array([0,1]), "trajectory_time_s": np.array([0.,1.]), "spray_on_mask": np.array([False,True]), "hit_sample_indices_by_path": [np.array([],dtype=int),np.array([0,1])], "fluid_flow_ml_min":60., "transfer_efficiency_percent":50., "volume_solids_percent":40., "footprint_width_mm":10., "footprint_thickness_mm":10.}
     def test_uniform_kernel_integrates_to_one(self):
