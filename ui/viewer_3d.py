@@ -247,7 +247,7 @@ class ProductViewer(QWidget):
         return value
 
     def _build_hole_controls(self):
-        """Build the single hook-diameter input used to select usable holes."""
+        """Build editable hook-diameter and total-clearance inputs."""
         panel = QFrame()
         panel.setObjectName("HookDiameterControls")
         panel.setStyleSheet("""
@@ -269,19 +269,37 @@ class ProductViewer(QWidget):
         row = QHBoxLayout(panel)
         row.setContentsMargins(8, 5, 8, 5)
         row.setSpacing(8)
+
         row.addWidget(QLabel("HOOK DIAMETER (mm):"))
         self.hook_diameter_input = QDoubleSpinBox()
         self.hook_diameter_input.setRange(0.1, 1000.0)
         self.hook_diameter_input.setDecimals(2)
         self.hook_diameter_input.setSingleStep(0.5)
         self.hook_diameter_input.setValue(self.hook_diameter_mm)
-        self.hook_diameter_input.setFixedWidth(105)
+        self.hook_diameter_input.setFixedWidth(95)
         self.hook_diameter_input.setToolTip(
-            "Only holes with diameter >= hook diameter + 1.0 mm total clearance are displayed."
+            "Minimum hole diameter = hook diameter + total clearance."
         )
-        self.hook_diameter_input.valueChanged.connect(self._on_hook_diameter_changed)
+        self.hook_diameter_input.valueChanged.connect(
+            self._on_hook_diameter_changed
+        )
         row.addWidget(self.hook_diameter_input)
-        row.addWidget(QLabel("Total clearance: 1.00 mm"))
+
+        row.addWidget(QLabel("TOTAL CLEARANCE (mm):"))
+        self.hole_clearance_input = QDoubleSpinBox()
+        self.hole_clearance_input.setRange(0.0, 100.0)
+        self.hole_clearance_input.setDecimals(2)
+        self.hole_clearance_input.setSingleStep(0.1)
+        self.hole_clearance_input.setValue(self.hole_clearance_mm)
+        self.hole_clearance_input.setFixedWidth(95)
+        self.hole_clearance_input.setToolTip(
+            "Total diametral clearance added to the hook diameter."
+        )
+        self.hole_clearance_input.valueChanged.connect(
+            self._on_hole_clearance_changed
+        )
+        row.addWidget(self.hole_clearance_input)
+
         row.addStretch(1)
         self.hook_compatible_count_label = QLabel("0 compatible holes")
         row.addWidget(self.hook_compatible_count_label)
@@ -289,6 +307,11 @@ class ProductViewer(QWidget):
 
     def _on_hook_diameter_changed(self, value):
         self.hook_diameter_mm = float(value)
+        if self.current_mesh is not None:
+            self._render_product(reset_camera=False)
+
+    def _on_hole_clearance_changed(self, value):
+        self.hole_clearance_mm = float(value)
         if self.current_mesh is not None:
             self._render_product(reset_camera=False)
 
@@ -3846,12 +3869,14 @@ class ProductViewer(QWidget):
             bounds=(xmin, xmax, ymin, ymax, zmin, zmax)
         )
 
+        # Keep overall product dimensions visible as a subtle reference,
+        # so the hook-compatible hole annotations remain visually dominant.
         self.plotter.add_mesh(
             box,
             style="wireframe",
-            color="#00E5FF",
-            line_width=2,
-            opacity=0.9,
+            color="#71818C",
+            line_width=1,
+            opacity=0.28,
             lighting=False,
         )
 
@@ -3870,9 +3895,9 @@ class ProductViewer(QWidget):
             [xmin, ymin, zmax],
         ])
 
-        self.plotter.add_lines(width_points, color="#00E5FF", width=4)
-        self.plotter.add_lines(depth_points, color="#FFD740", width=4)
-        self.plotter.add_lines(height_points, color="#00E676", width=4)
+        self.plotter.add_lines(width_points, color="#71818C", width=1)
+        self.plotter.add_lines(depth_points, color="#71818C", width=1)
+        self.plotter.add_lines(height_points, color="#71818C", width=1)
 
         label_points = np.array([
             [(xmin + xmax) / 2, ymin, zmin],
@@ -3889,11 +3914,11 @@ class ProductViewer(QWidget):
         self.plotter.add_point_labels(
             label_points,
             labels,
-            font_size=14,
-            text_color="#FFFFFF",
+            font_size=11,
+            text_color="#AAB5BD",
             shape="rounded_rect",
-            shape_color="#071018",
-            shape_opacity=0.85,
+            shape_color="#101B24",
+            shape_opacity=0.42,
             always_visible=True,
             show_points=False,
             margin=4,
@@ -3908,8 +3933,8 @@ class ProductViewer(QWidget):
                 f"{unit_label}"
             ),
             position="upper_left",
-            font_size=10,
-            color="#00E5FF",
+            font_size=9,
+            color="#82919B",
         )
 
     # =========================================================
