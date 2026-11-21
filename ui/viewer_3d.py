@@ -3317,7 +3317,7 @@ class ProductViewer(QWidget):
         self._set_trajectory_surface_rgb(base)
         # Include every Stage 2 target face, including zero-film faces.
         # Statistics are weighted by physical triangle area, not face count.
-        target_areas = cache["face_areas"][cache["target_face_ids"]]
+        target_areas = cache["face_areas"]
         if len(face_values) == 0:
             self.trajectory_thickness_label.setText(
                 "PREDICTED DRY FILM [µm] | N/A — NO STAGE 2 TARGET FACES"
@@ -3563,7 +3563,7 @@ class ProductViewer(QWidget):
                 if ready:
                     target = float(cache["coating_process"]["target_dry_film_thickness_um"])
                     face_values = cache["deposition_face_thickness_um"][cache["target_face_ids"]]
-                    target_areas = cache["face_areas"][cache["target_face_ids"]]
+                    target_areas = cache["face_areas"]
                     if len(face_values) == 0:
                         self.trajectory_thickness_label.setText(
                             "PREDICTED DRY FILM [µm] | N/A — NO STAGE 2 TARGET FACES"
