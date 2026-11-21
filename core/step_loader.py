@@ -98,6 +98,7 @@ def _ocp_imports():
             GeomAbs_BSplineSurface, GeomAbs_SurfaceOfRevolution,
             GeomAbs_SurfaceOfExtrusion, GeomAbs_OffsetSurface,
         )
+        from OCP.gp import gp_Pnt, gp_Vec
     except ImportError as exc:
         raise RuntimeError(
             "STEP import requires Open CASCADE Python bindings. "
@@ -302,6 +303,98 @@ def get_step_brep_context(mesh):
         )
 
     return context
+
+
+def _surface_normal_from_derivatives(du, dv, reversed_face=False):
+    """Compute a unit surface normal from exact CAD first derivatives."""
+    du = np.asarray(du, dtype=np.float64)
+    dv = np.asarray(dv, dtype=np.float64)
+    if du.shape != (3,) or dv.shape != (3,):
+        raise ValueError("Surface derivatives must be 3D vectors.")
+    if not np.isfinite(du).all() or not np.isfinite(dv).all():
+        raise ValueError("Surface derivatives must be finite.")
+    normal = np.cross(du, dv)
+    magnitude = float(np.linalg.norm(normal))
+    scale = float(np.linalg.norm(du) * np.linalg.norm(dv))
+    if not math.isfinite(magnitude) or magnitude <= max(1e-14, scale * 1e-12):
+        raise ValueError("STEP surface normal is undefined at this UV location.")
+    normal /= magnitude
+    if reversed_face:
+        normal *= -1.0
+    return normal
+
+
+def evaluate_step_face_surface(mesh, face_id: int, u: float, v: float) -> dict:
+    """Evaluate an original STEP B-Rep face at exact native (u, v) parameters.
+
+    Coordinates and first derivatives are in the STEP loader's canonical mm
+    frame. The returned normal respects the TopoDS_Face orientation.
+    This is deliberately a read-only primitive; it does not alter Stage 3
+    mesh-based path generation.
+    """
+    context = get_step_brep_context(mesh)
+    if context is None:
+        raise ValueError("Mesh does not contain a live STEP B-Rep context.")
+
+    face_id = int(face_id)
+    if face_id < 1 or face_id > len(context["faces"]):
+        raise ValueError(f"Invalid one-based STEP Face ID: {face_id}")
+    u = float(u)
+    v = float(v)
+    if not math.isfinite(u) or not math.isfinite(v):
+        raise ValueError("STEP surface parameters u and v must be finite.")
+
+    record = context["face_records"][face_id - 1]
+    bounds = record.get("parameter_bounds", {})
+    for parameter, value in (("u", u), ("v", v)):
+        interval = bounds.get(parameter)
+        if interval is not None:
+            lower, upper = map(float, interval)
+            tolerance = 1e-10 * max(1.0, abs(lower), abs(upper))
+            if value < lower - tolerance or value > upper + tolerance:
+                raise ValueError(
+                    f"Face {face_id} parameter {parameter}={value} is outside "
+                    f"the trimmed face range [{lower}, {upper}]."
+                )
+
+    ocp = _ocp_imports()
+    adaptor = ocp["BRepAdaptor_Surface"](context["faces"][face_id - 1], True)
+    point = ocp["gp_Pnt"]()
+    derivative_u = ocp["gp_Vec"]()
+    derivative_v = ocp["gp_Vec"]()
+    try:
+        adaptor.D1(u, v, point, derivative_u, derivative_v)
+    except Exception as exc:
+        raise RuntimeError(
+            "Open CASCADE could not evaluate the STEP face first derivatives "
+            f"at Face {face_id}, UV=({u}, {v})."
+        ) from exc
+
+    du = np.asarray(
+        [derivative_u.X(), derivative_u.Y(), derivative_u.Z()],
+        dtype=np.float64,
+    )
+    dv = np.asarray(
+        [derivative_v.X(), derivative_v.Y(), derivative_v.Z()],
+        dtype=np.float64,
+    )
+    reversed_face = record.get("orientation") == "REVERSED"
+    normal = _surface_normal_from_derivatives(du, dv, reversed_face)
+    xyz = np.asarray([point.X(), point.Y(), point.Z()], dtype=np.float64)
+    if not np.isfinite(xyz).all():
+        raise ValueError("STEP surface evaluation produced a non-finite point.")
+
+    return {
+        "face_id": face_id,
+        "surface_type": record["surface_type"],
+        "uv": [u, v],
+        "point_mm": xyz,
+        "du_mm_per_u": du,
+        "dv_mm_per_v": dv,
+        "normal": normal,
+        "orientation": record.get("orientation", "FORWARD_OR_OTHER"),
+        "evaluation_method": "OPENCASCADE_BREP_ADAPTOR_D1",
+    }
 
 
 def load_step(
