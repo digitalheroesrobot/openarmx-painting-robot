@@ -198,6 +198,11 @@ def build_deficit_correction_strokes(
         else:
             _, _, vh = np.linalg.svd(centered, full_matrices=False)
             axis = vh[0]
+            # SVD eigenvector signs are mathematically arbitrary. Canonicalize
+            # the dominant component so waypoint order is deterministic.
+            dominant_component = int(np.argmax(np.abs(axis)))
+            if axis[dominant_component] < 0.0:
+                axis = -axis
         projection = points[group] @ axis
         ordered = group[np.argsort(projection, kind="stable")]
 
