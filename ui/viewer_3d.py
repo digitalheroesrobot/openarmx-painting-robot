@@ -124,6 +124,7 @@ class ProductViewer(QWidget):
         self.patch_labels = None
         self.face_status_labels = None
         self.trajectory_data = None
+        self._trajectory_timing_stale = False
         self.trajectory_path_statistics = {}
         self.trajectory_validation = {}
         self._playback_spray_actor = None
@@ -2128,6 +2129,7 @@ class ProductViewer(QWidget):
         ):
             raise ValueError("Trajectory product transform must contain a rigid rotation.")
         data["parameters"] = parameters
+        self._trajectory_timing_stale = False
         travel_plan = trajectory_data.get("inter_segment_travel_plan", {})
         data["inter_segment_travel_plan"] = (
             travel_plan if isinstance(travel_plan, dict) else {}
@@ -2560,6 +2562,8 @@ class ProductViewer(QWidget):
                 f"{self._format_playback_duration(path_elapsed)} / "
                 f"{self._format_playback_duration(path_total)}"
             )
+            if self._trajectory_timing_stale:
+                path_text += " (STALE — REGENERATE)"
         else:
             path_total = 0.0
             path_text = "N/A"
@@ -2636,6 +2640,31 @@ class ProductViewer(QWidget):
             if hasattr(self, "trajectory_playback_label"):
                 total = len(self.trajectory_data["nozzle_points"]) if self.trajectory_data is not None else 0
                 self.trajectory_playback_label.setText(f"0 / {total}")
+
+    def update_coating_process_preview(self, coating_process, timing_stale=False):
+        """Apply saved process settings to the loaded trajectory without restarting the app."""
+        if not isinstance(coating_process, dict):
+            raise TypeError("coating_process must be a dictionary.")
+        if self.trajectory_data is None:
+            self._update_film_thickness_legend(
+                coating_process.get("target_dry_film_thickness_um", 0.0)
+            )
+            return
+        parameters = dict(self.trajectory_data.get("parameters", {}))
+        parameters["coating_process"] = dict(coating_process)
+        self.trajectory_data["parameters"] = parameters
+        self._trajectory_timing_stale = bool(timing_stale)
+        self._stop_trajectory_playback(reset=True)
+        self._update_film_thickness_legend(
+            coating_process.get("target_dry_film_thickness_um", 0.0)
+        )
+        self._update_trajectory_playback_visuals(0, update_coverage=False)
+        if (
+            hasattr(self, "trajectory_thickness_checkbox")
+            and self.trajectory_thickness_checkbox.isChecked()
+        ):
+            self._update_film_thickness_visualization()
+        self._update_trajectory_time_label(0)
 
     def _prepare_trajectory_playback_cache(self):
         if self.trajectory_data is None:
