@@ -2586,12 +2586,27 @@ class ProductViewer(QWidget):
             f"PLAN {self._format_playback_duration(total_plan)}"
         )
 
+    def is_trajectory_playing(self):
+        """Return True only while the trajectory playback timer is running."""
+        return bool(
+            hasattr(self, "_playback_timer")
+            and self._playback_timer.isActive()
+        )
+
+    def _notify_playback_state_changed(self):
+        """Notify the owning workflow window when playback starts or stops."""
+        callback = getattr(self, "playback_state_changed_callback", None)
+        if callable(callback):
+            callback(self.is_trajectory_playing())
+
     def _stop_trajectory_playback(self, reset=False):
         if hasattr(self, "_playback_timer"):
             self._playback_timer.stop()
         self._pause_playback_wall_clock()
+        self._notify_playback_state_changed()
         if hasattr(self, "trajectory_play_button"):
             self.trajectory_play_button.setText("▶")
+        self._notify_playback_state_changed()
         if reset:
             actors = list(self._playback_gun_actors)
             actors.extend((
@@ -3799,6 +3814,7 @@ class ProductViewer(QWidget):
         self._pause_playback_wall_clock()
         self._playback_finished = False
         self.trajectory_play_button.setText("▶")
+        self._notify_playback_state_changed()
         self._update_trajectory_playback_visuals(value)
 
     def _toggle_trajectory_playback(self):
@@ -3811,6 +3827,7 @@ class ProductViewer(QWidget):
             self._playback_timer.stop()
             self._pause_playback_wall_clock()
             self.trajectory_play_button.setText("▶")
+            self._notify_playback_state_changed()
             self._update_trajectory_time_label()
             return
         if self._playback_finished or self._playback_index >= total - 1:
@@ -3828,8 +3845,9 @@ class ProductViewer(QWidget):
                 self._update_trajectory_playback_visuals(self._playback_index)
         self._playback_wall_started_at = time.monotonic()
         self.trajectory_play_button.setText("Ⅱ")
-        self._update_trajectory_time_label()
         self._playback_timer.start()
+        self._notify_playback_state_changed()
+        self._update_trajectory_time_label()
 
     def _complete_trajectory_playback(self):
         """Freeze the gun at the final pose and force all spray visuals OFF."""
@@ -3837,6 +3855,7 @@ class ProductViewer(QWidget):
         self._pause_playback_wall_clock()
         self._playback_finished = True
         self.trajectory_play_button.setText("▶")
+        self._notify_playback_state_changed()
 
         cache = self._prepare_trajectory_playback_cache()
         if cache is not None and len(cache["nozzle_points"]):
@@ -3923,6 +3942,7 @@ class ProductViewer(QWidget):
         self._pause_playback_wall_clock()
         self._playback_finished = False
         self.trajectory_play_button.setText("▶")
+        self._notify_playback_state_changed()
         total = len(self.trajectory_data["nozzle_points"])
         next_index = min(self._playback_index + 1, total - 1)
         self._update_trajectory_playback_visuals(next_index)
