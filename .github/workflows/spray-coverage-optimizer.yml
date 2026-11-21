@@ -5,6 +5,8 @@ on:
     paths:
       - "core/spray_coverage_optimizer.py"
       - "scripts/test_spray_coverage_optimizer.py"
+      - "ui/viewer_3d.py"
+      - "app/main_window.py"
       - ".github/workflows/spray-coverage-optimizer.yml"
   pull_request:
     paths:
@@ -24,5 +26,7 @@ jobs:
           python-version: "3.12"
       - name: Install numerical dependency
         run: python -m pip install --upgrade numpy
-      - name: Run coverage optimizer tests
+      - name: Compile optimizer and GUI integration modules
+        run: python -m compileall -q core/spray_coverage_optimizer.py ui/viewer_3d.py app/main_window.py scripts/test_spray_coverage_optimizer.py
+      - name: Run coverage optimizer and integration tests
         run: python scripts/test_spray_coverage_optimizer.py
