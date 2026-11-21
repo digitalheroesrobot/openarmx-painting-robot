@@ -250,6 +250,57 @@ def _xyz(point):
     return [float(point.X()), float(point.Y()), float(point.Z())]
 
 
+def get_step_brep_context(mesh):
+    """Return the live STEP B-Rep context retained on an imported mesh.
+
+    The context is runtime-only and intentionally contains Open CASCADE
+    objects. Do not put it in JSON reports or attempt to serialize it.
+    Face IDs are one-based and match the IDs in step_geometry_report.
+    """
+    metadata = getattr(mesh, "metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+
+    context = metadata.get("_step_brep_context")
+    if context is None:
+        return None
+    if not isinstance(context, dict):
+        raise TypeError("Invalid STEP B-Rep runtime context.")
+
+    required = {
+        "shape",
+        "faces",
+        "face_records",
+        "triangle_face_ids",
+        "face_adjacency",
+        "schema_identifier",
+    }
+    missing = required.difference(context)
+    if missing:
+        raise ValueError(
+            "Incomplete STEP B-Rep runtime context: "
+            + ", ".join(sorted(missing))
+        )
+
+    face_ids = np.asarray(context["triangle_face_ids"], dtype=np.int64)
+    if face_ids.shape != (len(mesh.faces),):
+        raise ValueError(
+            "STEP B-Rep triangle-to-face mapping does not match the mesh."
+        )
+
+    face_count = len(context["faces"])
+    if len(context["face_records"]) != face_count:
+        raise ValueError(
+            "STEP B-Rep face objects and face records are inconsistent."
+        )
+    if np.any(face_ids < 1) or np.any(face_ids > face_count):
+        raise ValueError(
+            "STEP B-Rep triangle mapping contains an invalid one-based Face ID."
+        )
+
+    return context
+
+
 def load_step(
     file_path: str | Path,
     linear_deflection_mm: float = 0.25,
@@ -576,6 +627,20 @@ def load_step(
     print(f"  Adjacent face pairs:   {topology_summary['unique_adjacent_face_pairs']:,}")
     print("=" * 68)
 
+    # Keep the live Open CASCADE B-Rep objects attached to this mesh.
+    # Stage 1 and Stage 2 pass the same mesh object through to Stage 3, so the
+    # exact source surfaces remain available for analytic path generation.
+    # This private runtime context is deliberately excluded from JSON reports.
+    brep_context = {
+        "shape": shape,
+        "faces": tuple(faces),
+        "face_records": tuple(face_records),
+        "face_adjacency": brep_adjacency["face_adjacency"],
+        "triangle_face_ids": np.asarray(triangle_face_ids, dtype=np.int64),
+        "schema_identifier": schema_identifier,
+        "linear_unit": "mm",
+    }
+
     mesh.metadata.update({
         "source_file": str(path),
         "source_format": "STEP",
@@ -583,9 +648,13 @@ def load_step(
         "unit_detection": "opencascade_target_unit_mm",
         "step_geometry_report": report,
         "triangle_face_ids": triangle_face_ids,
+        "_step_brep_context": brep_context,
         "source_geometry_preserved": True,
         "source_coordinates_modified": False,
     })
+
+    # Validate the runtime mapping before returning the imported mesh.
+    assert get_step_brep_context(mesh) is brep_context
 
     assert len(triangle_face_ids) == len(mesh.faces)
     assert len(face_records) == len(faces)
@@ -705,6 +774,41 @@ END-ISO-10303-21;
 
     print("[PASS] STEP extension validation")
     print("[PASS] Missing-file validation")
+
+    # Runtime B-Rep context validation (no Open CASCADE fixture required).
+    class _FakeMesh:
+        def __init__(self, face_count):
+            self.faces = [None] * face_count
+            self.metadata = {}
+
+    fake_mesh = _FakeMesh(2)
+    fake_shape = object()
+    fake_faces = (object(), object())
+    fake_context = {
+        "shape": fake_shape,
+        "faces": fake_faces,
+        "face_records": ({"face_id": 1}, {"face_id": 2}),
+        "triangle_face_ids": np.asarray([1, 2], dtype=np.int64),
+        "face_adjacency": {"1": [2], "2": [1]},
+        "schema_identifier": "AUTOMOTIVE_DESIGN",
+    }
+    fake_mesh.metadata["_step_brep_context"] = fake_context
+    assert get_step_brep_context(fake_mesh) is fake_context
+
+    fake_mesh.metadata["_step_brep_context"]["triangle_face_ids"] = np.asarray(
+        [1], dtype=np.int64
+    )
+    try:
+        get_step_brep_context(fake_mesh)
+    except ValueError as exc:
+        assert "does not match the mesh" in str(exc)
+    else:
+        raise AssertionError("Mismatched B-Rep triangle mapping was accepted.")
+
+    fake_mesh.metadata.pop("_step_brep_context")
+    assert get_step_brep_context(fake_mesh) is None
+    print("[PASS] Live STEP B-Rep runtime context validation")
+    print("[PASS] B-Rep triangle-to-Face ID mapping validation")
 
     # Pure topology test: shared B-Rep edge, open boundary, and seam use.
     class _FakeEdge:
