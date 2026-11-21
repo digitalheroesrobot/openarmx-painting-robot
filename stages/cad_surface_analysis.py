@@ -72,26 +72,17 @@ def analyze_step_faces(
     for triangle_index, face_id in enumerate(triangle_face_ids):
         face_triangles[int(face_id)].append(triangle_index)
 
-    # Prefer exact STEP B-Rep face adjacency. Tessellation adjacency is
-    # retained only as a diagnostic comparison, never as the authority.
-    edge_faces: dict[tuple[int, int], set[int]] = defaultdict(set)
-    for triangle_index, triangle in enumerate(np.asarray(mesh.faces, dtype=np.int64)):
-        face_id = int(triangle_face_ids[triangle_index])
-        a, b, c = (int(v) for v in triangle)
-        for edge in ((a, b), (b, c), (c, a)):
-            edge_faces[tuple(sorted(edge))].add(face_id)
-
-    mesh_adjacency: dict[int, set[int]] = defaultdict(set)
-    for owners in edge_faces.values():
-        if len(owners) > 1:
-            for face_id in owners:
-                mesh_adjacency[face_id].update(owners - {face_id})
-
+    # Exact STEP B-Rep adjacency is authoritative. Do not build a
+    # Python edge-owner dictionary for every display triangle when exact
+    # adjacency is already available: that diagnostic-only structure can
+    # consume several gigabytes on finely tessellated products.
     topology = step_report.get("topology", {})
     brep = topology.get("face_edge_adjacency", {}) if isinstance(topology, dict) else {}
     brep_adjacency_raw = brep.get("face_adjacency", {}) if isinstance(brep, dict) else {}
     has_brep_adjacency = isinstance(brep_adjacency_raw, dict) and bool(brep_adjacency_raw)
+
     adjacency: dict[int, set[int]] = defaultdict(set)
+    mesh_adjacency: dict[int, set[int]] = defaultdict(set)
     if has_brep_adjacency:
         for face_key, neighbors in brep_adjacency_raw.items():
             try:
@@ -100,13 +91,27 @@ def analyze_step_faces(
             except (TypeError, ValueError):
                 continue
         adjacency_source = "EXACT_STEP_BREP_SHARED_EDGES"
+        # Mesh adjacency is deliberately not computed. It is only a
+        # secondary diagnostic and cannot override the exact CAD topology.
     else:
+        # Compatibility fallback for meshes without an exact STEP report.
+        edge_faces: dict[tuple[int, int], set[int]] = defaultdict(set)
+        for triangle_index, triangle in enumerate(np.asarray(mesh.faces, dtype=np.int64)):
+            face_id = int(triangle_face_ids[triangle_index])
+            a, b, c = (int(v) for v in triangle)
+            for edge in ((a, b), (b, c), (c, a)):
+                edge_faces[tuple(sorted(edge))].add(face_id)
+
+        for owners in edge_faces.values():
+            if len(owners) > 1:
+                for face_id in owners:
+                    mesh_adjacency[face_id].update(owners - {face_id})
         adjacency = mesh_adjacency
         adjacency_source = "DISPLAY_MESH_SHARED_EDGES_FALLBACK"
 
     brep_edges = brep.get("edges", []) if isinstance(brep, dict) else []
     brep_summary = brep.get("summary", {}) if isinstance(brep, dict) else {}
-    mesh_pairs = {
+    mesh_pairs = None if has_brep_adjacency else {
         tuple(sorted((face_id, neighbor)))
         for face_id, neighbors in mesh_adjacency.items()
         for neighbor in neighbors if face_id != neighbor
@@ -212,9 +217,9 @@ def analyze_step_faces(
                 "brep_seam_edges": int(brep_summary.get("seam_or_repeated_use_edges", 0)),
                 "brep_non_manifold_edges": int(brep_summary.get("non_manifold_edges", 0)),
                 "brep_adjacent_face_pairs": len(brep_pairs),
-                "mesh_adjacent_face_pairs": len(mesh_pairs),
-                "mesh_only_adjacency_pairs": len(mesh_pairs - brep_pairs) if has_brep_adjacency else None,
-                "brep_only_adjacency_pairs": len(brep_pairs - mesh_pairs) if has_brep_adjacency else None,
+                "mesh_adjacent_face_pairs": len(mesh_pairs) if mesh_pairs is not None else None,
+                "mesh_only_adjacency_pairs": len(mesh_pairs - brep_pairs) if has_brep_adjacency and mesh_pairs is not None else None,
+                "brep_only_adjacency_pairs": len(brep_pairs - mesh_pairs) if has_brep_adjacency and mesh_pairs is not None else None,
             },
             "limitations": [
                 "A planar face is only a preliminary geometric candidate.",
@@ -246,10 +251,10 @@ def analyze_step_faces(
     print("\\nSTEP FACE ADJACENCY VALIDATION")
     print(f"  Authority: {adjacency_source}")
     print(f"  B-Rep adjacent face pairs: {topology_diagnostics['brep_adjacent_face_pairs']}")
-    print(f"  Mesh adjacent face pairs:  {topology_diagnostics['mesh_adjacent_face_pairs']}")
     if has_brep_adjacency:
-        print(f"  Mesh-only adjacency pairs: {topology_diagnostics['mesh_only_adjacency_pairs']}")
-        print(f"  B-Rep-only adjacency pairs: {topology_diagnostics['brep_only_adjacency_pairs']}")
+        print("  Mesh adjacency comparison: SKIPPED (redundant; exact B-Rep is authoritative)")
+    else:
+        print(f"  Mesh adjacent face pairs:  {topology_diagnostics['mesh_adjacent_face_pairs']}")
     print(
         "  Edge classes | shared: "
         f"{topology_diagnostics['brep_shared_manifold_edges']} | "
@@ -322,6 +327,12 @@ def run_cad_surface_analysis_tests() -> None:
     assert exact["report"]["analysis"]["face_adjacency_source"] == "EXACT_STEP_BREP_SHARED_EDGES"
     assert exact["report"]["faces"][0]["adjacent_face_ids"] == [2]
     assert exact["report"]["summary"]["brep_topology_summary"]["shared_manifold_edges"] == 1
+    assert exact["report"]["analysis"]["topology_validation"]["mesh_adjacent_face_pairs"] is None
+
+    # Without exact B-Rep adjacency, the mesh fallback remains available.
+    fallback = analyze_step_faces({"faces": records}, mesh)
+    assert fallback["report"]["analysis"]["face_adjacency_source"] == "DISPLAY_MESH_SHARED_EDGES_FALLBACK"
+    assert fallback["report"]["analysis"]["topology_validation"]["mesh_adjacent_face_pairs"] >= 0
 
     print("[PASS] STEP Face inventory and triangle mapping")
     print("[PASS] Curved Face review policy")
