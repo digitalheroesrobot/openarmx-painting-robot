@@ -2140,11 +2140,14 @@ class ProductViewer(QWidget):
             raise ValueError("Spray standoff must be a positive finite value.")
         if not np.isfinite(cone_angle_deg) or not 0.0 < cone_angle_deg < 179.0:
             raise ValueError("Spray cone angle must be in (0, 179) degrees.")
-        if self._pose_actor is None:
-            self.display_mode = "spray_point_preview"
-            self._render_product(reset_camera=False)
         if self._interactive_spray_active:
             return
+        self.display_mode = "spray_point_preview"
+        self.trajectory_data = None
+        self.patch_labels = None
+        self.face_status_labels = None
+        self.face_surface_types = None
+        self._render_product(reset_camera=False)
 
         self._interactive_spray_standoff = float(standoff)
         self._interactive_spray_cone_angle_deg = float(cone_angle_deg)
