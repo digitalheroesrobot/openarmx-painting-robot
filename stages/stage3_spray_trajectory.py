@@ -2606,6 +2606,7 @@ def _refine_trajectory_with_step_brep(
     for sample_index, (point, triangle_index) in enumerate(zip(points, triangle_indices)):
         triangle_index = int(triangle_index)
         if triangle_index < 0 or triangle_index >= len(mesh_faces):
+            summary["status"] = "FALLBACK_SAMPLE_MAPPING_FAILED"
             summary["failed_sample_count"] = 1
             summary["failed_sample_index"] = int(sample_index)
             summary["failure_reason"] = "invalid_source_triangle_index"
@@ -2615,6 +2616,7 @@ def _refine_trajectory_with_step_brep(
             point, triangle, tolerance=2e-5
         )
         if weights is None:
+            summary["status"] = "FALLBACK_SAMPLE_MAPPING_FAILED"
             summary["failed_sample_count"] = 1
             summary["failed_sample_index"] = int(sample_index)
             summary["failure_reason"] = "sample_outside_source_triangle"
@@ -2622,6 +2624,7 @@ def _refine_trajectory_with_step_brep(
         try:
             evaluated = evaluate_step_triangle_sample(mesh, triangle_index, weights)
         except Exception as exc:
+            summary["status"] = "FALLBACK_EXACT_SURFACE_EVALUATION_FAILED"
             summary["failed_sample_count"] = 1
             summary["failed_sample_index"] = int(sample_index)
             summary["failure_reason"] = f"{type(exc).__name__}: {exc}"
@@ -2640,6 +2643,7 @@ def _refine_trajectory_with_step_brep(
             or exact_normal_length <= NORMAL_EPSILON
             or reference_length <= NORMAL_EPSILON
         ):
+            summary["status"] = "FALLBACK_EXACT_SURFACE_EVALUATION_FAILED"
             summary["failed_sample_count"] = 1
             summary["failed_sample_index"] = int(sample_index)
             summary["failure_reason"] = "non_finite_or_degenerate_exact_surface_result"
@@ -4816,6 +4820,50 @@ def run_stage3_numerical_tests() -> dict:
 
     test_mesh = _make_test_mesh(1.0)
 
+    # STEP refinement must never hide an atomic fallback behind the default
+    # NOT_APPLICABLE status. Simulate an attached runtime context and force
+    # two deterministic source-triangle mapping failures.
+    from unittest.mock import patch
+
+    refinement_test_trajectory = {
+        "surface_points": np.asarray([[0.2, 0.2, 0.0]], dtype=np.float64),
+        "surface_normals": np.asarray([[0.0, 0.0, 1.0]], dtype=np.float64),
+        "face_indices": np.asarray([999], dtype=np.int64),
+        "segment_ids": np.asarray([0], dtype=np.int64),
+    }
+    with patch("core.step_loader.get_step_brep_context", return_value=object()):
+        invalid_triangle_result, invalid_triangle_summary = (
+            _refine_trajectory_with_step_brep(
+                test_mesh, refinement_test_trajectory, 10.0, "mm"
+            )
+        )
+    assert invalid_triangle_summary["status"] == "FALLBACK_SAMPLE_MAPPING_FAILED"
+    assert invalid_triangle_summary["failure_reason"] == "invalid_source_triangle_index"
+    assert invalid_triangle_summary["failed_sample_count"] == 1
+    assert np.array_equal(
+        invalid_triangle_result["surface_points"],
+        refinement_test_trajectory["surface_points"],
+    )
+
+    outside_triangle_trajectory = dict(refinement_test_trajectory)
+    outside_triangle_trajectory["surface_points"] = np.asarray(
+        [[200.0, 200.0, 0.0]], dtype=np.float64
+    )
+    outside_triangle_trajectory["face_indices"] = np.asarray([0], dtype=np.int64)
+    with patch("core.step_loader.get_step_brep_context", return_value=object()):
+        outside_triangle_result, outside_triangle_summary = (
+            _refine_trajectory_with_step_brep(
+                test_mesh, outside_triangle_trajectory, 10.0, "mm"
+            )
+        )
+    assert outside_triangle_summary["status"] == "FALLBACK_SAMPLE_MAPPING_FAILED"
+    assert outside_triangle_summary["failure_reason"] == "sample_outside_source_triangle"
+    assert outside_triangle_summary["failed_sample_count"] == 1
+    assert np.array_equal(
+        outside_triangle_result["surface_points"],
+        outside_triangle_trajectory["surface_points"],
+    )
+
     labels = np.array(
         [FACE_PAINTABLE_CANDIDATE] * 2,
         dtype=np.int64,
@@ -6050,6 +6098,7 @@ def run_stage3_numerical_tests() -> dict:
             "parallel_transport_nozzle_frame_continuity": "PASS",
             "full_nozzle_frame_roll_inspection": "PASS",
             "surface_discontinuity_spray_off_splitting": "PASS",
+            "step_brep_refinement_failure_diagnostics": "PASS",
         },
         "sample_count": int(sample_count),
         "unit_standoff_tests": unit_test_results,
