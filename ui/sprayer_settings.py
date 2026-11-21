@@ -554,9 +554,6 @@ class SprayerSettingsDialog(QDialog):
             if key in trajectory_keys:
                 add_profile_field(key, label, minimum, maximum, decimals)
 
-        self.fields["spray_cone_angle_deg"].valueChanged.connect(
-            self._on_spray_angle_edited
-        )
 
         sprayer_header = QLabel("SPRAYER PROFILE / TECHNICAL SPECIFICATIONS")
         sprayer_header.setStyleSheet(
