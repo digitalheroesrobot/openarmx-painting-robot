@@ -11,11 +11,70 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.spray_coverage_optimizer import (
+    append_correction_strokes_to_trajectory,
     world_samples_to_product_cad_mm,
     analyze_surface_deficits,
     build_deficit_correction_strokes,
     build_coverage_correction_plan,
 )
+
+
+class CorrectionTrajectoryAppendTests(unittest.TestCase):
+    def test_appends_cad_strokes_with_new_segments_and_monotonic_times(self):
+        base = {
+            "surface_points": np.array([[0., 0., 0.], [1., 0., 0.]]),
+            "surface_normals": np.tile([0., 0., 1.], (2, 1)),
+            "nozzle_points": np.array([[0., 0., 50.], [1., 0., 50.]]),
+            "spray_directions": np.tile([0., 0., -1.], (2, 1)),
+            "nozzle_frames": np.repeat(np.eye(3)[None, :, :], 2, axis=0),
+            "face_indices": np.array([2, 2]),
+            "patch_ids": np.array([4, 4]),
+            "segment_ids": np.array([0, 0]),
+            "travel_speeds_mm_s": np.array([100., 100.]),
+            "trajectory_time_s": np.array([0., .01]),
+        }
+        strokes = {
+            "surface_points_mm": np.array([[10., 0., 0.], [20., 0., 0.], [40., 0., 0.]]),
+            "surface_normals": np.tile([0., 0., 1.], (3, 1)),
+            "nozzle_points_mm": np.array([[10., 0., 50.], [20., 0., 50.], [40., 0., 50.]]),
+            "spray_directions": np.tile([0., 0., -1.], (3, 1)),
+            "source_sample_indices": np.array([0, 1, 2]),
+            "patch_ids": np.array([7, 7, 9]),
+            "stroke_ranges": [
+                {"start": 0, "stop": 2},
+                {"start": 2, "stop": 3},
+            ],
+        }
+        result = append_correction_strokes_to_trajectory(
+            trajectory=base, correction_strokes=strokes,
+            source_face_ids=np.array([11, 12, 13]),
+            mm_per_unit=1., base_speed_mm_s=100.,
+            minimum_speed_mm_s=50.)
+        self.assertEqual(len(result["nozzle_points"]), 6)
+        np.testing.assert_array_equal(result["face_indices"], [2, 2, 11, 12, 13, 13])
+        np.testing.assert_array_equal(result["segment_ids"], [0, 0, 1, 1, 2, 2])
+        self.assertTrue(np.all(np.diff(result["trajectory_time_s"]) > 0.0))
+        self.assertEqual(result["correction_path_metadata"]["added_stroke_count"], 2)
+        np.testing.assert_allclose(result["nozzle_points"][-1], [40., 0., 50.])
+
+    def test_rejects_bad_source_mapping(self):
+        base = {
+            "surface_points": np.zeros((1, 3)), "surface_normals": np.array([[0., 0., 1.]]),
+            "nozzle_points": np.array([[0., 0., 1.]]), "spray_directions": np.array([[0., 0., -1.]]),
+            "segment_ids": np.array([0]), "travel_speeds_mm_s": np.array([10.]),
+            "trajectory_time_s": np.array([0.]),
+        }
+        strokes = {
+            "surface_points_mm": np.zeros((1, 3)), "surface_normals": np.array([[0., 0., 1.]]),
+            "nozzle_points_mm": np.array([[0., 0., 1.]]), "spray_directions": np.array([[0., 0., -1.]]),
+            "source_sample_indices": np.array([2]), "patch_ids": np.array([0]),
+            "stroke_ranges": [{"start": 0, "stop": 1}],
+        }
+        with self.assertRaises(ValueError):
+            append_correction_strokes_to_trajectory(
+                trajectory=base, correction_strokes=strokes,
+                source_face_ids=np.array([4]), mm_per_unit=1.,
+                base_speed_mm_s=100., minimum_speed_mm_s=50.)
 
 
 class ProductCadCoordinateTests(unittest.TestCase):
