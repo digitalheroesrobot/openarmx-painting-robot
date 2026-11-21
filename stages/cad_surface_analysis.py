@@ -76,12 +76,16 @@ def analyze_step_faces(
     # Only 168-ish Face IDs are unique even when the display mesh contains
     # millions of triangles. Count them in NumPy rather than retaining one
     # Python list entry per triangle.
-    unique_triangle_face_ids, triangle_counts = np.unique(
-        triangle_face_ids, return_counts=True
+    if np.any(triangle_face_ids < 0):
+        raise ValueError("STEP triangle Face IDs must be non-negative.")
+    triangle_counts = np.bincount(
+        triangle_face_ids,
+        minlength=len(face_records) + 1,
     )
     triangle_count_by_face = {
-        int(face_id): int(count)
-        for face_id, count in zip(unique_triangle_face_ids, triangle_counts)
+        int(face_id): int(triangle_counts[face_id])
+        for face_id in range(len(triangle_counts))
+        if triangle_counts[face_id]
     }
 
     # Exact STEP B-Rep adjacency is authoritative. Do not build a
