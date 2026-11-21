@@ -18,6 +18,7 @@ from core.coating_deposition import (
 )
 from core.coating_process import coating_model_readiness
 from core.coating_process import DEFAULT_COATING_PROCESS
+from core.spray_coverage_optimizer import build_coverage_correction_plan
 
 from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
 from vtkmodules.vtkFiltersGeneral import vtkOBBTree
@@ -123,6 +124,7 @@ class ProductViewer(QWidget):
         self.current_mesh = None
         self.patch_labels = None
         self.face_status_labels = None
+        self.trajectory_face_patch_labels = None
         self.trajectory_data = None
         self._trajectory_timing_stale = False
         self.trajectory_path_statistics = {}
@@ -974,6 +976,22 @@ class ProductViewer(QWidget):
             "calibration are not yet included."
         )
         playback_layout.addWidget(self.trajectory_thickness_label)
+
+        self.trajectory_correction_label = QLabel(
+            "COVERAGE CORRECTION | RUN PLAYBACK TO ANALYZE THE COMPLETE TARGET"
+        )
+        self.trajectory_correction_label.setMinimumHeight(30)
+        self.trajectory_correction_label.setWordWrap(True)
+        self.trajectory_correction_label.setStyleSheet(
+            "color: #AFC2CB; font-size: 9px; font-weight: 700;"
+        )
+        self.trajectory_correction_label.setToolTip(
+            "After full playback, this reports predicted surface deficits and "
+            "candidate correction strokes. Candidates are not robot executable: "
+            "visibility, IK, collision, nozzle calibration and measured coating "
+            "validation are still required."
+        )
+        playback_layout.addWidget(self.trajectory_correction_label)
 
         self.trajectory_path_stats_label = QLabel(
             "PATH SAMPLES | Planar: —  Curved: —  Fallback: —  Total: —"
@@ -1992,6 +2010,7 @@ class ProductViewer(QWidget):
         )
 
         self.patch_labels = None
+        self.trajectory_face_patch_labels = None
         self.trajectory_data = None
         self.face_surface_types = None
         self.selected_patch_id = None
@@ -2008,6 +2027,7 @@ class ProductViewer(QWidget):
         trajectory_data,
         face_surface_types=None,
         face_status_labels=None,
+        patch_labels=None,
     ):
         if not isinstance(trajectory_data, dict):
             raise TypeError(
@@ -2167,6 +2187,21 @@ class ProductViewer(QWidget):
         self.current_mesh = self._prepare_product_mesh(mesh)
 
         self.patch_labels = None
+        if patch_labels is None:
+            self.trajectory_face_patch_labels = None
+        else:
+            stage1_patch_labels = np.asarray(patch_labels)
+            if (
+                stage1_patch_labels.ndim != 1
+                or len(stage1_patch_labels) != len(mesh.faces)
+                or not np.all(np.isfinite(stage1_patch_labels))
+            ):
+                raise ValueError(
+                    "patch_labels must contain one finite Stage 1 patch ID per mesh face."
+                )
+            self.trajectory_face_patch_labels = stage1_patch_labels.astype(
+                np.int64, copy=True
+            )
         if face_status_labels is None:
             self.face_status_labels = None
         else:
@@ -2645,6 +2680,10 @@ class ProductViewer(QWidget):
                 self.trajectory_thickness_label.setText(
                     "PREDICTED DRY FILM THICKNESS | 0.00 µm — RESET"
                 )
+            if hasattr(self, "trajectory_correction_label"):
+                self.trajectory_correction_label.setText(
+                    "COVERAGE CORRECTION | RESET — RUN PLAYBACK TO ANALYZE"
+                )
             if hasattr(self, "trajectory_spray_state_label"):
                 self.trajectory_spray_state_label.setText("● SPRAY OFF")
             self._restore_trajectory_surface_base_colors()
@@ -2866,6 +2905,15 @@ class ProductViewer(QWidget):
             "sample_area_mm2": np.repeat(face_areas / sample_count_per_face, sample_count_per_face) * (mm_per_unit ** 2),
             "target_face_ids": target_face_ids,
             "target_display_indices": target_display_indices,
+            "sample_patch_ids": (
+                np.repeat(
+                    self.trajectory_face_patch_labels[target_face_ids],
+                    sample_count_per_face,
+                )
+                if self.trajectory_face_patch_labels is not None
+                else np.full(len(face_samples), -1, dtype=np.int64)
+            ),
+            "coverage_correction_plan": None,
             "target_area": target_area,
             "target_mask_status": target_mask_status,
             "coating_process": dict(coating_process) if isinstance(coating_process, dict) else {},
@@ -3330,6 +3378,11 @@ class ProductViewer(QWidget):
 
         rewound = index < cache["coverage_processed_index"]
         if rewound:
+            cache["coverage_correction_plan"] = None
+            if hasattr(self, "trajectory_correction_label"):
+                self.trajectory_correction_label.setText(
+                    "COVERAGE CORRECTION | PLAYBACK REWOUND — ANALYSIS INVALIDATED"
+                )
             cache["coverage_sample_hits"].fill(False)
             cache["coverage_processed_index"] = -1
             cache["coverage_last_render_index"] = -1
@@ -3816,6 +3869,9 @@ class ProductViewer(QWidget):
         self.trajectory_play_button.setText("▶")
         self._notify_playback_state_changed()
         self._update_trajectory_playback_visuals(value)
+        total = len(self.trajectory_data["nozzle_points"])
+        if value >= total - 1:
+            self._update_coverage_correction_plan()
 
     def _toggle_trajectory_playback(self):
         if self.trajectory_data is None or self.display_mode != "trajectory":
@@ -3889,6 +3945,12 @@ class ProductViewer(QWidget):
             )
             self._update_trajectory_time_label(final_index)
         self.plotter.render()
+        if cache is not None and len(cache["nozzle_points"]):
+            if cache["coverage_processed_index"] < len(cache["nozzle_points"]) - 1:
+                self._update_paint_coverage_visualization(
+                    len(cache["nozzle_points"]) - 1
+                )
+            self._update_coverage_correction_plan()
 
     def _advance_trajectory_playback(self):
         if self._playback_finished:
