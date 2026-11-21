@@ -4227,8 +4227,9 @@ class MainWindow(QMainWindow):
                 f"{100.0 * evaluation.get('area_weighted_relative_coverage', 0.0):.2f}%\n"
                 f"SELECTION: {metadata.get('selection_status', 'UNKNOWN')}\n\n"
                 "GREEN SPHERES: NOZZLE SPRAY LOCATIONS.\n"
-                "FAINT AMBER ELLIPSES: APPROXIMATE SPRAY FOOTPRINTS.\n"
-                "NO TRAVEL PATH OR CONNECTOR IS DISPLAYED.\n"
+                "FAINT AMBER AREAS: FIRST-HIT SPRAY CONE INTERSECTIONS ON THE PRODUCT.\n"
+                "ORANGE LINES: OUTER BOUNDARIES OF EACH SURFACE FOOTPRINT.\n"
+                "NO FREE-SPACE FOOTPRINT OR TRAVEL PATH IS DISPLAYED.\n"
                 "RELATIVE DEPOSITION MODEL IS NOT CALIBRATED."
             )
             self._finish_operation_ui(True)
