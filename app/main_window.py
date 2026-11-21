@@ -4192,13 +4192,13 @@ class MainWindow(QMainWindow):
                 if len(nozzle_points) >= 2 else 0.0
             )
             self.analysis_summary.setText(
-                "INTERACTIVE SPRAY PATH RECORDED\\n\\n"
-                f"RECORDED POSES: {len(nozzle_points)}\\n"
-                f"PATH LENGTH: {path_length:.2f} {self.coordinate_unit}\\n"
-                f"STANDOFF: {result['standoff_source_units']:.2f} {self.coordinate_unit}\\n"
-                f"CONE ANGLE: {result['cone_angle_deg']:.1f} deg\\n\\n"
-                "GREEN: RECORDED SPRAY FOOTPRINTS\\n"
-                "CYAN: RECORDED NOZZLE PATH\\n"
+                "INTERACTIVE SPRAY PATH RECORDED\n\n"
+                f"RECORDED POSES: {len(nozzle_points)}\n"
+                f"PATH LENGTH: {path_length:.2f} {self.coordinate_unit}\n"
+                f"STANDOFF: {result['standoff_source_units']:.2f} {self.coordinate_unit}\n"
+                f"CONE ANGLE: {result['cone_angle_deg']:.1f} deg\n\n"
+                "GREEN: RECORDED SPRAY FOOTPRINTS\n"
+                "CYAN: RECORDED NOZZLE PATH\n"
                 "PATH IS STORED SEPARATELY FROM THE AUTOMATIC STAGE 3 TRAJECTORY."
             )
             self.status_bar.showMessage(
@@ -4244,11 +4244,11 @@ class MainWindow(QMainWindow):
             "SPRAY CURSOR ACTIVE | MOVE TO AIM | HOLD LEFT MOUSE TO RECORD | RELEASE TO PAUSE"
         )
         self.analysis_summary.setText(
-            "INTERACTIVE SPRAY CURSOR ACTIVE\\n\\n"
-            "MOVE THE MOUSE OVER THE PRODUCT TO POSITION THE NOZZLE.\\n"
-            "THE NOZZLE MAINTAINS THE CONFIGURED STANDOFF FROM THE SURFACE.\\n"
-            "HOLD THE LEFT MOUSE BUTTON WHILE MOVING TO RECORD.\\n"
-            "RELEASE THE BUTTON TO PAUSE RECORDING.\\n"
+            "INTERACTIVE SPRAY CURSOR ACTIVE\n\n"
+            "MOVE THE MOUSE OVER THE PRODUCT TO POSITION THE NOZZLE.\n"
+            "THE NOZZLE MAINTAINS THE CONFIGURED STANDOFF FROM THE SURFACE.\n"
+            "HOLD THE LEFT MOUSE BUTTON WHILE MOVING TO RECORD.\n"
+            "RELEASE THE BUTTON TO PAUSE RECORDING.\n"
             "CLICK FINISH INTERACTIVE SPRAY PATH TO COMPLETE."
         )
 
