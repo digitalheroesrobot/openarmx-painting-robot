@@ -11,6 +11,10 @@ import trimesh
 
 from core.result_manager import ResultManager
 from core.coating_process import validate_coating_process
+from stages.human_like_spray_planner import (
+    SweepPlanningConfig,
+    plan_human_like_sweeps,
+)
 
 
 # ============================================================
@@ -3553,7 +3557,7 @@ def _build_analysis(
         {
             "metric": "Trajectory segments",
             "value": path_metrics["segment_count"],
-            "meaning": "Number of separate patch paths.",
+            "meaning": "Number of spatially continuous serpentine sweep segments.",
         },
         {
             "metric": "Invalid face normals",
@@ -4307,7 +4311,9 @@ def generate_spray_trajectory(
     # 6a. Construct a provisional geometric nozzle frame at each sample.
     nozzle_frames = _build_nozzle_frames(spray_directions)
 
-    # 7. Generate planar raster lanes from the configured fan width/overlap.
+    # 7. Build one spatially connected global serpentine sweep plan.
+    # CAD face and patch IDs remain metadata; they do not create stroke
+    # boundaries. Only a true 3D spatial gap separates sweep segments.
     profile_for_path = (
         dict(sprayer_profile) if isinstance(sprayer_profile, dict) else {}
     )
@@ -4318,47 +4324,139 @@ def generate_spray_trajectory(
     )
     path_spray_width_mm = spray_footprint["width_mm"]
     path_track_spacing_mm = spray_footprint["nominal_track_spacing_mm"]
+    # A zero/unspecified cone angle cannot define a footprint lane spacing.
+    # In that case, use the configured point spacing as a geometric fallback
+    # and report that coverage spacing is not physically established.
+    effective_lane_spacing_mm = (
+        path_track_spacing_mm
+        if path_track_spacing_mm > 0.0
+        else sampling_spacing_mm
+    )
     path_track_spacing_units = _mm_to_coordinate_units(
-        path_track_spacing_mm, source_unit
-    ) if path_track_spacing_mm > 0.0 else 0.0
+        effective_lane_spacing_mm, source_unit
+    )
+    sweep_config = SweepPlanningConfig(
+        lane_spacing=path_track_spacing_units,
+        sample_spacing=spacing_coordinate_units,
+        max_gap_factor=2.75,
+        tangent_blend=0.35,
+    )
+    sweep = plan_human_like_sweeps(
+        surface_points=surface_points,
+        surface_normals=surface_normals,
+        face_indices=face_indices,
+        patch_ids=patch_ids,
+        config=sweep_config,
+    )
+    ordered = {
+        "surface_points": sweep["surface_points"],
+        "surface_normals": sweep["surface_normals"],
+        "face_indices": sweep["face_indices"],
+        "patch_ids": sweep["patch_ids"],
+        "segment_ids": sweep["segment_ids"],
+        "spray_directions": sweep["spray_directions"],
+        "nozzle_frames": sweep["nozzle_frames"],
+    }
+    # Preserve the exact requested stand-off at every generated point.
+    ordered["nozzle_points"] = (
+        ordered["surface_points"]
+        + standoff_coordinate_units * ordered["surface_normals"]
+    )
 
-    if path_track_spacing_units > 0.0:
-        ordered = _order_trajectory_with_planar_raster(
-            mesh=mesh,
-            face_normals=normals,
-            surface_points=surface_points,
-            surface_normals=surface_normals,
-            nozzle_points=nozzle_points,
-            spray_directions=spray_directions,
-            nozzle_frames=nozzle_frames,
-            face_indices=face_indices,
-            patch_ids=patch_ids,
-            standoff_coordinate_units=standoff_coordinate_units,
-            sampling_spacing_coordinate_units=spacing_coordinate_units,
-            track_spacing_coordinate_units=path_track_spacing_units,
-            coordinate_unit=source_unit,
-        )
-    else:
-        ordered = _order_trajectory_by_patch(
-            surface_points=surface_points,
-            surface_normals=surface_normals,
-            nozzle_points=nozzle_points,
-            spray_directions=spray_directions,
-            nozzle_frames=nozzle_frames,
-            face_indices=face_indices,
-            patch_ids=patch_ids,
-        )
-        ordered["rasterized_planar_patch_ids"] = []
-        ordered["nearest_neighbor_fallback_patch_ids"] = [
-            int(value) for value in np.unique(patch_ids)
+    segment_metadata = []
+    for segment_id in np.unique(ordered["segment_ids"]):
+        indices = np.flatnonzero(ordered["segment_ids"] == segment_id)
+        segment_patch_ids = np.unique(ordered["patch_ids"][indices])
+        segment_metadata.append({
+            "segment_id": int(segment_id),
+            "start_index": int(indices[0]),
+            "end_index_exclusive": int(indices[-1] + 1),
+            "sample_count": int(len(indices)),
+            "lane_id": int(sweep["lane_ids"][indices[0]]),
+            "patch_ids": [int(value) for value in segment_patch_ids],
+            "path_type": "global_spatial_serpentine_sweep",
+        })
+    ordered["segments"] = segment_metadata
+    ordered["surface_boundary_splits"] = {
+        "status": "NO_TOPOLOGY_BASED_SPLITS",
+        "adjacency_authority": "3D_SPATIAL_GAP_ONLY",
+        "policy": (
+            "CAD face and patch boundaries do not create spray-OFF breaks; "
+            "only spatially discontinuous ordered samples start a new segment."
+        ),
+        "added_stroke_count": 0,
+        "split_transition_counts": {},
+    }
+    ordered["step_surface_refinement"] = {
+        "status": "NOT_RUN_GLOBAL_SWEEP_V1",
+        "normal_source": "STL_TRIANGLE_FACE_NORMALS",
+        "reason": (
+            "The global sweep preserves the sampled PRODUCT_CAD surface points "
+            "and their local mesh normals without applying a separate B-Rep path "
+            "reconstruction pass."
+        ),
+    }
+    ordered["travel_ordering"] = {
+        "algorithm": sweep["algorithm"],
+        "lane_count": int(sweep["lane_count"]),
+        "segment_count": int(sweep["segment_count"]),
+        "ordering_optimization": "PCA_PROJECTED_SERPENTINE",
+        "gap_split_threshold_coordinate_units": float(
+            sweep["gap_split_threshold"]
+        ),
+        "face_and_patch_boundaries_used_for_splitting": False,
+    }
+    ordered["max_normal_smoothing_deviation_deg"] = 0.0
+    ordered["rasterized_planar_patch_ids"] = []
+    ordered["rasterized_curved_patch_ids"] = []
+    ordered["normal_partitioned_patch_ids"] = []
+    ordered["nearest_neighbor_fallback_patch_ids"] = []
+
+    per_patch_statistics = []
+    for patch_id in np.unique(ordered["patch_ids"]):
+        patch_mask = ordered["patch_ids"] == patch_id
+        touching_segments = [
+            item for item in segment_metadata
+            if int(patch_id) in item["patch_ids"]
         ]
-        ordered, step_surface_refinement = _refine_trajectory_with_step_brep(
-            mesh=mesh,
-            trajectory=ordered,
-            standoff_coordinate_units=standoff_coordinate_units,
-            coordinate_unit=source_unit,
-        )
-        ordered["step_surface_refinement"] = step_surface_refinement
+        per_patch_statistics.append({
+            "patch_id": int(patch_id),
+            "path_type": "global_spatial_serpentine_sweep",
+            "sample_count": int(np.count_nonzero(patch_mask)),
+            "segment_count": int(len(touching_segments)),
+        })
+    ordered["path_statistics"] = {
+        "source_candidate_sample_count": int(len(surface_points)),
+        "playback_sample_count": int(len(ordered["surface_points"])),
+        "global_sweep_sample_count": int(len(ordered["surface_points"])),
+        "global_sweep_segment_count": int(len(segment_metadata)),
+        "lane_count": int(sweep["lane_count"]),
+        "planar_sample_count": 0,
+        "curved_sample_count": 0,
+        "fallback_sample_count": 0,
+        "planar_segment_count": 0,
+        "curved_segment_count": 0,
+        "fallback_segment_count": 0,
+        "planar_patch_ids": [],
+        "curved_patch_ids": [],
+        "fallback_patch_ids": [],
+        "per_patch": per_patch_statistics,
+        "algorithm": sweep["algorithm"],
+        "note": (
+            "Every Stage 2 candidate sample is preserved exactly once. "
+            "Path segments are separated only by 3D spatial gaps, not by "
+            "source face or patch identity. This geometric ordering does not "
+            "constitute a verified spray-coverage result."
+        ),
+    }
+
+    print(
+        "GLOBAL SPRAY SWEEP | "
+        f"{len(ordered['surface_points']):,} samples | "
+        f"{sweep['lane_count']} lanes | "
+        f"{sweep['segment_count']} spatial segments | "
+        f"lane spacing {effective_lane_spacing_mm:.2f} mm"
+    )
 
     # 7a. Transform CAD-local samples and nozzle frames into World XYZ.
     # The source mesh and CAD-local arrays remain unchanged.
@@ -4583,15 +4681,21 @@ def generate_spray_trajectory(
         "trajectory_validation": trajectory_validation,
         "inter_segment_travel_plan": inter_segment_travel_plan,
         "rasterization": {
-            "algorithm": "planar_and_pca_surface_following_triangle_raster",
+            "algorithm": "PCA_SPATIAL_SERPENTINE_SWEEP",
             "rasterized_planar_patch_ids": ordered.get("rasterized_planar_patch_ids", []),
             "rasterized_curved_patch_ids": ordered.get("rasterized_curved_patch_ids", []),
             "nearest_neighbor_fallback_patch_ids": ordered.get("nearest_neighbor_fallback_patch_ids", []),
             "lane_spacing_mm": path_track_spacing_mm,
             "lane_spacing_coordinate_units": path_track_spacing_units,
-            "lane_direction_policy": "principal_axis_projection",
-            "curved_patch_policy": "barycentric_surface_reconstruction_with_local_normals",
-            "curved_projection_limitations": "PCA projection is approximate; folded or ambiguous patches are rejected to fallback.",
+            "lane_direction_policy": "global_principal_axis_projection",
+            "topology_boundary_policy": "NO_SPLIT_ON_FACE_OR_PATCH_ID",
+            "spatial_gap_policy": "split_only_when_ordered_3d_sample_gap_exceeds_threshold",
+            "orientation_policy": "local_surface_normal_with_path_tangent_frame_blending",
+            "coverage_spacing_status": (
+                "FOOTPRINT_AND_OVERLAP_BASED"
+                if path_track_spacing_mm > 0.0
+                else "SAMPLING_SPACING_FALLBACK_NO_PHYSICAL_FOOTPRINT"
+            ),
             "travel_moves_between_segments": "DIRECT_STRAIGHT_LINE_VISUALIZATION_ONLY",
             "coverage_verified": False,
         },
@@ -4754,7 +4858,7 @@ def _build_saved_report(
             "Surface samples and normals currently come from STL triangles, not exact STEP B-Rep face geometry.",
             "Open or non-watertight mesh normals may have uncertain outward direction and require review.",
             "The product CAD-to-World rigid transform is recorded and world-coordinate arrays are exported.",
-            "Planar patches use clipped serpentine raster lanes; smooth curved patches use PCA-projected lanes reconstructed on source triangles with local normals. Ambiguous folded projections retain an explicitly reported fallback.",
+            "The initial generator uses global PCA-projected serpentine sweeps over all sampled paintable surfaces; local mesh normals guide nozzle orientation, and only 3D spatial gaps split segments.",
             "Raster lane spacing uses the configured equivalent fan-width estimate and overlap; physical coating coverage is not verified.",
             "Inter-segment travel is represented as direct straight-line, spray-OFF visualization estimates only; collision and reachability are not checked.",
             "Travel movements between separate patches are also represented by the same unvalidated straight-line estimates.",
