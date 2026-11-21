@@ -73,10 +73,13 @@ def optimize_redundant_spray_points(
     cone_tangent = math.tan(math.radians(angle * 0.5))
     nominal_radius = standoff * cone_tangent
     search_radius = max(2.5 * nominal_radius, 2.0 * spacing, 1e-9)
+    # A 10% inner-cone margin protects against gaps between finite-area probes.
+    protected_cone_tangent = 0.90 * cone_tangent
 
     tree = cKDTree(probes)
     neighborhoods = tree.query_ball_point(candidates, r=search_radius)
     footprints: list[np.ndarray] = []
+    protected_footprints: list[np.ndarray] = []
     footprint_area = np.zeros(count, dtype=np.float64)
     for index, neighborhood in enumerate(neighborhoods):
         candidate_indices = np.asarray(neighborhood, dtype=np.int64)
@@ -89,13 +92,21 @@ def optimize_redundant_spray_points(
             & (radial_squared <= (axial * cone_tangent + 1e-10) ** 2)
         )
         selected = candidate_indices[inside]
+        protected_inside = (
+            (axial > 0.0)
+            & (radial_squared <= (axial * protected_cone_tangent + 1e-10) ** 2)
+        )
+        protected_selected = candidate_indices[protected_inside]
         footprints.append(np.unique(selected))
+        protected_footprints.append(np.unique(protected_selected))
         if len(selected):
             footprint_area[index] = float(np.sum(weights[selected]))
 
     coverage_count = np.zeros(probe_count, dtype=np.int32)
-    for footprint in footprints:
+    protected_coverage_count = np.zeros(probe_count, dtype=np.int32)
+    for footprint, protected_footprint in zip(footprints, protected_footprints):
         coverage_count[footprint] += 1
+        protected_coverage_count[protected_footprint] += 1
 
     initial_covered = coverage_count > 0
     initial_overlap = np.zeros(count, dtype=np.float64)
@@ -124,8 +135,17 @@ def optimize_redundant_spray_points(
         if current_overlap + 1e-12 < threshold_fraction:
             continue
         # No sampled surface area may become newly uncovered.
-        if np.all(coverage_count[footprint] > 1):
+        protected_footprint = protected_footprints[index]
+        # Every probe in this candidate's true cone footprint must remain
+        # covered by another candidate's 90%-radius inner cone.
+        own_protected = np.isin(footprint, protected_footprint, assume_unique=True)
+        other_protected_count = (
+            protected_coverage_count[footprint] - own_protected.astype(np.int32)
+        )
+        if np.all(other_protected_count > 0):
             coverage_count[footprint] -= 1
+            if len(protected_footprint):
+                protected_coverage_count[protected_footprint] -= 1
             active[index] = False
             removed_count += 1
 
@@ -158,6 +178,7 @@ def optimize_redundant_spray_points(
         "standoff_coordinate_units": standoff,
         "nominal_planar_footprint_radius_coordinate_units": nominal_radius,
         "neighborhood_search_radius_coordinate_units": search_radius,
+        "coverage_inner_cone_margin_percent": 10.0,
         "input_point_count": int(count),
         "probe_count": int(probe_count),
         "probe_spacing_coordinate_units": spacing,
@@ -178,7 +199,8 @@ def optimize_redundant_spray_points(
         ),
         "area_measurement": "DENSE_TRIANGLE_AREA_WEIGHTED_MESH_PROBE_ESTIMATE",
         "coverage_preservation_policy": (
-            "NO_PREVIOUSLY_COVERED_SURFACE_PROBE_MAY_BECOME_UNCOVERED"
+            "NO_TRUE_FOOTPRINT_PROBE_MAY_LOSE_ALL_OTHER_COVERAGE; "
+            "OTHER_CONES_MUST_COVER_IT_WITH_10_PERCENT_INNER_MARGIN"
         ),
         "geometry_limitations": [
             "Cone membership and area are estimated at dense area-weighted mesh probes, not by exact continuous cone-triangle clipping.",
