@@ -89,6 +89,44 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             np.testing.assert_allclose(frame.T @ frame, np.eye(3), atol=1e-8)
             self.assertAlmostEqual(float(np.linalg.det(frame)), 1.0, places=8)
 
+    def test_surface_sampling_spacing_uses_footprint_and_overlap(self):
+        half_overlap = self._generate([7, 9])
+        high_overlap_profile = self.profile.copy()
+        high_overlap_profile["overlap_percent"] = 75.0
+        high_overlap = generate_spray_trajectory(
+            mesh=self.mesh.copy(),
+            face_status_labels=self.status.copy(),
+            patch_labels=np.asarray([7, 9], dtype=np.int64),
+            standoff_mm=100.0,
+            sampling_spacing_mm=10.0,
+            spray_angle_deg=45.0,
+            coordinate_unit="mm",
+            sprayer_profile=high_overlap_profile,
+        )
+
+        width = 2.0 * 100.0 * np.tan(np.deg2rad(45.0 / 2.0))
+        expected_half_overlap_spacing = min(width * 0.5, width * 0.5)
+        expected_high_overlap_spacing = min(width * 0.25, width * 0.5)
+
+        self.assertAlmostEqual(
+            half_overlap["sampling"]["coverage_spacing_mm"],
+            expected_half_overlap_spacing,
+            places=8,
+        )
+        self.assertAlmostEqual(
+            high_overlap["sampling"]["coverage_spacing_mm"],
+            expected_high_overlap_spacing,
+            places=8,
+        )
+        self.assertGreater(
+            high_overlap["sampling"]["sample_count"],
+            half_overlap["sampling"]["sample_count"],
+        )
+        self.assertEqual(
+            high_overlap["sampling"]["coverage_spacing_basis"],
+            "SPRAY_FOOTPRINT_AND_OVERLAP",
+        )
+
     def test_legacy_16_column_data_contract_is_unchanged(self):
         result = self._generate([7, 9])
         trajectory = result
