@@ -54,7 +54,7 @@ class CoatingProcessTests(unittest.TestCase):
 
     def test_minimum_speed_cannot_exceed_base_speed(self):
         values = dict(DEFAULT_COATING_PROCESS)
-        values["min_travel_speed_mm_s"] = 200
+        values["min_travel_speed_mm_s"] = 600
         with self.assertRaises(ValueError):
             validate_coating_process(values)
 
