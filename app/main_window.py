@@ -652,10 +652,9 @@ class MainWindow(QMainWindow):
         # WORKFLOW NAVIGATION
         # ----------------------------------------------------
 
-        # Keep workflow navigation objects for internal state,
-        # but do not display the navigation bar.
+        # Show the workflow navigation through the first spray-trajectory stage.
         self.workflow_bar = self._build_workflow_bar()
-        self.workflow_bar.hide()
+        self.workflow_bar.show()
 
         # ----------------------------------------------------
         # MAIN WORKSPACE
@@ -819,8 +818,8 @@ class MainWindow(QMainWindow):
                 self._select_workflow_stage(i)
             )
 
-            # Later workflow stages are intentionally hidden for now.
-            if index >= STAGE_SPRAY_TRAJECTORY:
+            # Reopen Stage 3 only; robot configuration and execution remain hidden.
+            if index > STAGE_SPRAY_TRAJECTORY:
                 button.hide()
             else:
                 layout.addWidget(button, 1)
@@ -2666,9 +2665,6 @@ class MainWindow(QMainWindow):
                 ]
                 and self.current_stage1_result is not None
             )
-
-        if stage_index == STAGE_SPRAY_TRAJECTORY:
-            return False
 
         if stage_index == STAGE_SPRAY_TRAJECTORY:
 
