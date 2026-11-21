@@ -3089,7 +3089,7 @@ class ProductViewer(QWidget):
             "150%+ — OVERSPRAY",
         )
         entries = []
-        for ratio, rgb, color_hex, meaning in zip(
+        for ratio, color_hex, meaning in zip(
             FILM_THICKNESS_COLOR_STOPS,
             FILM_THICKNESS_COLOR_HEX,
             labels,
