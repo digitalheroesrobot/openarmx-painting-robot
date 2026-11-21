@@ -3342,6 +3342,90 @@ class ProductViewer(QWidget):
             f"deposited on modeled surface: {cache['deposition_total_volume_mm3']:.3f} mm³."
         )
 
+    def _update_coverage_correction_plan(self):
+        """Analyze the complete Stage-2 target after playback and propose deficits."""
+        cache = self._prepare_trajectory_playback_cache()
+        if cache is None:
+            return None
+        if cache["target_mask_status"] != "READY" or len(cache["face_samples"]) == 0:
+            self.trajectory_correction_label.setText(
+                "COVERAGE CORRECTION | N/A — COMPLETE STAGE 2 TARGET MASK REQUIRED"
+            )
+            cache["coverage_correction_plan"] = None
+            return None
+        if cache["deposition_readiness"] != "INPUTS_READY_UNCALIBRATED":
+            missing = ", ".join(cache["deposition_missing_inputs"])
+            self.trajectory_correction_label.setText(
+                "COVERAGE CORRECTION | N/A — PROCESS INPUTS REQUIRED: "
+                + missing.upper()
+            )
+            cache["coverage_correction_plan"] = None
+            return None
+
+        process = cache["coating_process"]
+        parameters = self.trajectory_data.get("parameters", {})
+        sampling_spacing_mm = float(parameters.get("sampling_spacing_mm", 10.0))
+        footprint_width_mm = float(cache["footprint_width_mm"])
+        # A conservative spatial grouping limit: correction waypoints remain
+        # separated at patch boundaries and abrupt normal changes.
+        max_gap_mm = max(
+            3.0 * sampling_spacing_mm,
+            0.75 * footprint_width_mm,
+            1.0,
+        )
+        points_mm = cache["face_samples"] * cache["mm_per_unit"]
+        target_mask = np.ones(len(points_mm), dtype=bool)
+        plan = build_coverage_correction_plan(
+            sample_points_mm=points_mm,
+            sample_normals=cache["sample_normals"],
+            sample_area_mm2=cache["sample_area_mm2"],
+            target_mask=target_mask,
+            reached_mask=cache["coverage_sample_hits"],
+            thickness_um=cache["deposition_sample_thickness_um"],
+            target_thickness_um=float(
+                process["target_dry_film_thickness_um"]
+            ),
+            patch_ids=cache["sample_patch_ids"],
+            standoff_mm=float(cache["standoff_units"] * cache["mm_per_unit"]),
+            max_gap_mm=max_gap_mm,
+            lower_ratio=0.90,
+            upper_ratio=1.10,
+            max_normal_change_deg=30.0,
+        )
+        cache["coverage_correction_plan"] = plan
+        analysis = plan["analysis"]
+        strokes = plan["correction_strokes"]
+        stroke_count = len(strokes["stroke_ranges"])
+        waypoint_count = len(strokes["source_sample_indices"])
+        unreached_area = float(np.sum(
+            cache["sample_area_mm2"][analysis["unreached_sample_indices"]]
+        ))
+        unreached_percent = (
+            100.0 * unreached_area / analysis["target_area_mm2"]
+            if analysis["target_area_mm2"] > 0.0 else 0.0
+        )
+        self.trajectory_correction_label.setText(
+            "SURFACE DEFICIT | "
+            f"REACH {analysis['geometric_reach_percent']:.1f}%  "
+            f"BELOW 90% DFT {analysis['below_target_area_percent']:.1f}%  "
+            f"IN BAND {analysis['in_target_band_area_percent']:.1f}%  "
+            f"OVER {analysis['over_target_area_percent']:.1f}%  "
+            f"UNREACHED {unreached_percent:.1f}%\n"
+            "CORRECTION CANDIDATES | "
+            f"{stroke_count} STROKES / {waypoint_count} WAYPOINTS "
+            "| PREDICTED ONLY — NOT EXECUTION READY"
+        )
+        self.trajectory_correction_label.setToolTip(
+            "Area-weighted analysis of every Stage-2 paintable sample; excluded "
+            "faces are omitted. Deficits are samples below 90% of target dry-film "
+            "thickness. Candidate paths are grouped by Stage-1 patch, spatial gap "
+            "and surface-normal change. They are not collision checked, visibility "
+            "rechecked from their new nozzle poses, robot-IK checked, or validated "
+            "against calibrated spray deposition. Current process inputs are "
+            "uncalibrated. Do not execute these candidates on a robot."
+        )
+        return plan
+
     def _on_film_thickness_visibility_changed(self, checked):
         cache = self._prepare_trajectory_playback_cache()
         if checked and (
