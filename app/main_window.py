@@ -2537,7 +2537,28 @@ class MainWindow(QMainWindow):
         )
         if dialog.exec() != QDialog.Accepted or dialog.selected_process is None:
             return
+        previous_process = dict(self.coating_process)
         self.coating_process = dict(dialog.selected_process)
+        motion_keys = (
+            "base_travel_speed_mm_s",
+            "min_travel_speed_mm_s",
+            "max_travel_acceleration_mm_s2",
+        )
+        timing_stale = any(
+            float(previous_process.get(key, 0.0)) != float(self.coating_process.get(key, 0.0))
+            for key in motion_keys
+        )
+        self.viewer.update_coating_process_preview(
+            self.coating_process, timing_stale=timing_stale
+        )
+        if not timing_stale and self.current_stage3_parameters is not None:
+            self.current_stage3_parameters["coating_process"] = dict(self.coating_process)
+            if isinstance(self.current_stage3_result, dict):
+                trajectory = self.current_stage3_result.get("trajectory", {})
+                if isinstance(trajectory, dict):
+                    parameters = dict(trajectory.get("parameters", {}))
+                    parameters["coating_process"] = dict(self.coating_process)
+                    trajectory["parameters"] = parameters
         self.coating_process_label.setText(
             f"PROCESS: {self.coating_process.get('name', 'Unnamed')}  |  "
             f"TARGET: {self.coating_process['target_dry_film_thickness_um']:.1f} µm  |  "
@@ -2564,6 +2585,17 @@ class MainWindow(QMainWindow):
                     np.asarray(previous[key], dtype=float),
                     rtol=0.0,
                     atol=1e-8,
+                ):
+                    return False
+            elif key == "coating_process":
+                motion_keys = (
+                    "base_travel_speed_mm_s",
+                    "min_travel_speed_mm_s",
+                    "max_travel_acceleration_mm_s2",
+                )
+                if any(
+                    value.get(motion_key) != previous[key].get(motion_key)
+                    for motion_key in motion_keys
                 ):
                     return False
             elif value != previous[key]:
@@ -2822,10 +2854,13 @@ class MainWindow(QMainWindow):
             ):
 
                 self.start_analysis_button.setText(
-                    "SPRAY TRAJECTORY COMPLETE"
+                    "REGENERATE SPRAY TRAJECTORY"
                 )
 
-                self.start_analysis_button.setEnabled(False)
+                self.start_analysis_button.setEnabled(
+                    self._stage_available(STAGE_SPRAY_TRAJECTORY)
+                    and not self._operation_running
+                )
 
             else:
 
@@ -3212,7 +3247,7 @@ class MainWindow(QMainWindow):
 
         elif self.active_stage == STAGE_SPRAY_TRAJECTORY:
 
-            self.run_spray_trajectory()
+            self.run_spray_trajectory(force=True)
             return
 
         # ----------------------------------------------------
@@ -4072,7 +4107,7 @@ class MainWindow(QMainWindow):
     # STAGE 3 - SPRAY TRAJECTORY GENERATION
     # ========================================================
 
-    def run_spray_trajectory(self):
+    def run_spray_trajectory(self, force=False):
         if self.current_mesh is None or self._operation_running:
             return
 
@@ -4103,7 +4138,8 @@ class MainWindow(QMainWindow):
             return
 
         if (
-            self.stage_completed[STAGE_SPRAY_TRAJECTORY]
+            not force
+            and self.stage_completed[STAGE_SPRAY_TRAJECTORY]
             and self._stage3_parameters_match()
         ):
             return
