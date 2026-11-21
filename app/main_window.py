@@ -2728,9 +2728,9 @@ class MainWindow(QMainWindow):
         stage = WORKFLOW_STAGES[self.active_stage]
 
         if hasattr(self, "spray_playback_section"):
-            self.spray_playback_section.setVisible(
-                self.current_stage3_result is not None
-            )
+            # Stage 3 playback remains hidden while trajectory generation
+            # and all downstream stages are locked.
+            self.spray_playback_section.hide()
 
         self.current_stage_label.setText(stage["name"])
         self.workflow_description.setText(stage["description"])
@@ -3151,14 +3151,11 @@ class MainWindow(QMainWindow):
         """
         Handle the main workflow action button.
 
-        Stage 2:
-            Verify all patches are inspected.
-            Switch to Stage 3.
-            Collapse Patch Inspection.
-            Start spray trajectory generation immediately.
+        Surface identification:
+            Run identification and allow manual patch decisions.
+            Stop when all patches have been inspected.
 
-        Stage 3:
-            Generate or regenerate the spray trajectory.
+        Trajectory generation and all later stages are currently locked.
         """
 
         if self._operation_running:
