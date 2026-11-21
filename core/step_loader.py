@@ -977,6 +977,32 @@ END-ISO-10303-21;
     assert topology["summary"]["non_manifold_edges"] == 0
     print("[PASS] Exact B-Rep shared-edge adjacency and seam classification")
 
+    # Exact surface-normal derivative tests (analytic plane/cylinder tangent bases).
+    plane_normal = _surface_normal_from_derivatives(
+        [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]
+    )
+    assert np.allclose(plane_normal, [0.0, 0.0, 1.0], atol=1e-12)
+    reversed_plane_normal = _surface_normal_from_derivatives(
+        [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], reversed_face=True
+    )
+    assert np.allclose(reversed_plane_normal, [0.0, 0.0, -1.0], atol=1e-12)
+
+    # Cylinder at angle zero: dS/du points +Y and dS/dv points +Z.
+    cylinder_normal = _surface_normal_from_derivatives(
+        [0.0, 10.0, 0.0], [0.0, 0.0, 1.0]
+    )
+    assert np.allclose(cylinder_normal, [1.0, 0.0, 0.0], atol=1e-12)
+
+    try:
+        _surface_normal_from_derivatives([1.0, 0.0, 0.0], [2.0, 0.0, 0.0])
+    except ValueError as exc:
+        assert "undefined" in str(exc)
+    else:
+        raise AssertionError("Degenerate surface derivatives were accepted.")
+    print("[PASS] Exact surface normal from first derivatives")
+    print("[PASS] Reversed STEP face normal orientation")
+    print("[PASS] Degenerate surface derivative rejection")
+
     # Display conversion tests: exact source report remains in millimetres.
     sample_report = {
         "bounding_box": {"dimensions_mm": [100.0, 200.0, 300.0]},
