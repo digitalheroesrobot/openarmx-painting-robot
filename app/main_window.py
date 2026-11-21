@@ -663,6 +663,9 @@ class MainWindow(QMainWindow):
 
         # 3D Viewer
         self.viewer = ProductViewer()
+        self.viewer.playback_state_changed_callback = (
+            self._on_viewer_playback_state_changed
+        )
         self.viewer.pose_confirmed.connect(self._save_reference_pose)
         self.viewer.patch_selected.connect(
             self._on_viewer_patch_selected
@@ -3078,6 +3081,19 @@ class MainWindow(QMainWindow):
             self.start_analysis_button.setVisible(
                 False
             )
+    def _on_viewer_playback_state_changed(self, is_playing):
+        """Lock trajectory generation while its preview is actively playing."""
+        if not hasattr(self, "start_analysis_button"):
+            return
+        if self.active_stage != STAGE_SPRAY_TRAJECTORY:
+            return
+        can_generate = (
+            not bool(is_playing)
+            and not self._operation_running
+            and self._stage_available(STAGE_SPRAY_TRAJECTORY)
+        )
+        self.start_analysis_button.setEnabled(can_generate)
+
     def _set_workflow_status(self, text, color):
         self.workflow_status_label.setText(text)
         self.workflow_status_label.setStyleSheet(
@@ -4114,6 +4130,8 @@ class MainWindow(QMainWindow):
 
     def run_spray_trajectory(self, force=False):
         if self.current_mesh is None or self._operation_running:
+            return
+        if self.viewer.is_trajectory_playing():
             return
 
         if not self._source_unit_ready():
