@@ -3382,11 +3382,19 @@ class ProductViewer(QWidget):
             0.75 * footprint_width_mm,
             1.0,
         )
-        points_mm = cache["face_samples"] * cache["mm_per_unit"]
-        target_mask = np.ones(len(points_mm), dtype=bool)
+        # Deficit samples are cached in Viewer WORLD coordinates. Convert
+        # them back to PRODUCT_CAD before generating correction waypoints.
+        from core.spray_coverage_optimizer import world_samples_to_product_cad_mm
+        points_cad_mm, normals_cad = world_samples_to_product_cad_mm(
+            points_world=cache["face_samples"],
+            normals_world=cache["sample_normals"],
+            product_transform_4x4=self.trajectory_product_transform,
+            mm_per_unit=cache["mm_per_unit"],
+        )
+        target_mask = np.ones(len(points_cad_mm), dtype=bool)
         plan = build_coverage_correction_plan(
-            sample_points_mm=points_mm,
-            sample_normals=cache["sample_normals"],
+            sample_points_mm=points_cad_mm,
+            sample_normals=normals_cad,
             sample_area_mm2=cache["sample_area_mm2"],
             target_mask=target_mask,
             reached_mask=cache["coverage_sample_hits"],
@@ -3422,7 +3430,7 @@ class ProductViewer(QWidget):
             f"UNREACHED {unreached_percent:.1f}%\n"
             "CORRECTION CANDIDATES | "
             f"{stroke_count} STROKES / {waypoint_count} WAYPOINTS "
-            "| PREDICTED ONLY — NOT EXECUTION READY"
+            "| PRODUCT_CAD mm | PREDICTED ONLY — NOT EXECUTION READY"
         )
         self.trajectory_correction_label.setToolTip(
             "Area-weighted analysis of every Stage-2 paintable sample; excluded "
