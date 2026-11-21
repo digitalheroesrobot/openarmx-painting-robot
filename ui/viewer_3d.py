@@ -2794,7 +2794,10 @@ class ProductViewer(QWidget):
             and deposition_readiness == "INPUTS_READY_UNCALIBRATED"
         ):
             self._update_film_thickness_legend(
-                coating_process["target_dry_film_thickness_um"]
+                coating_process.get(
+                    "target_dry_film_thickness_um",
+                    DEFAULT_COATING_PROCESS["target_dry_film_thickness_um"],
+                )
             )
         return self._playback_cache
 
@@ -4438,7 +4441,7 @@ class ProductViewer(QWidget):
             "DARK GREY - EXCLUDED FROM TARGET AREA\n"
             "YELLOW - REQUIRES INSPECTION\n"
             "RED - INVALID SURFACE\n\n"
-            "COVERAGE COLORS SHOW GEOMETRIC REACH ONLY"
+            "WHEN FILM THICKNESS IS OFF: COVERAGE COLORS SHOW GEOMETRIC REACH"
         )
         self.plotter.add_text(
             legend,
