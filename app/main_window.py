@@ -4121,6 +4121,7 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "spray_playback_section"):
             self.spray_playback_section.show()
+            self._right_section_buttons["spray_playback"].setChecked(True)
 
         self._update_viewer_display_unit()
 
