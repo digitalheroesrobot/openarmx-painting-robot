@@ -125,6 +125,7 @@ def calculate_cone_deposition_step(
     *,
     surface_points_mm: np.ndarray,
     surface_normals: np.ndarray,
+    sample_area_mm2: np.ndarray,
     nozzle_position_mm: np.ndarray,
     spray_direction: np.ndarray,
     cone_angle_deg: float,
@@ -147,12 +148,15 @@ def calculate_cone_deposition_step(
     """
     points = np.asarray(surface_points_mm, dtype=np.float64)
     normals = np.asarray(surface_normals, dtype=np.float64)
+    areas = np.asarray(sample_area_mm2, dtype=np.float64)
     nozzle = np.asarray(nozzle_position_mm, dtype=np.float64)
     direction = np.asarray(spray_direction, dtype=np.float64)
     if points.ndim != 2 or points.shape[1] != 3 or not np.all(np.isfinite(points)):
         raise ValueError("surface_points_mm must be finite (N,3).")
     if normals.shape != points.shape or not np.all(np.isfinite(normals)):
         raise ValueError("surface_normals must match surface_points_mm.")
+    if areas.shape != (len(points),) or not np.all(np.isfinite(areas)) or np.any(areas <= 0.0):
+        raise ValueError("sample_area_mm2 must be positive and match surface_points_mm.")
     if nozzle.shape != (3,) or not np.all(np.isfinite(nozzle)):
         raise ValueError("nozzle_position_mm must be finite (3,).")
     if direction.shape != (3,) or not np.all(np.isfinite(direction)):
@@ -209,7 +213,6 @@ def calculate_cone_deposition_step(
     # lower film thickness.
     footprint_area = math.pi * np.maximum(radius, 1e-9) ** 2
 
-    areas = np.ones(len(points), dtype=np.float64)
     density = double_beta_spatial_density(
         normalized_xy, radial_alpha, radial_beta, radial_alpha, radial_beta
     )
@@ -232,9 +235,10 @@ def calculate_cone_deposition_step(
             "footprint_radius_mm": radius,
         }
 
-    # Centroids are point samples. Use equal quadrature weights here; the
-    # caller supplies actual face areas separately when accumulating thickness.
-    weight = density * np.clip(facing, 0.0, 1.0)
+    # Integrate over the actual face area. The footprint area grows with
+    # standoff, so identical paint flow produces a thinner film farther away.
+    weight = density * 4.0 * areas / np.maximum(footprint_area, 1e-12)
+    weight *= np.clip(facing, 0.0, 1.0)
     weight[~inside] = 0.0
     total = float(np.sum(weight))
     if total <= 1e-12:
@@ -247,10 +251,10 @@ def calculate_cone_deposition_step(
             "travel_speed_mm_s": speed,
             "footprint_radius_mm": radius,
         }
-    deposited = input_dry * weight / total
-    # This helper returns volume per centroid; callers divide by actual face
-    # area. Keeping the volume field explicit prevents speed from being hidden
-    # inside an arbitrary visual gain.
+    deposited = input_dry * weight
+    deposited_total = float(np.sum(deposited))
+    if deposited_total > input_dry:
+        deposited *= input_dry / deposited_total
     return {
         "deposited_volume_mm3": deposited,
         "total_deposited_volume_mm3": float(np.sum(deposited)),
