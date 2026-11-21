@@ -2188,6 +2188,16 @@ class ProductViewer(QWidget):
         )
         self.plotter.render()
 
+    def _interactive_refresh_recorded_paint_color(self):
+        """Recolor already recorded footprint actors after a paint-color change."""
+        color = self._trajectory_paint_color_hex or "#D95B43"
+        for actor in self._interactive_spray_painted_actors:
+            try:
+                actor.GetProperty().SetColor(QColor(color).redF(), QColor(color).greenF(), QColor(color).blueF())
+            except Exception:
+                pass
+        self.plotter.render()
+
     def _interactive_remove_live_actors(self):
         for actor in self._interactive_spray_live_actors:
             try:
@@ -2314,7 +2324,9 @@ class ProductViewer(QWidget):
             if recorded_new_pose:
                 painted = patch.copy(deep=True)
                 actor = self.plotter.add_mesh(
-                    painted, color="#00E676", opacity=0.28,
+                    painted,
+                    color=self._trajectory_paint_color_hex or "#D95B43",
+                    opacity=0.42,
                     lighting=False, show_edges=False, pickable=False,
                 )
                 self._interactive_spray_painted_actors.append(actor)
