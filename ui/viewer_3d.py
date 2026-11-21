@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import time
 import numpy as np
 import pyvista as pv
 
@@ -188,6 +189,8 @@ class ProductViewer(QWidget):
         # Stage 3 sequential trajectory playback state.
         self._playback_index = 0
         self._playback_elapsed_s = 0.0
+        self._playback_wall_elapsed_s = 0.0
+        self._playback_wall_started_at = None
         self._playback_finished = False
         self._playback_last_path_render_index = -1
         self._playback_path_actor = None
@@ -887,6 +890,22 @@ class ProductViewer(QWidget):
             self._on_trajectory_playback_slider_changed
         )
         playback_layout.addWidget(self.trajectory_playback_slider)
+
+        self.trajectory_time_label = QLabel(
+            "WALL 00:00 | PATH 00:00 / 00:00 | TRAVEL +00:00 | PLAN 00:00"
+        )
+        self.trajectory_time_label.setMinimumWidth(0)
+        self.trajectory_time_label.setStyleSheet(
+            "color: #B9CCD5; font-size: 9px; font-weight: 700; padding-left: 4px;"
+        )
+        self.trajectory_time_label.setToolTip(
+            "WALL is real time spent in this preview. PATH is calculated spray-path "
+            "time. TRAVEL is the straight-line spray-OFF transfer estimate between "
+            "strokes; transfers are not animated and are not collision checked. "
+            "PLAN is PATH plus estimated TRAVEL; it excludes valve delays, robot "
+            "IK/collision planning, and other cell-cycle overhead."
+        )
+        playback_layout.addWidget(self.trajectory_time_label)
 
         coverage_row = QHBoxLayout()
         coverage_title = QLabel("COVERAGE")
@@ -2505,9 +2524,68 @@ class ProductViewer(QWidget):
         # Keep the 3D viewport free of diagnostic text. Stage 3 metrics
         # belong in the Summary panel, not over the product geometry.
 
+    @staticmethod
+    def _format_playback_duration(seconds):
+        """Format a non-negative duration as MM:SS or HH:MM:SS."""
+        value = max(0, int(round(float(seconds))))
+        hours, remainder = divmod(value, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}"
+
+    def _pause_playback_wall_clock(self):
+        started_at = self._playback_wall_started_at
+        if started_at is not None:
+            self._playback_wall_elapsed_s += max(
+                0.0, time.monotonic() - started_at
+            )
+            self._playback_wall_started_at = None
+
+    def _update_trajectory_time_label(self, index=None):
+        label = getattr(self, "trajectory_time_label", None)
+        if label is None:
+            return
+        cache = self._prepare_trajectory_playback_cache()
+        if cache is None:
+            label.setText("WALL 00:00 | PATH N/A | TRAVEL N/A | PLAN N/A")
+            return
+        times = np.asarray(cache["trajectory_time_s"], dtype=float)
+        if len(times) and np.all(np.isfinite(times)):
+            current_index = self._playback_index if index is None else int(index)
+            current_index = int(np.clip(current_index, 0, len(times) - 1))
+            path_elapsed = max(0.0, float(times[current_index]))
+            path_total = max(0.0, float(times[-1]))
+            path_text = (
+                f"{self._format_playback_duration(path_elapsed)} / "
+                f"{self._format_playback_duration(path_total)}"
+            )
+        else:
+            path_total = 0.0
+            path_text = "N/A"
+        travel_plan = self.trajectory_data.get(
+            "inter_segment_travel_plan", {}
+        ) if isinstance(self.trajectory_data, dict) else {}
+        travel_seconds = float(travel_plan.get("estimated_time_s", 0.0) or 0.0)
+        if not math.isfinite(travel_seconds) or travel_seconds < 0.0:
+            travel_seconds = 0.0
+        total_plan = path_total + travel_seconds
+        wall_elapsed = self._playback_wall_elapsed_s
+        if self._playback_wall_started_at is not None:
+            wall_elapsed += max(
+                0.0, time.monotonic() - self._playback_wall_started_at
+            )
+        label.setText(
+            f"WALL {self._format_playback_duration(wall_elapsed)} | "
+            f"PATH {path_text} | "
+            f"TRAVEL +{self._format_playback_duration(travel_seconds)} | "
+            f"PLAN {self._format_playback_duration(total_plan)}"
+        )
+
     def _stop_trajectory_playback(self, reset=False):
         if hasattr(self, "_playback_timer"):
             self._playback_timer.stop()
+        self._pause_playback_wall_clock()
         if hasattr(self, "trajectory_play_button"):
             self.trajectory_play_button.setText("▶")
         if reset:
@@ -2535,6 +2613,8 @@ class ProductViewer(QWidget):
             self._playback_spray_sheet_actor = None
             self._playback_index = 0
             self._playback_elapsed_s = 0.0
+            self._playback_wall_elapsed_s = 0.0
+            self._playback_wall_started_at = None
             self._playback_finished = False
             self._playback_last_path_render_index = -1
             self._playback_cache = None
@@ -3639,6 +3719,7 @@ class ProductViewer(QWidget):
         self.trajectory_playback_label.setText(
             f"{index + 1:,} / {total:,}  ·  {current_speed:.0f} mm/s  ·  {spray_text}"
         )
+        self._update_trajectory_time_label(index)
         self.trajectory_playback_slider.blockSignals(True)
         self.trajectory_playback_slider.setValue(index)
         self.trajectory_playback_slider.blockSignals(False)
@@ -3686,6 +3767,7 @@ class ProductViewer(QWidget):
         if self.display_mode != "trajectory" or self.trajectory_data is None:
             return
         self._playback_timer.stop()
+        self._pause_playback_wall_clock()
         self._playback_finished = False
         self.trajectory_play_button.setText("▶")
         self._update_trajectory_playback_visuals(value)
@@ -3698,11 +3780,15 @@ class ProductViewer(QWidget):
             return
         if self._playback_timer.isActive():
             self._playback_timer.stop()
+            self._pause_playback_wall_clock()
             self.trajectory_play_button.setText("▶")
+            self._update_trajectory_time_label()
             return
         if self._playback_finished or self._playback_index >= total - 1:
             self._playback_finished = False
             self._playback_elapsed_s = 0.0
+            self._playback_wall_elapsed_s = 0.0
+            self._playback_wall_started_at = None
             self._update_trajectory_playback_visuals(0)
         else:
             cache = self._prepare_trajectory_playback_cache()
@@ -3711,12 +3797,15 @@ class ProductViewer(QWidget):
                 self._playback_elapsed_s = float(times[self._playback_index])
             if self._playback_path_actor is None and self._playback_nozzle_actor is None:
                 self._update_trajectory_playback_visuals(self._playback_index)
+        self._playback_wall_started_at = time.monotonic()
         self.trajectory_play_button.setText("Ⅱ")
+        self._update_trajectory_time_label()
         self._playback_timer.start()
 
     def _complete_trajectory_playback(self):
         """Freeze the gun at the final pose and force all spray visuals OFF."""
         self._playback_timer.stop()
+        self._pause_playback_wall_clock()
         self._playback_finished = True
         self.trajectory_play_button.setText("▶")
 
@@ -3750,6 +3839,7 @@ class ProductViewer(QWidget):
                 f"{final_index + 1} / {len(cache['nozzle_points'])} "
                 "| COMPLETE · SPRAY OFF"
             )
+            self._update_trajectory_time_label(final_index)
         self.plotter.render()
 
     def _advance_trajectory_playback(self):
@@ -3801,6 +3891,7 @@ class ProductViewer(QWidget):
         if self.trajectory_data is None or self.display_mode != "trajectory":
             return
         self._playback_timer.stop()
+        self._pause_playback_wall_clock()
         self._playback_finished = False
         self.trajectory_play_button.setText("▶")
         total = len(self.trajectory_data["nozzle_points"])
