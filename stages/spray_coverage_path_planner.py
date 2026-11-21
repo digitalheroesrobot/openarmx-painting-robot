@@ -86,6 +86,7 @@ def generate_patchwise_raster_candidates(
     track_spacing: float,
     max_normal_angle_deg: float = 35.0,
     planarity_angle_deg: float = 2.0,
+    lane_orientation_angle_deg: float = 0.0,
 ) -> dict[str, Any]:
     """Rasterize each coherent component independently; never spray-connect gaps."""
     values = (standoff, sample_spacing, track_spacing)
@@ -105,6 +106,7 @@ def generate_patchwise_raster_candidates(
         raster = _generate_planar_raster_for_patch(
             mesh, component_faces, face_normals, standoff,
             sample_spacing, track_spacing, planarity_angle_deg,
+            lane_orientation_angle_deg,
         )
         raster_kind = "planar"
         diagnostics: dict[str, Any] = {}
@@ -161,7 +163,8 @@ def generate_patchwise_raster_candidates(
             item["status"] != "RASTERIZED" for item in component_records
         )),
         "segment_count": int(len(np.unique(result["segment_ids"]))) if len(result["segment_ids"]) else 0,
-        "planner": "CONNECTED_PATCH_LOCAL_RASTER_V1",
+        "planner": "CONNECTED_PATCH_LOCAL_RASTER_V2",
+        "lane_orientation_angle_deg": float(lane_orientation_angle_deg),
         "spray_on_connectors_between_components": False,
         "global_pca_ordering_used": False,
         "deposition_optimization_status": "NOT_YET_APPLIED",
