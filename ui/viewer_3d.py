@@ -110,6 +110,7 @@ class ProductViewer(QWidget):
         self.hook_diameter_mm = 4.5
         self.hole_clearance_mm = 1.0
         self.hole_info_visible = False
+        self._hole_overlay_actors = []
 
         self.display_mode = "product"
 
@@ -357,9 +358,10 @@ class ProductViewer(QWidget):
             self._render_product(reset_camera=False)
 
     def _on_hole_info_visibility_changed(self, checked):
+        """Toggle hole annotations without rebuilding the scene or stopping playback."""
         self.hole_info_visible = bool(checked)
         if self.current_mesh is not None:
-            self._render_product(reset_camera=False)
+            self._refresh_hole_candidate_overlay()
 
     def _filtered_hole_candidates(self):
         """
@@ -455,16 +457,30 @@ class ProductViewer(QWidget):
                 f"C=({xyz[0]:.2f}, {xyz[1]:.2f}, {xyz[2]:.2f}) {unit_label}"
             )
         points = pv.PolyData(np.asarray(centers_view, dtype=float))
-        self.plotter.add_mesh(
+        marker_actor = self.plotter.add_mesh(
             points, color="#FF3DCE", style="points", point_size=17,
             render_points_as_spheres=True, lighting=False, pickable=False,
         )
-        self.plotter.add_point_labels(
+        label_actor = self.plotter.add_point_labels(
             np.asarray(centers_view, dtype=float), labels,
             font_size=10, text_color="#FFFFFF", shape="rounded_rect",
             shape_color="#35152F", shape_opacity=0.94,
             always_visible=True, show_points=False, margin=4, pickable=False,
         )
+        self._hole_overlay_actors.extend(
+            actor for actor in (marker_actor, label_actor) if actor is not None
+        )
+
+    def _refresh_hole_candidate_overlay(self):
+        """Replace only hole marker actors; leave all playback actors and timers intact."""
+        for actor in self._hole_overlay_actors:
+            try:
+                self.plotter.remove_actor(actor, render=False)
+            except Exception:
+                pass
+        self._hole_overlay_actors = []
+        self._add_hole_candidate_overlay()
+        self.plotter.render()
 
     def set_source_unit(self, unit):
         normalized = self._normalize_unit(unit)
@@ -937,11 +953,15 @@ class ProductViewer(QWidget):
     def _on_trajectory_visibility_changed(self, key, checked):
         self.trajectory_visibility[key] = bool(checked)
 
-        if (
-            self.display_mode == "trajectory"
-            and self.current_mesh is not None
-        ):
-            self._render_product(reset_camera=False)
+        if self.display_mode != "trajectory" or self.current_mesh is None:
+            return
+
+        if key in ("planar", "curved"):
+            self._update_trajectory_surface_visibility()
+        elif key == "paths":
+            if self._playback_path_actor is not None:
+                self._playback_path_actor.SetVisibility(bool(checked))
+            self.plotter.render()
 
     def _set_trajectory_controls_visible(self, visible):
         self.display_control_panel.setVisible(bool(visible))
@@ -2117,6 +2137,71 @@ class ProductViewer(QWidget):
             return self.face_surface_types == "planar"
 
         return self.face_surface_types == "curved"
+
+    def _update_trajectory_surface_visibility(self):
+        """Update planar/curved styling in-place without restarting playback."""
+        polydata = self._trajectory_surface_polydata
+        if polydata is None or self.face_surface_types is None:
+            self.plotter.render()
+            return
+
+        face_count = len(self.current_mesh.faces)
+        surface_types = np.char.lower(
+            np.asarray(self.face_surface_types).astype(str)
+        )
+        if len(surface_types) != face_count:
+            return
+
+        base_rgb = np.tile(
+            np.asarray([178, 188, 195], dtype=np.uint8),
+            (face_count, 1),
+        )
+        face_opacity = np.ones(face_count, dtype=np.float32)
+        planar_mask = surface_types == "planar"
+        curved_mask = surface_types == "curved"
+        classified_mask = planar_mask | curved_mask
+        planar_selected = bool(self.trajectory_visibility["planar"])
+        curved_selected = bool(self.trajectory_visibility["curved"])
+
+        # Match the normal Stage 3 appearance rules, changing only face styling.
+        if planar_selected and curved_selected:
+            pass
+        elif planar_selected:
+            base_rgb[planar_mask] = [75, 155, 220]
+            face_opacity[classified_mask & ~planar_mask] = 0.20
+        elif curved_selected:
+            base_rgb[curved_mask] = [230, 150, 75]
+            face_opacity[classified_mask & ~curved_mask] = 0.20
+
+        self._trajectory_surface_base_rgb = base_rgb
+        self._trajectory_surface_base_alpha = np.clip(
+            np.rint(face_opacity * 255.0), 0, 255
+        ).astype(np.uint8)
+
+        # Rebuild the current face colors from accumulated coverage so changing
+        # the view does not erase paint already applied during the simulation.
+        colors = base_rgb.copy()
+        cache = self._playback_cache
+        if cache is not None and cache.get("coverage_sample_hits") is not None:
+            face_coverage = cache["coverage_sample_hits"].reshape(
+                -1, cache["sample_count_per_face"]
+            ).mean(axis=1)
+            face_fraction = np.zeros(face_count, dtype=float)
+            valid_display = cache["target_display_indices"] >= 0
+            face_fraction[cache["target_display_indices"][valid_display]] = (
+                face_coverage[valid_display]
+            )
+            painted = (
+                base_rgb.astype(float) * (1.0 - face_fraction[:, None])
+                + cache["paint_rgb"][None, :] * face_fraction[:, None]
+            )
+            colors = np.clip(np.rint(painted), 0, 255).astype(np.uint8)
+
+        self._set_trajectory_surface_rgb(colors)
+        mapper = self._pose_actor.GetMapper() if self._pose_actor is not None else None
+        if mapper is not None:
+            mapper.Update()
+        self.plotter.render()
 
     # =========================================================
     # STAGE 3 TRAJECTORY RENDERING
