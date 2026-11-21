@@ -376,6 +376,31 @@ class ProductViewer(QWidget):
             1.0,
         )
 
+        # Interactive spray-path input. Camera navigation is temporarily
+        # suspended while the nozzle cursor is active in the viewport.
+        self._interactive_spray_active = False
+        self._interactive_spray_recording = False
+        self._interactive_spray_standoff = 0.0
+        self._interactive_spray_cone_angle_deg = 0.0
+        self._interactive_spray_transform = np.eye(4, dtype=float)
+        self._interactive_spray_latest_pose = None
+        self._interactive_spray_records = []
+        self._interactive_spray_painted_actors = []
+        self._interactive_spray_live_actors = []
+        self._interactive_spray_path_actor = None
+        self._interactive_saved_style_enabled = True
+        self._interactive_hud_actor = None
+        self._interactive_last_record_time = 0.0
+        self._interactive_mouse_move_observer_id = interactor.AddObserver(
+            "MouseMoveEvent", self._on_interactive_spray_mouse_move, 2.0
+        )
+        self._interactive_left_press_observer_id = interactor.AddObserver(
+            "LeftButtonPressEvent", self._on_interactive_spray_left_press, 2.0
+        )
+        self._interactive_left_release_observer_id = interactor.AddObserver(
+            "LeftButtonReleaseEvent", self._on_interactive_spray_left_release, 2.0
+        )
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
@@ -2107,13 +2132,322 @@ class ProductViewer(QWidget):
 
         self._render_product(reset_camera=False)
 
+    def start_interactive_spray_path(self, standoff, cone_angle_deg):
+        """Enter surface-following spray cursor mode and begin an empty path."""
+        if self.current_mesh is None:
+            raise RuntimeError("Load a product before starting an interactive spray path.")
+        if not np.isfinite(standoff) or standoff <= 0.0:
+            raise ValueError("Spray standoff must be a positive finite value.")
+        if not np.isfinite(cone_angle_deg) or not 0.0 < cone_angle_deg < 179.0:
+            raise ValueError("Spray cone angle must be in (0, 179) degrees.")
+        if self._pose_actor is None:
+            self.display_mode = "spray_point_preview"
+            self._render_product(reset_camera=False)
+        if self._interactive_spray_active:
+            return
+
+        self._interactive_spray_standoff = float(standoff)
+        self._interactive_spray_cone_angle_deg = float(cone_angle_deg)
+        self._interactive_spray_transform = self._actor_matrix_array().copy()
+        self._interactive_spray_latest_pose = None
+        self._interactive_spray_records = []
+        self._interactive_spray_painted_actors = []
+        self._interactive_spray_live_actors = []
+        self._interactive_spray_active = True
+        self._interactive_spray_recording = False
+        self._interactive_last_record_time = 0.0
+
+        interactor = self.plotter.iren.interactor
+        style = interactor.GetInteractorStyle()
+        if style is not None:
+            self._interactive_saved_style_enabled = bool(style.GetEnabled())
+            style.SetEnabled(0)
+
+        self._interactive_hud_actor = self.plotter.add_text(
+            "SPRAY CURSOR ACTIVE  |  MOVE: AIM  |  HOLD LEFT MOUSE: RECORD  |  RELEASE: PAUSE",
+            position="upper_left",
+            font_size=10,
+            color="#00E5FF",
+            name="interactive_spray_hud",
+        )
+        self.plotter.render()
+
+    def _interactive_remove_live_actors(self):
+        for actor in self._interactive_spray_live_actors:
+            try:
+                self.plotter.remove_actor(actor, render=False)
+            except Exception:
+                pass
+        self._interactive_spray_live_actors = []
+
+    def _interactive_pick_surface_pose(self, x, y):
+        if self._pose_actor is None or self.current_mesh is None:
+            return None
+        picker = self._patch_cell_picker
+        picker.InitializePickList()
+        picker.AddPickList(self._pose_actor)
+        picker.PickFromListOn()
+        if not picker.Pick(int(x), int(y), 0, self.plotter.renderer):
+            return None
+        if picker.GetActor() != self._pose_actor:
+            return None
+
+        cell_id = int(picker.GetCellId())
+        face_normals = np.asarray(self.current_mesh.face_normals, dtype=float)
+        if cell_id < 0 or cell_id >= len(face_normals):
+            return None
+        normal_local = face_normals[cell_id]
+        normal_length = float(np.linalg.norm(normal_local))
+        if not np.isfinite(normal_length) or normal_length <= 1e-12:
+            return None
+        normal_local = normal_local / normal_length
+
+        transform = self._actor_matrix_array()
+        rotation = transform[:3, :3]
+        normal_world = rotation @ normal_local
+        normal_world_length = float(np.linalg.norm(normal_world))
+        if normal_world_length <= 1e-12:
+            return None
+        normal_world /= normal_world_length
+
+        hit_world = np.asarray(picker.GetPickPosition(), dtype=float)
+        if hit_world.shape != (3,) or not np.all(np.isfinite(hit_world)):
+            return None
+        nozzle_world = hit_world + normal_world * self._interactive_spray_standoff
+        spray_direction_world = -normal_world
+        return {
+            "surface_point_world": hit_world,
+            "surface_normal_world": normal_world,
+            "nozzle_point_world": nozzle_world,
+            "spray_direction_world": spray_direction_world,
+            "cell_id": cell_id,
+            "timestamp": time.monotonic(),
+        }
+
+    def _interactive_pose_to_product_frame(self, pose):
+        inverse = np.linalg.inv(self._interactive_spray_transform)
+        point_h = np.append(pose["nozzle_point_world"], 1.0)
+        surface_h = np.append(pose["surface_point_world"], 1.0)
+        return {
+            "nozzle_point": (inverse @ point_h)[:3],
+            "surface_point": (inverse @ surface_h)[:3],
+            "spray_direction": inverse[:3, :3] @ pose["spray_direction_world"],
+        }
+
+    def _interactive_update_cursor(self, pose):
+        self._interactive_remove_live_actors()
+        self._interactive_spray_latest_pose = pose
+        local_pose = self._interactive_pose_to_product_frame(pose)
+        footprints = _build_spray_footprint_overlay(
+            self.current_mesh,
+            local_pose["nozzle_point"].reshape(1, 3),
+            local_pose["spray_direction"].reshape(1, 3),
+            self._interactive_spray_cone_angle_deg,
+            rays_per_ring=16,
+            radial_rings=(0.25, 0.50, 0.75, 1.0),
+        )
+        if footprints and footprints[0][0].n_cells:
+            patch, boundary = footprints[0]
+            patch.points = (
+                np.asarray(patch.points) @ self._interactive_spray_transform[:3, :3].T
+                + self._interactive_spray_transform[:3, 3]
+            )
+            actor = self.plotter.add_mesh(
+                patch, color="#FFC857", opacity=0.16,
+                lighting=False, show_edges=False, pickable=False,
+            )
+            self._interactive_spray_live_actors.append(actor)
+            if boundary.n_cells:
+                boundary.points = (
+                    np.asarray(boundary.points) @ self._interactive_spray_transform[:3, :3].T
+                    + self._interactive_spray_transform[:3, 3]
+                )
+                actor = self.plotter.add_mesh(
+                    boundary, color="#FF9F1C", line_width=2.0,
+                    lighting=False, pickable=False,
+                )
+                self._interactive_spray_live_actors.append(actor)
+
+            if self._interactive_spray_recording:
+                painted = patch.copy(deep=True)
+                actor = self.plotter.add_mesh(
+                    painted, color="#00E676", opacity=0.28,
+                    lighting=False, show_edges=False, pickable=False,
+                )
+                self._interactive_spray_painted_actors.append(actor)
+
+        nozzle = pose["nozzle_point_world"]
+        hit = pose["surface_point_world"]
+        direction = pose["spray_direction_world"]
+        half_angle = math.radians(self._interactive_spray_cone_angle_deg) * 0.5
+        radius = self._interactive_spray_standoff * math.tan(half_angle)
+        cone = pv.Cone(
+            center=((nozzle + hit) * 0.5),
+            direction=direction,
+            height=self._interactive_spray_standoff,
+            radius=max(radius, 1e-6),
+            resolution=32,
+        )
+        actor = self.plotter.add_mesh(
+            cone, color="#FFE082", opacity=0.10,
+            style="wireframe", line_width=1.0,
+            lighting=False, pickable=False,
+        )
+        self._interactive_spray_live_actors.append(actor)
+        marker = pv.Sphere(
+            radius=max(self._interactive_spray_standoff * 0.018, 0.5),
+            center=nozzle, theta_resolution=16, phi_resolution=16,
+        )
+        actor = self.plotter.add_mesh(
+            marker, color="#00E676", smooth_shading=True, pickable=False,
+        )
+        self._interactive_spray_live_actors.append(actor)
+
+        if self._interactive_spray_recording:
+            self._interactive_append_record(pose, local_pose)
+        self.plotter.render()
+
+    def _interactive_append_record(self, pose, local_pose=None):
+        if local_pose is None:
+            local_pose = self._interactive_pose_to_product_frame(pose)
+        if self._interactive_spray_records:
+            previous = self._interactive_spray_records[-1]
+            distance = float(np.linalg.norm(
+                pose["nozzle_point_world"] - previous["nozzle_point_world"]
+            ))
+            dot = float(np.clip(np.dot(
+                pose["surface_normal_world"], previous["surface_normal_world"]
+            ), -1.0, 1.0))
+            angle = math.degrees(math.acos(dot))
+            minimum_step = max(self._interactive_spray_standoff * 0.025, 1e-3)
+            if distance < minimum_step and angle < 2.0:
+                return
+        record = {
+            "nozzle_point_world": pose["nozzle_point_world"].copy(),
+            "surface_point_world": pose["surface_point_world"].copy(),
+            "surface_normal_world": pose["surface_normal_world"].copy(),
+            "spray_direction_world": pose["spray_direction_world"].copy(),
+            "nozzle_point_product": local_pose["nozzle_point"].copy(),
+            "surface_point_product": local_pose["surface_point"].copy(),
+            "spray_direction_product": local_pose["spray_direction"].copy(),
+            "timestamp": float(pose["timestamp"]),
+            "face_index": int(pose["cell_id"]),
+        }
+        self._interactive_spray_records.append(record)
+
+    def _on_interactive_spray_mouse_move(self, interactor, event):
+        if not self._interactive_spray_active:
+            return
+        x, y = interactor.GetEventPosition()
+        pose = self._interactive_pick_surface_pose(x, y)
+        if pose is None:
+            self._interactive_remove_live_actors()
+            self._interactive_spray_latest_pose = None
+            self.plotter.render()
+            return
+        self._interactive_update_cursor(pose)
+
+    def _on_interactive_spray_left_press(self, interactor, event):
+        if not self._interactive_spray_active:
+            return
+        x, y = interactor.GetEventPosition()
+        pose = self._interactive_pick_surface_pose(x, y)
+        if pose is None:
+            return
+        self._interactive_spray_recording = True
+        self._interactive_update_cursor(pose)
+
+    def _on_interactive_spray_left_release(self, interactor, event):
+        if not self._interactive_spray_active:
+            return
+        if self._interactive_spray_latest_pose is not None:
+            self._interactive_append_record(self._interactive_spray_latest_pose)
+        self._interactive_spray_recording = False
+        self.plotter.render()
+
+    def finish_interactive_spray_path(self):
+        """Finish input and return the recorded path without changing Stage 3 data."""
+        if not self._interactive_spray_active:
+            return None
+        self._interactive_spray_recording = False
+        self._interactive_spray_active = False
+        self._interactive_remove_live_actors()
+
+        interactor = self.plotter.iren.interactor
+        style = interactor.GetInteractorStyle()
+        if style is not None:
+            style.SetEnabled(1 if self._interactive_saved_style_enabled else 0)
+
+        if self._interactive_hud_actor is not None:
+            try:
+                self.plotter.remove_actor(self._interactive_hud_actor, render=False)
+            except Exception:
+                pass
+            self._interactive_hud_actor = None
+
+        records = self._interactive_spray_records
+        if len(records) >= 2:
+            points = np.asarray([item["nozzle_point_world"] for item in records])
+            lines = np.hstack(([len(points)], np.arange(len(points), dtype=np.int64)))
+            path = pv.PolyData(points)
+            path.lines = lines
+            self._interactive_spray_path_actor = self.plotter.add_mesh(
+                path, color="#00E5FF", line_width=3.0,
+                lighting=False, pickable=False,
+            )
+
+        inverse = np.linalg.inv(self._interactive_spray_transform)
+        result = {
+            "schema": "INTERACTIVE_SURFACE_FOLLOWING_SPRAY_PATH_V1",
+            "coordinate_frame": "PRODUCT_CAD_AND_WORLD",
+            "standoff_source_units": self._interactive_spray_standoff,
+            "cone_angle_deg": self._interactive_spray_cone_angle_deg,
+            "nozzle_points_product": np.asarray(
+                [item["nozzle_point_product"] for item in records], dtype=float
+            ).reshape(-1, 3),
+            "surface_points_product": np.asarray(
+                [item["surface_point_product"] for item in records], dtype=float
+            ).reshape(-1, 3),
+            "spray_directions_product": np.asarray(
+                [item["spray_direction_product"] for item in records], dtype=float
+            ).reshape(-1, 3),
+            "nozzle_points_world": np.asarray(
+                [item["nozzle_point_world"] for item in records], dtype=float
+            ).reshape(-1, 3),
+            "surface_points_world": np.asarray(
+                [item["surface_point_world"] for item in records], dtype=float
+            ).reshape(-1, 3),
+            "spray_directions_world": np.asarray(
+                [item["spray_direction_world"] for item in records], dtype=float
+            ).reshape(-1, 3),
+            "timestamps_monotonic_s": np.asarray(
+                [item["timestamp"] for item in records], dtype=float
+            ),
+            "face_indices": np.asarray(
+                [item["face_index"] for item in records], dtype=np.int64
+            ),
+            "product_transform_4x4": self._interactive_spray_transform.copy(),
+        }
+        self.plotter.add_text(
+            f"INTERACTIVE SPRAY PATH COMPLETE  |  {len(records)} RECORDED POSES",
+            position="upper_left", font_size=10, color="#00E676",
+            name="interactive_spray_complete_hud",
+        )
+        self.plotter.render()
+        return result
+
     def _on_patch_mouse_press(self, interactor, event):
+        if self._interactive_spray_active:
+            return
         """Remember the mouse-down point; camera drags are not selections."""
         self._patch_mouse_press_position = tuple(
             interactor.GetEventPosition()
         )
 
     def _on_patch_mouse_release(self, interactor, event):
+        if self._interactive_spray_active:
+            self._patch_mouse_press_position = None
+            return
         """
         Select the exact original triangle under a single left click.
 
