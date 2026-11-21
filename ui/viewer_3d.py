@@ -3069,8 +3069,8 @@ class ProductViewer(QWidget):
             np.rint(mapped[valid]), 0, 255
         ).astype(np.uint8)
         self._set_trajectory_surface_rgb(base)
-        positive = face_values[face_values > 0.0]
-        mean_value = float(np.mean(positive)) if len(positive) else 0.0
+        # Include unreached target faces as zero-thickness areas in the mean.
+        mean_value = float(np.mean(face_values)) if len(face_values) else 0.0
         max_value = float(np.max(face_values)) if len(face_values) else 0.0
         reached = float(np.count_nonzero(face_values > 0.0)) / max(len(face_values), 1) * 100.0
         self.trajectory_thickness_label.setText(
@@ -3109,9 +3109,14 @@ class ProductViewer(QWidget):
         else:
             self._restore_trajectory_surface_base_colors()
             if cache is not None and cache["coverage_processed_index"] >= 0:
-                self._update_paint_coverage_visualization(
-                    cache["coverage_processed_index"]
-                )
+                old_stride = cache["coverage_render_stride"]
+                cache["coverage_render_stride"] = 1
+                try:
+                    self._update_paint_coverage_visualization(
+                        cache["coverage_processed_index"]
+                    )
+                finally:
+                    cache["coverage_render_stride"] = old_stride
         self.plotter.render()
 
     def _update_paint_coverage_visualization(self, index):
