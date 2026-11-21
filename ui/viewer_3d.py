@@ -143,9 +143,9 @@ class ProductViewer(QWidget):
         # Surface filters stay enabled so the complete product remains visible;
         # all trajectory overlays are opt-in and can be enabled one at a time.
         self.trajectory_visibility = {
-            # Start with the clean, unpainted CAD product.
-            "planar": False,
-            "curved": False,
+            # Show both surface classes by default; users can toggle either one.
+            "planar": True,
+            "curved": True,
             "nozzle": False,
             "arrows": False,
             "paths": False,
