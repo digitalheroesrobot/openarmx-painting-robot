@@ -13,7 +13,7 @@ from core.spray_coverage import (
 )
 
 from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
-from vtkmodules.vtkFiltersGeneral import vtkOBBTree
+from vtkmodules.vtkFiltersFlowPaths import vtkModifiedBSPTree
 
 from PySide6.QtCore import QEvent, Qt, Signal, QTimer
 from PySide6.QtGui import QColor
@@ -2588,7 +2588,7 @@ class ProductViewer(QWidget):
         occlusion_polydata = pv.PolyData(
             mesh_vertices_world, mesh_cell_array
         )
-        occlusion_locator = vtkOBBTree()
+        occlusion_locator = vtkModifiedBSPTree()
         occlusion_locator.SetDataSet(occlusion_polydata)
         occlusion_locator.BuildLocator()
         mesh_bounds = np.asarray(self.current_mesh.bounds, dtype=np.float64)
@@ -2979,8 +2979,9 @@ class ProductViewer(QWidget):
             else:
                 self.trajectory_coverage_label.setToolTip(
                     "Sampled geometric reach estimate over the complete Stage 2 paintable "
-                    "candidate area. Four test points per mesh triangle are used. This "
-                    "does not yet model occlusion, deposited paint mass, or coating thickness."
+                    "candidate area. Four test points per mesh triangle are used, and "
+                    "nozzle-to-sample rays are checked against the complete product mesh. "
+                    "This is not deposited paint mass or coating thickness."
                 )
 
     def _create_spray_gun_actors(self):
