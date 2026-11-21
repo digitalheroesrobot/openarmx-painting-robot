@@ -112,7 +112,7 @@ WORKFLOW_STAGES = [
     {
         "name": "PRODUCT SETUP",
         "description": (
-            "Load the product CAD/STL model and establish "
+            "Load the STEP AP214 product model and establish "
             "the active product coordinate system."
         ),
         "action": "LOAD STEP PRODUCT",
@@ -120,7 +120,7 @@ WORKFLOW_STAGES = [
     {
         "name": "GEOMETRY INSPECTION",
         "description": (
-            "Inspect mesh integrity, dimensions, connected "
+            "Inspect CAD tessellation integrity, dimensions, connected "
             "components, and geometric surface patches."
         ),
         "action": "ANALYZE GEOMETRY",
@@ -441,11 +441,8 @@ class MainWindow(QMainWindow):
                 default_step = candidate
                 break
 
-        default_stl = models_dir / "product.STL"
         if default_step is not None:
             self.load_part(default_step)
-        elif default_stl.exists():
-            self.load_part(default_stl)
 
     # ========================================================
     # UI HELPERS
