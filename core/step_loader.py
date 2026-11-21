@@ -454,6 +454,124 @@ def evaluate_step_face_surface(mesh, face_id: int, u: float, v: float) -> dict:
     }
 
 
+def evaluate_step_triangle_sample(
+    mesh, triangle_index: int, barycentric: np.ndarray | list
+) -> dict:
+    """Evaluate a mesh-triangle sample on its original STEP B-Rep surface.
+
+    Returns both the linearly interpolated mesh point and exact CAD point so
+    callers can quantify tessellation error before using CAD geometry.
+    """
+    mapping = get_step_triangle_surface_coordinates(
+        mesh, triangle_index, barycentric
+    )
+    exact = evaluate_step_face_surface(
+        mesh,
+        mapping["face_id"],
+        float(mapping["uv"][0]),
+        float(mapping["uv"][1]),
+    )
+    triangle = np.asarray(
+        mesh.vertices[np.asarray(mesh.faces[triangle_index], dtype=np.int64)],
+        dtype=np.float64,
+    )
+    mesh_point = np.asarray(mapping["barycentric"] @ triangle, dtype=np.float64)
+    deviation = float(np.linalg.norm(exact["point_mm"] - mesh_point))
+    if not np.isfinite(mesh_point).all() or not math.isfinite(deviation):
+        raise ValueError("STEP triangle sample produced invalid 3D coordinates.")
+    return {
+        **mapping,
+        "mesh_point_mm": mesh_point,
+        "point_mm": exact["point_mm"],
+        "normal": exact["normal"],
+        "surface_type": exact["surface_type"],
+        "mesh_to_brep_deviation_mm": deviation,
+        "evaluation_method": exact["evaluation_method"],
+    }
+
+
+def validate_step_surface_mapping(
+    mesh, max_samples_per_face: int = 1
+) -> dict:
+    """Sample real imported faces and compare triangulation with exact B-Rep.
+
+    This is a diagnostic, not a loader gate: unsupported UV triangles and
+    individual CAD evaluation failures are counted and reported.
+    """
+    if int(max_samples_per_face) < 1:
+        raise ValueError("max_samples_per_face must be at least one.")
+    context = get_step_brep_context(mesh)
+    if context is None:
+        raise ValueError("Mesh does not contain a live STEP B-Rep context.")
+
+    face_ids = np.asarray(context["triangle_face_ids"], dtype=np.int64)
+    uv_valid = np.asarray(context["triangle_uv_valid"], dtype=bool)
+    samples = []
+    missing_uv_faces = 0
+    failed_faces = 0
+    for face_id in range(1, len(context["faces"]) + 1):
+        candidates = np.flatnonzero((face_ids == face_id) & uv_valid)
+        if candidates.size == 0:
+            missing_uv_faces += 1
+            continue
+        count = min(int(max_samples_per_face), int(candidates.size))
+        selected = candidates[np.linspace(0, candidates.size - 1, count, dtype=int)]
+        face_samples = []
+        for triangle_index in selected:
+            try:
+                face_samples.append(
+                    evaluate_step_triangle_sample(
+                        mesh, int(triangle_index), [1.0 / 3.0] * 3
+                    )
+                )
+            except Exception as exc:
+                failed_faces += 1
+                face_samples.append({"error": str(exc)})
+        samples.extend(face_samples)
+
+    deviations = np.asarray([
+        item["mesh_to_brep_deviation_mm"]
+        for item in samples if "mesh_to_brep_deviation_mm" in item
+    ], dtype=np.float64)
+    valid_count = int(deviations.size)
+    summary = {
+        "face_count": len(context["faces"]),
+        "sample_count": len(samples),
+        "valid_sample_count": valid_count,
+        "missing_uv_face_count": int(missing_uv_faces),
+        "failed_face_sample_count": int(failed_faces),
+        "deviation_median_mm": (
+            float(np.median(deviations)) if valid_count else None
+        ),
+        "deviation_p95_mm": (
+            float(np.percentile(deviations, 95)) if valid_count else None
+        ),
+        "deviation_max_mm": (
+            float(np.max(deviations)) if valid_count else None
+        ),
+    }
+    context["surface_mapping_validation"] = summary
+
+    print("\\nSTEP B-REP UV / EXACT SURFACE EVALUATION")
+    print(
+        f"Faces: {summary['face_count']} | sampled: {summary['sample_count']} "
+        f"| valid: {valid_count} | missing UV: {missing_uv_faces} "
+        f"| failed: {failed_faces}"
+    )
+    if valid_count:
+        print(
+            "Mesh-to-B-Rep deviation | "
+            f"median {summary['deviation_median_mm']:.6f} mm | "
+            f"P95 {summary['deviation_p95_mm']:.6f} mm | "
+            f"max {summary['deviation_max_mm']:.6f} mm"
+        )
+    if valid_count == len(context["faces"]) and failed_faces == 0 and missing_uv_faces == 0:
+        print("[PASS] Real STEP face UV mapping and exact surface evaluation")
+    else:
+        print("[WARN] Some STEP faces need UV / surface-evaluation investigation")
+    return summary
+
+
 def load_step(
     file_path: str | Path,
     linear_deflection_mm: float = 0.25,
@@ -846,6 +964,11 @@ def load_step(
     assert len(triangle_face_ids) == len(mesh.faces)
     assert len(face_records) == len(faces)
     assert np.isfinite(mesh.vertices).all()
+
+    # Exercise the UV-to-exact-surface path on the actual imported STEP model.
+    # This remains diagnostic-only so one problematic trimmed/periodic face
+    # cannot prevent the user from opening an otherwise valid CAD model.
+    validate_step_surface_mapping(mesh, max_samples_per_face=1)
     assert math.isfinite(total_area) and total_area >= 0
     assert math.isfinite(volume) and volume >= 0
     return mesh
