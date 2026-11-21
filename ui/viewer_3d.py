@@ -3108,7 +3108,7 @@ class ProductViewer(QWidget):
         """Freeze the gun at the final pose and force all spray visuals OFF."""
         self._playback_timer.stop()
         self._playback_finished = True
-        self.trajectory_play_button.setText("Play")
+        self.trajectory_play_button.setText("▶")
 
         cache = self._prepare_trajectory_playback_cache()
         if cache is not None and len(cache["nozzle_points"]):
@@ -3193,7 +3193,7 @@ class ProductViewer(QWidget):
             return
         self._playback_timer.stop()
         self._playback_finished = False
-        self.trajectory_play_button.setText("Play")
+        self.trajectory_play_button.setText("▶")
         total = len(self.trajectory_data["nozzle_points"])
         next_index = min(self._playback_index + 1, total - 1)
         self._update_trajectory_playback_visuals(next_index)
