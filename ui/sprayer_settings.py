@@ -78,6 +78,7 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
         if not isinstance(profiles, list):
             raise ValueError("The profiles entry must be a list.")
         valid = []
+        migrated = False
         for item in profiles:
             if not isinstance(item, dict):
                 continue
@@ -85,13 +86,49 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
                 continue
             merged = deepcopy(DEFAULT_SPRAYER_PROFILE)
             merged.update(deepcopy(item))
+
+            # Older local profiles stored these dimensions as 0.0 ("not
+            # specified"). Upgrade only missing/zero values; preserve every
+            # positive user-entered measurement.
+            for dimension_key in (
+                "gun_body_length_mm",
+                "gun_body_diameter_mm",
+            ):
+                raw_value = item.get(dimension_key)
+                try:
+                    dimension_value = float(raw_value)
+                except (TypeError, ValueError):
+                    dimension_value = 0.0
+                if dimension_value <= 0.0:
+                    merged[dimension_key] = float(
+                        DEFAULT_SPRAYER_PROFILE[dimension_key]
+                    )
+                    migrated = True
+
+            if migrated and (
+                not item.get("gun_body_dimensions_are_estimate", False)
+            ):
+                merged["gun_body_dimensions_are_estimate"] = True
             valid.append(merged)
+
         if not any(
             str(item.get("name", "")).strip().lower() == "default sprayer"
             for item in valid
         ):
             valid.insert(0, deepcopy(DEFAULT_SPRAYER_PROFILE))
-            save_sprayer_profiles(path, valid)
+            migrated = True
+
+        # Persist migration so the UI, saved profile and future runs all
+        # agree on the effective values. The original file is only rewritten
+        # when a legacy/missing dimension actually needs upgrading.
+        if migrated:
+            active_name = (
+                str(payload.get("active_profile", "default sprayer"))
+                if isinstance(payload, dict)
+                else "default sprayer"
+            )
+            save_sprayer_profiles(path, valid, active_profile_name=active_name)
+
         return valid or [deepcopy(DEFAULT_SPRAYER_PROFILE)]
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise RuntimeError(
