@@ -1057,6 +1057,7 @@ def _generate_planar_raster_for_patch(
     sample_spacing_coordinate_units: float,
     track_spacing_coordinate_units: float,
     planarity_angle_deg: float = 2.0,
+    lane_orientation_angle_deg: float = 0.0,
 ) -> dict | None:
     """
     Generate clipped, serpentine raster lanes for one geometrically planar patch.
@@ -1098,6 +1099,12 @@ def _generate_planar_raster_for_patch(
     if lane_length <= NORMAL_EPSILON:
         return None
     lane_axis /= lane_length
+    if not math.isfinite(lane_orientation_angle_deg):
+        return None
+    angle = math.radians(float(lane_orientation_angle_deg))
+    lane_axis = (math.cos(angle) * lane_axis
+                 + math.sin(angle) * np.cross(plane_normal, lane_axis))
+    lane_axis /= max(float(np.linalg.norm(lane_axis)), NORMAL_EPSILON)
     offset_axis = np.cross(plane_normal, lane_axis)
     offset_axis /= np.linalg.norm(offset_axis)
 
