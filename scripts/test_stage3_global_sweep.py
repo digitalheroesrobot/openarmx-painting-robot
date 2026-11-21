@@ -125,8 +125,8 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             places=8,
         )
         self.assertGreater(
-            high_overlap["sampling"]["sample_count"],
-            half_overlap["sampling"]["sample_count"],
+            high_overlap["sampling"]["source_sample_count_before_footprint_optimization"],
+            half_overlap["sampling"]["source_sample_count_before_footprint_optimization"],
         )
         self.assertEqual(
             high_overlap["sampling"]["coverage_spacing_basis"],
