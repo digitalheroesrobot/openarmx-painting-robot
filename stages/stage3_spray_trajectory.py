@@ -3586,10 +3586,6 @@ def _build_analysis(
             "robot_reachability_checked": False,
             "collision_checked": False,
             "coverage_verified": False,
-            "sampled_coverage_preserved": bool(
-                footprint_optimization.get("coverage_preserved", False)
-            ),
-            "footprint_optimization": footprint_optimization,
         },
         "metrics_explanation": explanation,
         "warnings": warnings,
@@ -4427,7 +4423,7 @@ def generate_spray_trajectory(
             overlap_percent=float(spray_footprint["overlap_percent"]),
             sample_spacing_coordinate_units=spacing_coordinate_units,
         )
-        keep_indices = footprint_optimization["keep_indices"]
+        keep_indices = footprint_optimization.pop("keep_indices")
         removed_count = len(ordered["surface_points"]) - len(keep_indices)
         if removed_count:
             for key in (
@@ -4519,7 +4515,7 @@ def generate_spray_trajectory(
         "playback_sample_count": int(len(ordered["surface_points"])),
         "global_sweep_sample_count": int(len(ordered["surface_points"])),
         "global_sweep_segment_count": int(len(segment_metadata)),
-        "lane_count": int(sweep["lane_count"]),
+        "lane_count": int(len(np.unique(sweep["lane_ids"]))),
         "planar_sample_count": 0,
         "curved_sample_count": 0,
         "fallback_sample_count": 0,
@@ -4543,8 +4539,8 @@ def generate_spray_trajectory(
     print(
         "GLOBAL SPRAY SWEEP | "
         f"{len(ordered['surface_points']):,} samples | "
-        f"{sweep['lane_count']} lanes | "
-        f"{sweep['segment_count']} spatial segments | "
+        f"{len(np.unique(sweep['lane_ids']))} lanes | "
+        f"{len(segment_metadata)} spatial segments | "
         f"lane spacing {effective_lane_spacing_mm:.2f} mm"
     )
 
@@ -4793,6 +4789,10 @@ def generate_spray_trajectory(
             ),
             "travel_moves_between_segments": "DIRECT_STRAIGHT_LINE_VISUALIZATION_ONLY",
             "coverage_verified": False,
+            "sampled_coverage_preserved": bool(
+                footprint_optimization.get("coverage_preserved", False)
+            ),
+            "footprint_optimization": footprint_optimization,
         },
         "sampling": {
             "coordinate_unit": source_unit,
