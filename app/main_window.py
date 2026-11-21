@@ -1913,6 +1913,37 @@ class MainWindow(QMainWindow):
         # Start every time from the untouched automatic result.
         face_labels = automatic_labels.copy()
 
+        # Validate only triangles already marked INVALID. The previous
+        # implementation materialized full-mesh area and normal arrays
+        # inside every patch iteration, repeating large allocations and
+        # caching data that this decision step does not otherwise need.
+        invalid_indices = np.flatnonzero(
+            automatic_labels == FACE_INVALID
+        )
+        genuinely_invalid = np.zeros(
+            len(automatic_labels), dtype=bool
+        )
+        if invalid_indices.size:
+            invalid_faces = np.asarray(
+                self.current_mesh.faces[invalid_indices]
+            )
+            vertices = np.asarray(self.current_mesh.vertices)
+            triangles = vertices[invalid_faces]
+            finite_triangles = np.all(
+                np.isfinite(triangles), axis=(1, 2)
+            )
+            cross_products = np.cross(
+                triangles[:, 1] - triangles[:, 0],
+                triangles[:, 2] - triangles[:, 0],
+            )
+            twice_areas = np.linalg.norm(cross_products, axis=1)
+            valid_invalid_triangles = (
+                finite_triangles
+                & np.isfinite(twice_areas)
+                & (twice_areas > 0.0)
+            )
+            genuinely_invalid[invalid_indices[~valid_invalid_triangles]] = True
+
         for patch_id, state in self.patch_inspection.items():
 
             decision = state.get("decision")
@@ -1940,50 +1971,10 @@ class MainWindow(QMainWindow):
 
             manual_status = DECISION_TO_FACE_STATUS[decision]
 
-            # Preserve only genuinely invalid mesh triangles.
-            # A Stage 1 INVALID label may mean that surface fitting
-            # failed even though its underlying triangles are sound.
-            # After explicit operator approval, valid triangles in
-            # that reviewed patch may therefore become paintable.
-            # Degenerate triangles remain INVALID and can never be
-            # promoted to spray targets.
-            face_areas = np.asarray(
-                self.current_mesh.area_faces,
-                dtype=float,
-            )
-            face_normals = np.asarray(
-                self.current_mesh.face_normals,
-                dtype=float,
-            )
-
-            if (
-                face_areas.shape != automatic_labels.shape
-                or face_normals.shape != (len(automatic_labels), 3)
-            ):
-                raise ValueError(
-                    "Mesh triangle validity data does not match "
-                    "the Stage 2 face labels."
-                )
-
-            normal_lengths = np.linalg.norm(
-                face_normals,
-                axis=1,
-            )
-
-            valid_mesh_triangles = (
-                np.isfinite(face_areas)
-                & (face_areas > 0.0)
-                & np.all(np.isfinite(face_normals), axis=1)
-                & np.isfinite(normal_lengths)
-                & (normal_lengths > 0.0)
-            )
-
-            invalid_mask = (
-                (automatic_labels == FACE_INVALID)
-                & ~valid_mesh_triangles
-            )
-
-            apply_mask = mask & ~invalid_mask
+            # An operator may approve a valid triangle whose automatic
+            # surface fit failed. Truly degenerate/non-finite triangles
+            # remain INVALID and cannot become spray targets.
+            apply_mask = mask & ~genuinely_invalid
             face_labels[apply_mask] = manual_status
 
         self.current_stage2_result[
@@ -3107,9 +3098,14 @@ class MainWindow(QMainWindow):
                 STAGE_SURFACE_IDENTIFICATION
             ] = True
 
-            # Generate the spray points immediately and show their
-            # circular-footprint preview when the operation completes.
-            self.run_spray_trajectory(force=True)
+            # Stage 3 is now the interactive spray workspace.
+            # Do not run the legacy automatic coverage planner, trajectory
+            # inspection, JSON/NPY export or screenshot pipeline here.
+            # Apply the operator's final Stage 2 decisions, then enter the
+            # interactive stage; its entry handler starts recording once.
+            self._apply_manual_patch_decisions()
+            self._persist_patch_inspection()
+            self._select_workflow_stage(STAGE_SPRAY_TRAJECTORY)
             return
 
         # ----------------------------------------------------
