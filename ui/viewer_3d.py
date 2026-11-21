@@ -3874,7 +3874,7 @@ class ProductViewer(QWidget):
                 status = np.asarray(self.face_status_labels, dtype=np.uint8)
                 base_rgb[status == FACE_EXCLUDED] = [89, 99, 107]
                 # A paintable candidate remains unpainted until spray samples hit it.
-            base_rgb[status == FACE_PAINTABLE_CANDIDATE] = [178, 188, 195]
+                base_rgb[status == FACE_PAINTABLE_CANDIDATE] = [178, 188, 195]
                 base_rgb[status == FACE_REQUIRES_INSPECTION] = [255, 215, 64]
                 base_rgb[status == FACE_INVALID] = [255, 82, 82]
 
