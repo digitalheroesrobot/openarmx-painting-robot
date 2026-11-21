@@ -386,6 +386,9 @@ class ProductViewer(QWidget):
         normalized = []
         for item in candidates or []:
             try:
+                has_opening_center = (
+                    item.get("opening_center_coordinate_units") is not None
+                )
                 center_value = item.get(
                     "opening_center_coordinate_units",
                     item.get("axis_center_coordinate_units"),
@@ -402,7 +405,13 @@ class ProductViewer(QWidget):
                 axis_norm = float(np.linalg.norm(axis))
                 if axis_norm <= 1e-12:
                     continue
-                normalized.append({**dict(item), "_display_center": center.tolist()})
+                normalized.append({
+                    **dict(item),
+                    "_display_center": center.tolist(),
+                    "_display_center_kind": (
+                        "OPENING CENTER" if has_opening_center else "AXIS REFERENCE"
+                    ),
+                })
             except (KeyError, TypeError, ValueError):
                 continue
         self.hole_candidates = normalized
@@ -454,6 +463,7 @@ class ProductViewer(QWidget):
             diameter = self._convert_source_length_to_display(diameter_source)
             hole_id = int(item.get("hole_id", len(labels) + 1))
             hole_type = str(item.get("hole_type", "unclassified")).replace("_", " ").upper()
+            center_kind = item.get("_display_center_kind", "AXIS REFERENCE")
 
             if display_mode in ("label", "coordinate", "full"):
                 if display_mode == "label":
@@ -464,7 +474,7 @@ class ProductViewer(QWidget):
                     z = self._convert_source_length_to_display(float(center_source[2]))
                     labels.append(
                         f"H{hole_id} [{hole_type}]  D={diameter:.2f} {unit_label}\n"
-                        f"X={x:.2f}  Y={y:.2f}  Z={z:.2f} {unit_label}"
+                        f"{center_kind}: X={x:.2f}  Y={y:.2f}  Z={z:.2f} {unit_label}"
                     )
 
             if display_mode in ("axis", "full"):
