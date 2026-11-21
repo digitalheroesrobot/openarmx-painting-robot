@@ -3059,12 +3059,19 @@ class MainWindow(QMainWindow):
 
             self.patch_inspection_status_label.hide()
             self.start_analysis_button.setVisible(True)
-            self.start_analysis_button.setText(
-                "SURFACE IDENTIFICATION COMPLETE"
+            self.start_analysis_button.setText("SPRAY TRAJECTORY")
+            self.start_analysis_button.setEnabled(
+                not self._operation_running
+                and self._stage_available(STAGE_SPRAY_TRAJECTORY)
             )
-            self.start_analysis_button.setEnabled(False)
 
         else:
+
+            self.start_analysis_button.setText(
+                "PATCH INSPECTION IN PROGRESS"
+            )
+            self.start_analysis_button.setEnabled(False)
+            self.start_analysis_button.setVisible(True)
 
             self.patch_inspection_status_label.setText(
                 "PATCH INSPECTION IN PROGRESS"
@@ -3075,10 +3082,6 @@ class MainWindow(QMainWindow):
             )
 
             self.patch_inspection_status_label.show()
-
-            self.start_analysis_button.setVisible(
-                False
-            )
     def _on_viewer_playback_state_changed(self, is_playing):
         """Lock trajectory generation while its preview is actively playing."""
         if not hasattr(self, "start_analysis_button"):
@@ -3154,10 +3157,10 @@ class MainWindow(QMainWindow):
         Handle the main workflow action button.
 
         Surface identification:
-            Run identification and allow manual patch decisions.
-            Stop when all patches have been inspected.
+            Run identification, inspect patches, then enter Stage 3
+            when all patches have been inspected.
 
-        Trajectory generation and all later stages are currently locked.
+        Stage 3 generates the initial circular-footprint preview.
         """
 
         if self._operation_running:
