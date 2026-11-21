@@ -259,3 +259,50 @@ def build_deficit_correction_strokes(
             "Nozzle visibility, robot reachability, IK, TCP calibration and collision are not checked.",
         ],
     }
+
+def build_coverage_correction_plan(
+    *,
+    sample_points_mm,
+    sample_normals,
+    sample_area_mm2,
+    target_mask,
+    reached_mask,
+    thickness_um,
+    target_thickness_um,
+    patch_ids=None,
+    standoff_mm,
+    max_gap_mm,
+    lower_ratio=0.90,
+    upper_ratio=1.10,
+    max_normal_change_deg=30.0,
+):
+    """Combine whole-target deficit analysis with conservative stroke proposals.
+
+    Only samples below the lower accepted thickness threshold are proposed.
+    The complete Stage-2 target mask remains the denominator, regardless of
+    whether a sample was reached by the original trajectory.
+    """
+    analysis = analyze_surface_deficits(
+        sample_area_mm2=sample_area_mm2,
+        target_mask=target_mask,
+        reached_mask=reached_mask,
+        thickness_um=thickness_um,
+        target_thickness_um=target_thickness_um,
+        lower_ratio=lower_ratio,
+        upper_ratio=upper_ratio,
+    )
+    strokes = build_deficit_correction_strokes(
+        sample_points_mm=sample_points_mm,
+        sample_normals=sample_normals,
+        deficit_sample_indices=analysis["deficit_sample_indices"],
+        patch_ids=patch_ids,
+        standoff_mm=standoff_mm,
+        max_gap_mm=max_gap_mm,
+        max_normal_change_deg=max_normal_change_deg,
+    )
+    return {
+        "analysis": analysis,
+        "correction_strokes": strokes,
+        "status": "PREDICTED_UNCALIBRATED_CANDIDATES_ONLY",
+        "execution_ready": False,
+    }
