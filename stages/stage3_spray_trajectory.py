@@ -12,7 +12,7 @@ import trimesh
 from core.result_manager import ResultManager
 from core.coating_process import validate_coating_process
 from stages.trajectory_safety import (
-    SprayGunEnvelopeConfig,
+    build_spray_gun_config_from_profile,
     evaluate_spray_gun_clearance,
 )
 
@@ -4822,24 +4822,9 @@ def execute_stage3(
     # nozzle_points are already nozzle-tip positions; TCP offset is retained
     # as profile metadata but must not be applied a second time here.
     profile_data = trajectory["parameters"].get("sprayer_profile", {})
-    safety_config = SprayGunEnvelopeConfig(
-        gun_body_length_mm=float(profile_data.get("gun_body_length_mm", 220.0)),
-        gun_body_diameter_mm=float(profile_data.get("gun_body_diameter_mm", 45.0)),
-        nozzle_length_mm=float(profile_data.get("nozzle_length_mm", 25.0)),
-        minimum_surface_clearance_mm=float(standoff_mm),
-        nozzle_outer_diameter_mm=(
-            float(profile_data["nozzle_outer_diameter_mm"])
-            if profile_data.get("nozzle_outer_diameter_mm") not in (None, "", 0, 0.0)
-            else None
-        ),
-        tcp_to_nozzle_tip_mm=(
-            float(profile_data["tcp_to_nozzle_tip_mm"])
-            if profile_data.get("tcp_to_nozzle_tip_mm") not in (None, "")
-            else None
-        ),
-        dimensions_are_estimate=bool(
-            profile_data.get("gun_body_dimensions_are_estimate", True)
-        ),
+    safety_config = build_spray_gun_config_from_profile(
+        profile_data,
+        minimum_surface_clearance_mm=standoff_mm,
     )
     trajectory["trajectory_safety"] = evaluate_spray_gun_clearance(
         mesh=mesh,
