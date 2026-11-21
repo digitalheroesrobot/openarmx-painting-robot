@@ -129,7 +129,28 @@ def load_coating_process(config_path: str | Path, legacy_sprayer_profile: dict |
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         values = payload.get("process", payload) if isinstance(payload, dict) else {}
-        return validate_coating_process(values)
+        values = validate_coating_process(values)
+
+        # Upgrade only the exact factory-created incomplete profile shipped
+        # before the provisional baseline. Preserve operator motion settings.
+        is_legacy_factory_profile = (
+            values.get("name") == "default coating process"
+            and values["target_dry_film_thickness_um"] == 60.0
+            and values["fluid_flow_ml_min"] == 0.0
+            and values["transfer_efficiency_percent"] == 0.0
+            and values["volume_solids_percent"] == 0.0
+        )
+        if is_legacy_factory_profile:
+            values["name"] = DEFAULT_COATING_PROCESS["name"]
+            for key in (
+                "target_dry_film_thickness_um",
+                "fluid_flow_ml_min",
+                "transfer_efficiency_percent",
+                "volume_solids_percent",
+            ):
+                values[key] = DEFAULT_COATING_PROCESS[key]
+            save_coating_process(path, values)
+        return values
     except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
         raise RuntimeError(f"Could not read coating process configuration: {path}\n{exc}") from exc
 
