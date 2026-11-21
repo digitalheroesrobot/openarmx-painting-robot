@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from core.spray_coverage import (
     build_paintable_face_mask,
     calculate_area_weighted_coverage,
+    is_line_of_sight_occluded,
     mark_sample_hits,
 )
 
@@ -80,6 +81,42 @@ class SprayCoverageTests(unittest.TestCase):
         self.assertAlmostEqual(reached, 2.0)
         self.assertAlmostEqual(target, 4.0)
         self.assertAlmostEqual(percent, 50.0)
+
+    def test_nearer_surface_intersection_blocks_sample(self):
+        blocked = is_line_of_sight_occluded(
+            np.asarray([[0.0, 0.0, 4.0]]),
+            np.asarray([0.0, 0.0, 0.0]),
+            np.asarray([0.0, 0.0, 10.0]),
+            tolerance=1e-6,
+        )
+        self.assertTrue(blocked)
+
+    def test_target_endpoint_intersection_is_not_treated_as_occlusion(self):
+        blocked = is_line_of_sight_occluded(
+            np.asarray([[0.0, 0.0, 10.0]]),
+            np.asarray([0.0, 0.0, 0.0]),
+            np.asarray([0.0, 0.0, 10.0]),
+            tolerance=1e-6,
+        )
+        self.assertFalse(blocked)
+
+    def test_no_intersection_keeps_sample_visible(self):
+        blocked = is_line_of_sight_occluded(
+            np.empty((0, 3)),
+            np.asarray([0.0, 0.0, 0.0]),
+            np.asarray([0.0, 0.0, 10.0]),
+            tolerance=1e-6,
+        )
+        self.assertFalse(blocked)
+
+    def test_intersection_at_ray_origin_is_ignored(self):
+        blocked = is_line_of_sight_occluded(
+            np.asarray([[0.0, 0.0, 0.0]]),
+            np.asarray([0.0, 0.0, 0.0]),
+            np.asarray([0.0, 0.0, 10.0]),
+            tolerance=1e-6,
+        )
+        self.assertFalse(blocked)
 
     def test_spray_off_does_not_accumulate_hits(self):
         hits = np.zeros(8, dtype=bool)
