@@ -9,6 +9,7 @@ from stages.trajectory_safety import (
     build_gun_body_centerline,
     build_spray_gun_config_from_profile,
     evaluate_spray_gun_clearance,
+    aggregate_sample_safety_by_face,
 )
 
 
@@ -148,6 +149,32 @@ class SprayGunEnvelopeTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "UNCERTAIN")
         self.assertEqual(result["sample_status"], ["YELLOW"])
+
+    def test_sample_safety_is_aggregated_to_source_faces(self):
+        result = aggregate_sample_safety_by_face(
+            np.asarray([2, 2, 4, 5, 5]),
+            ["YELLOW", "RED", "GREEN", "YELLOW", "GREEN"],
+            face_count=7,
+        )
+        np.testing.assert_array_equal(result, np.asarray([0, 0, 3, 0, 1, 2, 0]))
+
+    def test_red_status_takes_precedence_over_yellow_and_green(self):
+        result = aggregate_sample_safety_by_face(
+            np.asarray([1, 1, 1]), ["GREEN", "YELLOW", "RED"], face_count=2
+        )
+        self.assertEqual(int(result[1]), 3)
+
+    def test_sample_safety_face_mapping_rejects_invalid_indices(self):
+        with self.assertRaises(ValueError):
+            aggregate_sample_safety_by_face(
+                np.asarray([0, 4]), ["GREEN", "RED"], face_count=4
+            )
+
+    def test_sample_safety_face_mapping_rejects_unknown_status(self):
+        with self.assertRaises(ValueError):
+            aggregate_sample_safety_by_face(
+                np.asarray([0]), ["UNKNOWN"], face_count=1
+            )
 
     def test_invalid_frame_is_rejected(self):
         with self.assertRaises(ValueError):
