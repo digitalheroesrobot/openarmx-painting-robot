@@ -90,6 +90,7 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
             # Older local profiles stored these dimensions as 0.0 ("not
             # specified"). Upgrade only missing/zero values; preserve every
             # positive user-entered measurement.
+            profile_migrated = False
             for dimension_key in (
                 "gun_body_length_mm",
                 "gun_body_diameter_mm",
@@ -104,8 +105,9 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
                         DEFAULT_SPRAYER_PROFILE[dimension_key]
                     )
                     migrated = True
+                    profile_migrated = True
 
-            if migrated and (
+            if profile_migrated and (
                 not item.get("gun_body_dimensions_are_estimate", False)
             ):
                 merged["gun_body_dimensions_are_estimate"] = True
