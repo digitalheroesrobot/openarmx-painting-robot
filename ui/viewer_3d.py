@@ -11,6 +11,8 @@ from core.spray_coverage import (
     is_line_of_sight_occluded,
     mark_sample_hits,
 )
+from core.coating_deposition import accumulate_double_beta_deposition_step
+from core.coating_process import coating_model_readiness
 
 from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
 from vtkmodules.vtkFiltersGeneral import vtkOBBTree
@@ -895,7 +897,33 @@ class ProductViewer(QWidget):
             "not a measured coating-thickness or paint-mass result."
         )
         coverage_row.addWidget(self.trajectory_coverage_label)
+
+        self.trajectory_thickness_checkbox = QCheckBox("SHOW FILM THICKNESS")
+        self.trajectory_thickness_checkbox.setChecked(False)
+        self.trajectory_thickness_checkbox.setToolTip(
+            "Display the predicted dry-film thickness accumulated from the "
+            "time-based spray model. Results remain uncalibrated predictions."
+        )
+        self.trajectory_thickness_checkbox.toggled.connect(
+            self._on_film_thickness_visibility_changed
+        )
+        coverage_row.addWidget(self.trajectory_thickness_checkbox)
         playback_layout.addLayout(coverage_row)
+
+        self.trajectory_thickness_label = QLabel(
+            "PREDICTED DRY FILM THICKNESS | N/A"
+        )
+        self.trajectory_thickness_label.setMinimumHeight(18)
+        self.trajectory_thickness_label.setWordWrap(True)
+        self.trajectory_thickness_label.setStyleSheet(
+            "color: #E8C98A; font-size: 9px; font-weight: 700;"
+        )
+        self.trajectory_thickness_label.setToolTip(
+            "Uncalibrated Double-Beta dry-film estimate. Spray-valve delays, "
+            "fluid atomization losses, evaporation dynamics and measured coupon "
+            "calibration are not yet included."
+        )
+        playback_layout.addWidget(self.trajectory_thickness_label)
 
         self.trajectory_path_stats_label = QLabel(
             "PATH SAMPLES | Planar: —  Curved: —  Fallback: —  Total: —"
@@ -2546,6 +2574,15 @@ class ProductViewer(QWidget):
             )
             target_mask_status = "READY"
         target_face_ids = np.flatnonzero(target_face_mask)
+        coating_process = parameters.get("coating_process", {})
+        try:
+            deposition_readiness, deposition_missing_inputs = coating_model_readiness(
+                coating_process
+            )
+        except (TypeError, ValueError):
+            deposition_readiness, deposition_missing_inputs = (
+                "INPUTS_INCOMPLETE", ["valid coating process parameters"]
+            )
         faces = np.asarray(self.current_mesh.faces, dtype=np.int64)
         vertices = np.asarray(self.current_mesh.vertices, dtype=float)
         triangles = vertices[faces[target_face_ids]]
@@ -2668,10 +2705,20 @@ class ProductViewer(QWidget):
             "face_samples": face_samples,
             "sample_normals": sample_normals,
             "face_areas": face_areas,
+            "sample_area_mm2": np.repeat(face_areas / sample_count_per_face, sample_count_per_face) * (mm_per_unit ** 2),
             "target_face_ids": target_face_ids,
             "target_display_indices": target_display_indices,
             "target_area": target_area,
             "target_mask_status": target_mask_status,
+            "coating_process": dict(coating_process) if isinstance(coating_process, dict) else {},
+            "deposition_readiness": deposition_readiness,
+            "deposition_missing_inputs": list(deposition_missing_inputs),
+            "deposition_sample_thickness_um": np.zeros(len(face_samples), dtype=np.float64),
+            "deposition_sample_volume_mm3": np.zeros(len(face_samples), dtype=np.float64),
+            "deposition_face_thickness_um": np.zeros(face_count, dtype=np.float64),
+            "deposition_processed_index": -1,
+            "deposition_input_volume_mm3": 0.0,
+            "deposition_total_volume_mm3": 0.0,
             "area_display_scale": (
                 mm_per_unit ** 2 / 1_000_000.0
                 if source_unit in MM_PER_UNIT else 1.0
@@ -2883,6 +2930,190 @@ class ProductViewer(QWidget):
         actor.SetVisibility(bool(len(current_faces)))
 
 
+
+    def _accumulate_film_thickness_for_path(self, path_index):
+        """Accumulate one time interval of predicted dry-film deposition."""
+        cache = self._prepare_trajectory_playback_cache()
+        if cache is None or cache["deposition_readiness"] != "INPUTS_READY_UNCALIBRATED":
+            return
+        if path_index <= cache["deposition_processed_index"]:
+            return
+        process = cache["coating_process"]
+        times = cache["trajectory_time_s"]
+        if path_index <= 0:
+            cache["deposition_processed_index"] = int(path_index)
+            return
+        dt = float(times[path_index] - times[path_index - 1])
+        spray_on = bool(cache["spray_on_mask"][path_index])
+        hit_ids = (
+            self._get_surface_sample_hits_from_spray(path_index)
+            if spray_on and dt > 0.0 else np.empty(0, dtype=np.int64)
+        )
+
+        if len(hit_ids):
+            nozzle = cache["nozzle_points"][path_index]
+            direction = cache["spray_directions"][path_index]
+            frame = cache["nozzle_frames"][path_index]
+            delta = cache["face_samples"][hit_ids] - nozzle
+            axial = delta @ direction
+            local_x = delta @ frame[:, 0]
+            local_y = delta @ frame[:, 1]
+            if cache["pattern_type"] == "flat_fan":
+                half_width = axial * cache["cone_tangent"]
+                half_height = (
+                    0.5 * cache["fan_thickness_units"]
+                    * axial / cache["fan_reference_distance_units"]
+                )
+            else:
+                half_width = axial * cache["cone_tangent"]
+                half_height = half_width.copy()
+            valid = (
+                np.isfinite(half_width) & np.isfinite(half_height)
+                & (half_width > 1e-12) & (half_height > 1e-12)
+            )
+            hit_ids = hit_ids[valid]
+            half_width = half_width[valid]
+            half_height = half_height[valid]
+            local_x = local_x[valid]
+            local_y = local_y[valid]
+            if len(hit_ids):
+                normalized_xy = np.column_stack((
+                    local_x / half_width,
+                    local_y / half_height,
+                ))
+                sample_areas = cache["sample_area_mm2"][hit_ids]
+                footprint_areas = (
+                    2.0 * half_width * cache["mm_per_unit"]
+                    * 2.0 * half_height * cache["mm_per_unit"]
+                )
+                facing = np.einsum(
+                    "ij,j->i", cache["sample_normals"][hit_ids], -direction
+                )
+            else:
+                normalized_xy = np.empty((0, 2), dtype=np.float64)
+                sample_areas = np.empty(0, dtype=np.float64)
+                footprint_areas = np.empty(0, dtype=np.float64)
+                facing = np.empty(0, dtype=np.float64)
+        else:
+            hit_ids = np.empty(0, dtype=np.int64)
+            normalized_xy = np.empty((0, 2), dtype=np.float64)
+            sample_areas = np.empty(0, dtype=np.float64)
+            footprint_areas = np.empty(0, dtype=np.float64)
+            facing = np.empty(0, dtype=np.float64)
+
+        increment = accumulate_double_beta_deposition_step(
+            normalized_xy=normalized_xy,
+            sample_area_mm2=sample_areas,
+            sample_facing_cosine=facing,
+            sample_footprint_area_mm2=footprint_areas,
+            duration_s=max(dt, 0.0),
+            fluid_flow_ml_min=process["fluid_flow_ml_min"],
+            transfer_efficiency_percent=process["transfer_efficiency_percent"],
+            volume_solids_percent=process["volume_solids_percent"],
+            number_of_coats=process["number_of_coats"],
+            spray_on=spray_on and dt > 0.0,
+        )
+        if len(hit_ids):
+            cache["deposition_sample_thickness_um"][hit_ids] += (
+                increment["sample_thickness_increment_um"]
+            )
+            cache["deposition_sample_volume_mm3"][hit_ids] += (
+                increment["sample_deposited_volume_mm3"]
+            )
+        cache["deposition_input_volume_mm3"] += increment["input_dry_volume_mm3"]
+        cache["deposition_total_volume_mm3"] += increment["deposited_volume_mm3"]
+        cache["deposition_processed_index"] = int(path_index)
+        sample_face_thickness = cache["deposition_sample_thickness_um"].reshape(
+            -1, cache["sample_count_per_face"]
+        ).mean(axis=1)
+        cache["deposition_face_thickness_um"].fill(0.0)
+        cache["deposition_face_thickness_um"][cache["target_face_ids"]] = (
+            sample_face_thickness
+        )
+
+    def _update_film_thickness_visualization(self):
+        """Render target-face predicted dry-film thickness relative to target."""
+        cache = self._prepare_trajectory_playback_cache()
+        if cache is None or cache["deposition_readiness"] != "INPUTS_READY_UNCALIBRATED":
+            if hasattr(self, "trajectory_thickness_label"):
+                self.trajectory_thickness_label.setText(
+                    "PREDICTED DRY FILM THICKNESS | N/A — INPUTS INCOMPLETE"
+                )
+            return
+        if (
+            self._trajectory_surface_polydata is None
+            or self._trajectory_surface_base_rgb is None
+        ):
+            return
+        target = float(cache["coating_process"]["target_dry_film_thickness_um"])
+        if target <= 0.0:
+            return
+        base = self._trajectory_surface_base_rgb.copy()
+        display_ids = cache["target_display_indices"]
+        valid = display_ids >= 0
+        face_values = cache["deposition_face_thickness_um"][cache["target_face_ids"]]
+        ratios = np.clip(face_values / target, 0.0, 1.5)
+        stops = np.asarray([0.0, 0.5, 0.8, 1.0, 1.5])
+        palette = np.asarray([
+            [35, 57, 78],
+            [0, 145, 210],
+            [0, 190, 125],
+            [255, 205, 45],
+            [235, 55, 45],
+        ], dtype=np.float64)
+        mapped = np.column_stack([
+            np.interp(ratios, stops, palette[:, channel])
+            for channel in range(3)
+        ])
+        base[display_ids[valid]] = np.clip(
+            np.rint(mapped[valid]), 0, 255
+        ).astype(np.uint8)
+        self._set_trajectory_surface_rgb(base)
+        positive = face_values[face_values > 0.0]
+        mean_value = float(np.mean(positive)) if len(positive) else 0.0
+        max_value = float(np.max(face_values)) if len(face_values) else 0.0
+        reached = float(np.count_nonzero(face_values > 0.0)) / max(len(face_values), 1) * 100.0
+        self.trajectory_thickness_label.setText(
+            "PREDICTED DRY FILM THICKNESS | "
+            f"MEAN {mean_value:.2f} µm  MAX {max_value:.2f} µm  "
+            f"REACHED FACES {reached:.1f}% / TARGET {target:.1f} µm  "
+            "| UNCALIBRATED"
+        )
+        self.trajectory_thickness_label.setToolTip(
+            "Predicted dry-film thickness from the time-integrated Double-Beta "
+            "spray model. Color scale: dark blue=0, cyan=0.5× target, "
+            "green=0.8×, yellow=1.0×, red=1.5× or above. Only visible samples "
+            "inside the spray footprint receive deposition. The model is not "
+            "calibrated; valve ON/OFF delays, evaporation, atomization and "
+            "measured coupon validation are not included. "
+            f"Dry paint supplied: {cache['deposition_input_volume_mm3']:.3f} mm³; "
+            f"deposited on modeled surface: {cache['deposition_total_volume_mm3']:.3f} mm³."
+        )
+
+    def _on_film_thickness_visibility_changed(self, checked):
+        cache = self._prepare_trajectory_playback_cache()
+        if checked and (
+            cache is None
+            or cache["deposition_readiness"] != "INPUTS_READY_UNCALIBRATED"
+        ):
+            self.trajectory_thickness_checkbox.blockSignals(True)
+            self.trajectory_thickness_checkbox.setChecked(False)
+            self.trajectory_thickness_checkbox.blockSignals(False)
+            if hasattr(self, "trajectory_thickness_label"):
+                self.trajectory_thickness_label.setText(
+                    "PREDICTED DRY FILM THICKNESS | N/A — PROCESS INPUTS INCOMPLETE"
+                )
+            return
+        if checked:
+            self._update_film_thickness_visualization()
+        else:
+            self._restore_trajectory_surface_base_colors()
+            if cache is not None and cache["coverage_processed_index"] >= 0:
+                self._update_paint_coverage_visualization(
+                    cache["coverage_processed_index"]
+                )
+        self.plotter.render()
+
     def _update_paint_coverage_visualization(self, index):
         cache = self._prepare_trajectory_playback_cache()
         if cache is None:
@@ -2893,6 +3124,12 @@ class ProductViewer(QWidget):
             cache["coverage_sample_hits"].fill(False)
             cache["coverage_processed_index"] = -1
             cache["coverage_last_render_index"] = -1
+            cache["deposition_sample_thickness_um"].fill(0.0)
+            cache["deposition_sample_volume_mm3"].fill(0.0)
+            cache["deposition_face_thickness_um"].fill(0.0)
+            cache["deposition_processed_index"] = -1
+            cache["deposition_input_volume_mm3"] = 0.0
+            cache["deposition_total_volume_mm3"] = 0.0
 
         final_index = len(cache["nozzle_points"]) - 1
         stride = cache["coverage_render_stride"]
@@ -2909,6 +3146,7 @@ class ProductViewer(QWidget):
         ):
             if cache["spray_on_mask"][path_index]:
                 self._mark_surface_samples_from_spray(path_index)
+            self._accumulate_film_thickness_for_path(path_index)
         cache["coverage_processed_index"] = max(
             cache["coverage_processed_index"], index
         )
@@ -2934,6 +3172,10 @@ class ProductViewer(QWidget):
             self._trajectory_surface_polydata is not None
             and self._trajectory_surface_face_mask is not None
             and self._trajectory_surface_base_rgb is not None
+            and not (
+                hasattr(self, "trajectory_thickness_checkbox")
+                and self.trajectory_thickness_checkbox.isChecked()
+            )
         ):
             base = self._trajectory_surface_base_rgb.astype(float)
             face_fraction = np.zeros(len(base), dtype=float)
@@ -2955,6 +3197,30 @@ class ProductViewer(QWidget):
             self.trajectory_coverage_bar.setValue(
                 int(round(np.clip(coverage_percent, 0.0, 100.0) * 10.0))
             )
+        if hasattr(self, "trajectory_thickness_checkbox"):
+            ready = cache["deposition_readiness"] == "INPUTS_READY_UNCALIBRATED"
+            self.trajectory_thickness_checkbox.setEnabled(ready)
+            if not ready and self.trajectory_thickness_checkbox.isChecked():
+                self.trajectory_thickness_checkbox.blockSignals(True)
+                self.trajectory_thickness_checkbox.setChecked(False)
+                self.trajectory_thickness_checkbox.blockSignals(False)
+            if hasattr(self, "trajectory_thickness_label"):
+                if ready:
+                    self.trajectory_thickness_label.setText(
+                        "PREDICTED DRY FILM THICKNESS | "
+                        f"MAX {float(np.max(cache['deposition_face_thickness_um'])):.2f} µm "
+                        "| UNCALIBRATED"
+                    )
+                else:
+                    missing = ", ".join(cache["deposition_missing_inputs"])
+                    self.trajectory_thickness_label.setText(
+                        "PREDICTED DRY FILM THICKNESS | N/A — " + missing.upper()
+                    )
+        if (
+            hasattr(self, "trajectory_thickness_checkbox")
+            and self.trajectory_thickness_checkbox.isChecked()
+        ):
+            self._update_film_thickness_visualization()
         if hasattr(self, "trajectory_coverage_label"):
             if cache["pattern_type"] == "flat_fan":
                 model_label = (
