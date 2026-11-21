@@ -756,9 +756,8 @@ class MainWindow(QMainWindow):
         title.setObjectName("MainTitle")
 
         subtitle = QLabel(
-            "DUAL-ROBOT INDUSTRIAL SPRAY PAINTING  "
-            "•  PRODUCT → GEOMETRY → SURFACES → "
-            "TRAJECTORY → ROBOTS → EXECUTION"
+            "INDUSTRIAL SPRAY PAINTING  "
+            "•  PRODUCT → GEOMETRY → SURFACES → SPRAY TRAJECTORY"
         )
         subtitle.setObjectName("Subtitle")
 
@@ -4159,149 +4158,23 @@ class MainWindow(QMainWindow):
 
     def _show_stage3_ready_summary(self):
         self.summary_chart.hide()
-        self.summary_section.setText("STAGE 3 - READY")
+        self.summary_section.setText("SPRAY TRAJECTORY")
         self.analysis_summary.setStyleSheet("color: #D8E5ED;")
-
-        self.analysis_summary.setText(
-            "READY FOR SPRAY TRAJECTORY"
-        )
+        self.analysis_summary.setText("READY FOR SPRAY TRAJECTORY")
 
     def _show_stage3_outdated_summary(self):
         self.summary_chart.hide()
-        if self.current_stage3_result is None:
-            self._show_stage3_ready_summary()
-            return
-
-        self.summary_section.setText(
-            "STAGE 3 - TRAJECTORY OUTDATED"
-        )
+        self.summary_section.setText("SPRAY TRAJECTORY")
         self.analysis_summary.setStyleSheet("color: #FFD740;")
-
-        self.analysis_summary.setText(
-            "TRAJECTORY OUTDATED\nREGENERATION REQUIRED"
-        )
+        self.analysis_summary.setText("TRAJECTORY PARAMETERS CHANGED")
 
     def _show_spray_trajectory_summary(self):
+        # Keep the shared Stage 1/2 summary area, but do not expose
+        # post-generation diagnostics or downstream workflow information.
         self.summary_chart.hide()
-        if self.current_stage3_result is None:
-            self._show_stage3_ready_summary()
-            return
-
-        report = self.current_stage3_result.get("report", {})
-        trajectory = self.current_stage3_result.get("trajectory", {})
-
-        analysis = report.get("analysis", {})
-        overall_status = analysis.get(
-            "overall_status",
-            report.get("overall_status", "REVIEW"),
-        )
-
-        sample_count = self.current_stage3_result.get(
-            "sample_count",
-            len(trajectory.get("surface_points", [])),
-        )
-        segment_ids = trajectory.get("segment_ids", [])
-        segment_count = (
-            len(set(np.asarray(segment_ids).tolist()))
-            if len(segment_ids)
-            else 0
-        )
-        parameters = trajectory.get("parameters", {})
-        sprayer = parameters.get("sprayer_profile", {})
-        sprayer_name = sprayer.get("name", "UNSPECIFIED")
-        nozzle_frame = parameters.get("nozzle_frame_convention", {})
-        nozzle_frame_status = nozzle_frame.get("status", "NOT AVAILABLE")
-        pose_matrix = parameters.get("product_transform_4x4")
-        product_pose_status = (
-            "CAD TO WORLD CAPTURED"
-            if pose_matrix is not None else "IDENTITY / NOT RECORDED"
-        )
-        spray_width = parameters.get("spray_width_at_standoff_mm")
-        nominal_track_spacing = parameters.get(
-            "nominal_track_spacing_from_overlap_mm"
-        )
-
-        spray_width_text = (
-            f"{float(spray_width):.1f} mm"
-            if spray_width is not None else "NOT AVAILABLE"
-        )
-        track_spacing_text = (
-            f"{float(nominal_track_spacing):.1f} mm"
-            if nominal_track_spacing is not None else "NOT AVAILABLE"
-        )
-
-        validation = trajectory.get(
-            "trajectory_validation", report.get("trajectory_validation", {})
-        )
-        continuity = validation.get("continuity", {})
-        orientation = validation.get("orientation", {})
-        spray_control = validation.get("spray_control", {})
-        path_stats = trajectory.get("path_statistics", report.get("path_statistics", {}))
-        travel = trajectory.get(
-            "inter_segment_travel_plan",
-            report.get("inter_segment_travel_plan", {}),
-        )
-
-        planar_samples = int(path_stats.get("planar_sample_count", 0))
-        curved_samples = int(path_stats.get("curved_sample_count", 0))
-        fallback_samples = int(path_stats.get("fallback_sample_count", 0))
-        represented_percent = float(
-            validation.get("surface_face_representation_percent", 0.0)
-        )
-        represented_faces = int(validation.get("represented_face_count", 0))
-        target_faces = int(validation.get("target_face_count", 0))
-        travel_count = int(travel.get("transition_count", 0))
-        travel_distance = float(travel.get("total_distance_mm", 0.0))
-        travel_time = float(travel.get("estimated_time_s", 0.0))
-        travel_safety = str(travel.get("safety_status", "NOT AVAILABLE"))
-        travel_ordering = travel.get("ordering_optimization", {})
-        travel_order_reduction = float(
-            travel_ordering.get("reduction_percent", 0.0)
-        )
-        travel_order_method = str(
-            travel_ordering.get("method", "not available")
-        )
-
-        self.analysis_summary.setText(
-            f"TRAJECTORY: {self._format_status(overall_status)}\n"
-            f"SPRAYER: {sprayer_name}\n"
-            f"SURFACE SAMPLES: {sample_count:,}  |  SEGMENTS: {segment_count:,}\n"
-            f"PATH SAMPLES: Planar {planar_samples:,}  |  Curved {curved_samples:,}  |  Fallback {fallback_samples:,}\n"
-            f"PRODUCT POSE: {product_pose_status}\n"
-            f"NOZZLE FRAME: {nozzle_frame_status}\n"
-            f"SPRAY WIDTH AT STANDOFF: {spray_width_text}  |  TRACK SPACING: {track_spacing_text}\n"
-            f"SURFACE REPRESENTATION: {represented_percent:.2f}% ({represented_faces:,}/{target_faces:,} faces)\n"
-            f"PATH CONTINUITY: {self._format_status(continuity.get('status'))}  |  "
-            f"max {float(continuity.get('maximum_step_mm', 0.0)):.2f} mm  |  "
-            f"P95 {float(continuity.get('p95_step_mm', 0.0)):.2f} mm  |  "
-            f"outliers {int(continuity.get('jump_outlier_count', 0))}\n"
-            f"NOZZLE ORIENTATION: {self._format_status(orientation.get('status'))}  |  "
-            f"max {float(orientation.get('maximum_change_deg', 0.0)):.2f} deg  |  "
-            f"P95 {float(orientation.get('p95_change_deg', 0.0)):.2f} deg\n"
-            f"SPRAY CONTROL: {int(spray_control.get('spray_on_sample_count', 0)):,} ON samples  |  "
-            f"{int(spray_control.get('spray_off_transition_count', 0)):,} OFF boundaries\n"
-            f"SPRAY-OFF TRAVEL: {travel_count:,} transitions  |  "
-            f"{travel_distance:.1f} mm  |  {travel_time:.2f} s estimate\n"
-            f"TRAVEL ORDER: {travel_order_reduction:.1f}% shorter than original "
-            f"({travel_order_method})\n"
-            f"TRAVEL SAFETY: {travel_safety}\n"
-            "NOTE: Travel links are straight-line estimates only; collision and IK checks are not performed."
-        )
-
-        self.analysis_summary.setStyleSheet(
-            "color: #00E676;"
-            if str(overall_status).upper() == "PASS"
-            else "color: #FFD740;"
-        )
-
-        stage_directory = self.current_stage3_result.get(
-            "stage_directory"
-        )
-
-        if stage_directory:
-            self.results_path_label.setText(
-                f"STAGE 3 RESULTS:\n{stage_directory}"
-            )
+        self.summary_section.setText("SPRAY TRAJECTORY")
+        self.analysis_summary.setStyleSheet("color: #00E676;")
+        self.analysis_summary.setText("SPRAY TRAJECTORY GENERATED")
 
     # ========================================================
     # STAGE 1 SUMMARY
