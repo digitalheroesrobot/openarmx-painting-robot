@@ -52,9 +52,12 @@ DEFAULT_SPRAYER_PROFILE = {
     "nozzle_length_is_estimate": True,
     "gun_body_dimensions_are_estimate": True,
     "profile_notes": (
-        "Generic starting values, not a certified sprayer specification. "
-        "Nozzle length, fluid pressure, fluid flow and travel speed must be "
-        "confirmed from the actual sprayer and coating process."
+        "Generic starting values, not a certified sprayer specification or a "
+        "verified specification for a particular Chinese product. Gun body "
+        "length 220 mm and maximum diameter 45 mm are provisional collision "
+        "envelope estimates; measure the actual purchased sprayer and replace "
+        "both values before relying on collision results. Confirm all settings "
+        "against the actual sprayer and coating process."
     ),
 }
 
