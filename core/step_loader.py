@@ -11,9 +11,64 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 import math
+import re
 
 import numpy as np
 import trimesh
+
+
+def _parse_step_ap214_schema(step_text: str) -> str:
+    """Return the STEP AP214 schema identifier or reject another protocol."""
+    header_match = re.search(
+        r"\bHEADER\s*;(.*?)\bENDSEC\s*;",
+        step_text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if header_match is None:
+        raise ValueError(
+            "Invalid STEP Part 21 header: HEADER section is missing or incomplete."
+        )
+
+    schema_match = re.search(
+        r"\bFILE_SCHEMA\s*\(\s*\((.*?)\)\s*\)\s*;",
+        header_match.group(1),
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if schema_match is None:
+        raise ValueError(
+            "Invalid STEP header: FILE_SCHEMA declaration is missing."
+        )
+
+    schema_identifiers = [
+        value.replace("''", "'").strip()
+        for value in re.findall(r"'((?:''|[^'])*)'", schema_match.group(1))
+    ]
+    if len(schema_identifiers) != 1:
+        raise ValueError(
+            "OpenArmX requires exactly one STEP AP214 FILE_SCHEMA identifier."
+        )
+
+    schema_identifier = schema_identifiers[0]
+    normalized = re.sub(r"\s*\{.*$", "", schema_identifier).strip().upper()
+    if normalized not in {"AUTOMOTIVE_DESIGN", "AUTOMOTIVE_DESIGN_CC2"}:
+        raise ValueError(
+            "Unsupported STEP application protocol. "
+            "OpenArmX accepts STEP AP214 only "
+            "(FILE_SCHEMA AUTOMOTIVE_DESIGN or AUTOMOTIVE_DESIGN_CC2); "
+            f"received {schema_identifier!r}."
+        )
+
+    return schema_identifier
+
+
+def _validate_step_ap214_file(path: Path) -> str:
+    """Validate the STEP Part 21 header before Open CASCADE translation."""
+    # STEP headers are small. Bound the read so a malformed file cannot cause
+    # an unbounded preflight allocation before the CAD kernel is invoked.
+    with path.open("rb") as stream:
+        header_bytes = stream.read(256 * 1024)
+    step_text = header_bytes.decode("latin-1")
+    return _parse_step_ap214_schema(step_text)
 
 
 def _ocp_imports():
@@ -211,6 +266,8 @@ def load_step(
         raise FileNotFoundError(f"STEP file not found: {path}")
     if path.suffix.lower() not in (".step", ".stp"):
         raise ValueError("Expected a .step or .stp file.")
+
+    schema_identifier = _validate_step_ap214_file(path)
 
     ocp = _ocp_imports()
     Interface_Static = ocp["Interface_Static"]
@@ -463,6 +520,8 @@ def load_step(
         "source_file": str(path),
         "file_name": path.name,
         "file_format": "STEP",
+        "application_protocol": "AP214",
+        "schema_identifier": schema_identifier,
         "linear_unit": "mm",
         "unit_conversion_target": "mm",
         "unit_note": (
@@ -583,6 +642,48 @@ def convert_step_report_units(report: dict, display_unit: str) -> dict:
 def run_step_loader_tests():
     """Run input-validation tests; full B-Rep tests require a STEP fixture."""
     import tempfile
+
+    # STEP AP214 header variants accepted by common CAD exporters.
+    ap214_header = """ISO-10303-21;
+HEADER;
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
+ENDSEC;
+DATA;
+END-ISO-10303-21;
+"""
+    assert _parse_step_ap214_schema(ap214_header).startswith("AUTOMOTIVE_DESIGN")
+
+    ap214_cc2_header = """ISO-10303-21;
+HEADER;
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN_CC2 { 1 2 10303 214 -1 1 5 4 }'));
+ENDSEC;
+DATA;
+END-ISO-10303-21;
+"""
+    assert _parse_step_ap214_schema(ap214_cc2_header).startswith("AUTOMOTIVE_DESIGN_CC2")
+
+    for unsupported_header in (
+        "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));\nENDSEC;",
+        "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF'));\nENDSEC;",
+    ):
+        try:
+            _parse_step_ap214_schema(unsupported_header)
+        except ValueError as exc:
+            assert "AP214 only" in str(exc)
+        else:
+            raise AssertionError("A non-AP214 STEP schema was accepted.")
+
+    try:
+        _parse_step_ap214_schema("ISO-10303-21;\nHEADER;\nENDSEC;")
+    except ValueError as exc:
+        assert "FILE_SCHEMA" in str(exc)
+    else:
+        raise AssertionError("A STEP file without FILE_SCHEMA was accepted.")
+
+    print("[PASS] STEP AP214 schema validation")
+    print("[PASS] STEP AP214 legacy CC2 schema validation")
+    print("[PASS] STEP AP203/AP242 rejection")
+    print("[PASS] Missing FILE_SCHEMA rejection")
 
     with tempfile.TemporaryDirectory() as folder:
         bad = Path(folder) / "bad.txt"
