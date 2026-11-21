@@ -3043,7 +3043,7 @@ class ProductViewer(QWidget):
             polydata.lines = np.asarray(line_cells, dtype=np.int64)
         return polydata
 
-    def _update_trajectory_playback_visuals(self, index):
+    def _update_trajectory_playback_visuals(self, index, update_coverage=True):
         if self.trajectory_data is None or self.display_mode != "trajectory":
             return
         cache = self._prepare_trajectory_playback_cache()
@@ -3107,7 +3107,8 @@ class ProductViewer(QWidget):
                 self.trajectory_spray_state_label.setStyleSheet(
                     "color: #91A4AE; font-size: 9px; font-weight: 800; padding: 2px 5px;"
                 )
-        self._update_paint_coverage_visualization(index)
+        if update_coverage:
+            self._update_paint_coverage_visualization(index)
 
         total = len(nozzle_points)
         current_speed = float(cache["travel_speeds_mm_s"][index])
@@ -3291,7 +3292,10 @@ class ProductViewer(QWidget):
             return
         self._stop_trajectory_playback(reset=True)
         self._playback_finished = False
-        self._update_trajectory_playback_visuals(0)
+        # Show the initial nozzle pose and footprint without counting the first
+        # spray sample as already-painted surface coverage. Coverage advances
+        # only when playback actually moves forward from this reset state.
+        self._update_trajectory_playback_visuals(0, update_coverage=False)
 
     def _trajectory_arrow_length(self):
         if self.trajectory_data is None:
