@@ -2327,9 +2327,12 @@ class ProductViewer(QWidget):
         direction = pose["spray_direction_world"]
         half_angle = math.radians(self._interactive_spray_cone_angle_deg) * 0.5
         radius = self._interactive_spray_standoff * math.tan(half_angle)
+        # vtkConeSource/PyVista uses its direction vector from the cone
+        # base toward the apex. The spray axis is nozzle -> product, so the
+        # cone source direction must be opposite to the spray ray here.
         cone = pv.Cone(
             center=((nozzle + hit) * 0.5),
-            direction=direction,
+            direction=-direction,
             height=self._interactive_spray_standoff,
             radius=max(radius, 1e-6),
             resolution=32,
