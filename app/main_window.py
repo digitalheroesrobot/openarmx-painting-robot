@@ -3173,13 +3173,9 @@ class MainWindow(QMainWindow):
                 STAGE_SURFACE_IDENTIFICATION
             ] = True
 
-            # Open Stage 3. The main action on that screen generates
-            # the circular-footprint trajectory preview.
-            self._select_workflow_stage(STAGE_SPRAY_TRAJECTORY)
-            self._set_workflow_status(
-                "STATUS: READY TO GENERATE CIRCULAR SPRAY TRAJECTORY",
-                "#00E5FF",
-            )
+            # Generate the spray points immediately and show their
+            # circular-footprint preview when the operation completes.
+            self.run_spray_trajectory(force=True)
             return
 
         # ----------------------------------------------------
