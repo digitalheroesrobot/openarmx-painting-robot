@@ -61,7 +61,7 @@ def main() -> None:
 
     # An off-axis triangle must not intersect the nozzle-to-target segment.
     off_axis = build_triangle_plane(4.0)
-    off_axis.points += np.asarray([5.0, 0.0, 0.0])
+    off_axis.points = off_axis.points + np.asarray([5.0, 0.0, 0.0])
     off_axis_locator = vtkModifiedBSPTree()
     off_axis_locator.SetDataSet(off_axis)
     off_axis_locator.BuildLocator()
