@@ -2249,6 +2249,7 @@ class ProductViewer(QWidget):
             rays_per_ring=16,
             radial_rings=(0.25, 0.50, 0.75, 1.0),
         )
+        recorded_new_pose = False
         if footprints and footprints[0][0].n_cells:
             patch, boundary = footprints[0]
             patch.points = (
@@ -2270,8 +2271,11 @@ class ProductViewer(QWidget):
                     lighting=False, pickable=False,
                 )
                 self._interactive_spray_live_actors.append(actor)
-
             if self._interactive_spray_recording:
+                recorded_new_pose = self._interactive_append_record(
+                    pose, local_pose
+                )
+            if recorded_new_pose:
                 painted = patch.copy(deep=True)
                 actor = self.plotter.add_mesh(
                     painted, color="#00E676", opacity=0.28,
@@ -2306,8 +2310,6 @@ class ProductViewer(QWidget):
         )
         self._interactive_spray_live_actors.append(actor)
 
-        if self._interactive_spray_recording:
-            self._interactive_append_record(pose, local_pose)
         self.plotter.render()
 
     def _interactive_append_record(self, pose, local_pose=None):
@@ -2324,7 +2326,7 @@ class ProductViewer(QWidget):
             angle = math.degrees(math.acos(dot))
             minimum_step = max(self._interactive_spray_standoff * 0.025, 1e-3)
             if distance < minimum_step and angle < 2.0:
-                return
+                return False
         record = {
             "nozzle_point_world": pose["nozzle_point_world"].copy(),
             "surface_point_world": pose["surface_point_world"].copy(),
@@ -2337,6 +2339,7 @@ class ProductViewer(QWidget):
             "face_index": int(pose["cell_id"]),
         }
         self._interactive_spray_records.append(record)
+        return True
 
     def _on_interactive_spray_mouse_move(self, interactor, event):
         if not self._interactive_spray_active:
