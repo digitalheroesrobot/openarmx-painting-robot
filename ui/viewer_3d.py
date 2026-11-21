@@ -3089,7 +3089,7 @@ class ProductViewer(QWidget):
             "50% OF TARGET",
             "80% OF TARGET",
             "TARGET REACHED",
-            "150%+ — OVERSPRAY",
+            "150%+ — EXCESS FILM",
         )
         entries = []
         for ratio, color_hex, meaning in zip(
