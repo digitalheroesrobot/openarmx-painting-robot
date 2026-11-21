@@ -50,88 +50,114 @@ from vtkmodules.vtkRenderingCore import vtkCellPicker
 
 
 def _build_spray_footprint_overlay(
-    surface_points,
-    surface_normals,
+    mesh,
+    nozzle_points,
     spray_directions,
-    standoff,
     cone_angle_deg,
-    sides=24,
-    max_ellipse_ratio=4.0,
+    rays_per_ring=24,
+    radial_rings=(0.35, 0.70, 1.0),
 ):
-    """Create translucent tangent-plane spray footprints for preview only.
+    """Intersect each spray cone with the actual product mesh.
 
-    Each footprint is a local cone/plane intersection approximation. The
-    ellipse is widened along the projected spray direction for oblique
-    incidence. It is a visualization aid, not a ray-traced occlusion model.
+    Only first-hit mesh triangles are returned. Each footprint consists of
+    its real surface cells plus the outer feature boundary; no tangent-plane
+    ellipse or free-space polygon is drawn.
     """
-    points = np.asarray(surface_points, dtype=np.float64)
-    normals = np.asarray(surface_normals, dtype=np.float64)
+    nozzles = np.asarray(nozzle_points, dtype=np.float64)
     directions = np.asarray(spray_directions, dtype=np.float64)
     if (
-        points.ndim != 2 or points.shape[1] != 3
-        or normals.shape != points.shape or directions.shape != points.shape
-        or len(points) == 0
+        nozzles.ndim != 2 or nozzles.shape[1] != 3
+        or directions.shape != nozzles.shape or len(nozzles) == 0
     ):
-        raise ValueError("Footprint inputs must be matching non-empty (N, 3) arrays.")
-    if not all(np.all(np.isfinite(a)) for a in (points, normals, directions)):
-        raise ValueError("Footprint inputs must be finite.")
-    if not np.isfinite(standoff) or standoff <= 0.0:
-        raise ValueError("standoff must be finite and positive.")
+        raise ValueError("Nozzle points and spray directions must be matching (N, 3) arrays.")
+    if not np.all(np.isfinite(nozzles)) or not np.all(np.isfinite(directions)):
+        raise ValueError("Spray footprint inputs must be finite.")
     if not np.isfinite(cone_angle_deg) or not 0.0 < cone_angle_deg < 179.0:
         raise ValueError("cone_angle_deg must be in (0, 179).")
-    if int(sides) < 8 or not np.isfinite(max_ellipse_ratio) or max_ellipse_ratio < 1.0:
-        raise ValueError("Invalid footprint polygon resolution or ellipse ratio.")
+    if int(rays_per_ring) < 8:
+        raise ValueError("rays_per_ring must be at least 8.")
 
-    base_radius = float(standoff) * math.tan(math.radians(float(cone_angle_deg)) * 0.5)
-    vertices = []
-    faces = []
-    angles = np.linspace(0.0, 2.0 * math.pi, int(sides), endpoint=False)
-    for center, normal, direction in zip(points, normals, directions):
-        normal_length = np.linalg.norm(normal)
-        direction_length = np.linalg.norm(direction)
-        if normal_length <= 1e-12 or direction_length <= 1e-12:
+    surface = mesh.triangulate().clean()
+    if surface.n_cells == 0:
+        return []
+    bounds = np.asarray(surface.bounds, dtype=np.float64).reshape(3, 2)
+    diagonal = float(np.linalg.norm(bounds[:, 1] - bounds[:, 0]))
+    if not np.isfinite(diagonal) or diagonal <= 1e-9:
+        return []
+
+    locator = vtkOBBTree()
+    locator.SetDataSet(surface)
+    locator.BuildLocator()
+    half_angle = math.radians(float(cone_angle_deg)) * 0.5
+    ray_length = diagonal * 4.0
+    ray_count = int(rays_per_ring)
+    ring_values = tuple(float(v) for v in radial_rings)
+    if any(not 0.0 < value <= 1.0 for value in ring_values):
+        raise ValueError("radial_rings values must be in (0, 1].")
+
+    footprints = []
+    for nozzle, axis in zip(nozzles, directions):
+        axis_length = float(np.linalg.norm(axis))
+        if axis_length <= 1e-12:
+            footprints.append((pv.PolyData(), pv.PolyData()))
             continue
-        n = normal / normal_length
-        d = direction / direction_length
-        incidence = float(np.clip(np.dot(n, -d), 0.0, 1.0))
-        if incidence <= 1e-4:
+        axis = axis / axis_length
+
+        reference = np.array([1.0, 0.0, 0.0])
+        if abs(float(np.dot(reference, axis))) > 0.9:
+            reference = np.array([0.0, 1.0, 0.0])
+        tangent_u = np.cross(axis, reference)
+        tangent_u /= max(float(np.linalg.norm(tangent_u)), 1e-12)
+        tangent_v = np.cross(axis, tangent_u)
+        tangent_v /= max(float(np.linalg.norm(tangent_v)), 1e-12)
+
+        hit_cell_ids = set()
+        ray_directions = [axis]
+        for radial_fraction in ring_values:
+            theta = half_angle * radial_fraction
+            for ray_index in range(ray_count):
+                phi = 2.0 * math.pi * ray_index / ray_count
+                radial = math.cos(phi) * tangent_u + math.sin(phi) * tangent_v
+                ray = math.cos(theta) * axis + math.sin(theta) * radial
+                ray_directions.append(ray / np.linalg.norm(ray))
+
+        for ray in ray_directions:
+            endpoint = nozzle + ray * ray_length
+            intersections = vtkPoints()
+            intersected_cells = vtkIdList()
+            hit = locator.IntersectWithLine(
+                nozzle.tolist(), endpoint.tolist(), intersections, intersected_cells
+            )
+            if not hit or intersected_cells.GetNumberOfIds() == 0:
+                continue
+            # Use only the first surface encountered by this cone ray.
+            nearest_index = 0
+            nearest_distance = float("inf")
+            for hit_index in range(intersected_cells.GetNumberOfIds()):
+                hit_point = np.asarray(intersections.GetPoint(hit_index), dtype=np.float64)
+                distance = float(np.dot(hit_point - nozzle, hit_point - nozzle))
+                if distance < nearest_distance:
+                    nearest_distance = distance
+                    nearest_index = hit_index
+            cell_id = int(intersected_cells.GetId(nearest_index))
+            if 0 <= cell_id < surface.n_cells:
+                hit_cell_ids.add(cell_id)
+
+        if not hit_cell_ids:
+            footprints.append((pv.PolyData(), pv.PolyData()))
             continue
 
-        major_axis = d - np.dot(d, n) * n
-        major_length = np.linalg.norm(major_axis)
-        if major_length <= 1e-10:
-            axis_u = np.cross(n, [1.0, 0.0, 0.0])
-            if np.linalg.norm(axis_u) <= 1e-10:
-                axis_u = np.cross(n, [0.0, 1.0, 0.0])
-            axis_u /= np.linalg.norm(axis_u)
-        else:
-            axis_u = major_axis / major_length
-        axis_v = np.cross(n, axis_u)
-        axis_v /= max(np.linalg.norm(axis_v), 1e-12)
-
-        ratio = min(1.0 / incidence, float(max_ellipse_ratio))
-        center_index = len(vertices)
-        # Small normal offset prevents z-fighting with the CAD surface.
-        overlay_center = center + n * max(float(standoff) * 1e-3, 1e-7)
-        vertices.append(overlay_center.tolist())
-        ring = (
-            overlay_center[None, :]
-            + (base_radius * ratio * np.cos(angles))[:, None] * axis_u[None, :]
-            + (base_radius * np.sin(angles))[:, None] * axis_v[None, :]
+        patch = surface.extract_cells(np.asarray(sorted(hit_cell_ids), dtype=np.int64))
+        patch = patch.extract_surface().clean()
+        boundary = patch.extract_feature_edges(
+            boundary_edges=True,
+            feature_edges=False,
+            manifold_edges=False,
+            non_manifold_edges=False,
         )
-        vertices.extend(ring.tolist())
-        for side in range(int(sides)):
-            a = center_index + 1 + side
-            b = center_index + 1 + ((side + 1) % int(sides))
-            faces.append([3, center_index, a, b])
+        footprints.append((patch, boundary))
 
-    if not faces:
-        return pv.PolyData()
-    return pv.PolyData(
-        np.asarray(vertices, dtype=np.float64),
-        np.asarray(faces, dtype=np.int64).ravel(),
-    )
-
+    return footprints
 
 # ============================================================
 # UNIT CONFIGURATION
@@ -2186,7 +2212,7 @@ class ProductViewer(QWidget):
         cone_angle_deg=None,
         product_transform=None,
     ):
-        """Show optimized nozzle locations only, without activating trajectory playback."""
+        """Show nozzle locations and mesh-intersected spray footprints."""
         points = np.asarray(nozzle_points, dtype=np.float64)
         if points.ndim != 2 or points.shape[1] != 3 or len(points) == 0:
             raise ValueError("nozzle_points must be a non-empty (N, 3) array.")
@@ -2222,26 +2248,39 @@ class ProductViewer(QWidget):
         if all(value is not None for value in (
             surface_points, surface_normals, spray_directions, standoff, cone_angle_deg
         )):
-            footprint_mesh = _build_spray_footprint_overlay(
-                surface_points,
-                surface_normals,
+            footprints = _build_spray_footprint_overlay(
+                self.current_mesh,
+                points,
                 spray_directions,
-                float(standoff),
                 float(cone_angle_deg),
             )
-            if footprint_mesh.n_cells:
-                footprint_mesh.points = (
-                    np.asarray(footprint_mesh.points) @ rotation.T + transform[:3, 3]
-                )
-                self.plotter.add_mesh(
-                    footprint_mesh,
-                    color="#FFC857",
-                    opacity=0.16,
-                    smooth_shading=False,
-                    lighting=False,
-                    show_edges=False,
-                    pickable=False,
-                )
+            for footprint_mesh, boundary_mesh in footprints:
+                if footprint_mesh.n_cells:
+                    footprint_mesh.points = (
+                        np.asarray(footprint_mesh.points) @ rotation.T + transform[:3, 3]
+                    )
+                    self.plotter.add_mesh(
+                        footprint_mesh,
+                        color="#FFC857",
+                        opacity=0.13,
+                        smooth_shading=False,
+                        lighting=False,
+                        show_edges=False,
+                        pickable=False,
+                    )
+                if boundary_mesh.n_cells:
+                    boundary_mesh.points = (
+                        np.asarray(boundary_mesh.points) @ rotation.T + transform[:3, 3]
+                    )
+                    self.plotter.add_mesh(
+                        boundary_mesh,
+                        color="#FF9F1C",
+                        opacity=0.95,
+                        line_width=2.0,
+                        lighting=False,
+                        render_lines_as_tubes=False,
+                        pickable=False,
+                    )
 
         world_points = points @ rotation.T + transform[:3, 3]
         self.plotter.add_points(
