@@ -2844,6 +2844,7 @@ class MainWindow(QMainWindow):
                         STAGE_SPRAY_TRAJECTORY
                     )
                     and not self._operation_running
+                    and not self.viewer.is_trajectory_playing()
                 )
 
             else:
@@ -2868,6 +2869,7 @@ class MainWindow(QMainWindow):
                 self.start_analysis_button.setEnabled(
                     self._stage_available(STAGE_SPRAY_TRAJECTORY)
                     and not self._operation_running
+                    and not self.viewer.is_trajectory_playing()
                 )
 
             else:
@@ -2881,6 +2883,7 @@ class MainWindow(QMainWindow):
                         STAGE_SPRAY_TRAJECTORY
                     )
                     and not self._operation_running
+                    and not self.viewer.is_trajectory_playing()
                 )
 
         else:
