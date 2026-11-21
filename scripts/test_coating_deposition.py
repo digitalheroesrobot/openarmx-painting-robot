@@ -126,6 +126,7 @@ class DoubleBetaDepositionTests(unittest.TestCase):
         self.assertIn("self.run_spray_trajectory(force=True)", source)
         self.assertIn("def run_spray_trajectory(self, force=False):", source)
         self.assertIn("self.viewer.update_coating_process_preview(", source)
+        self.assertIn("generated_process = (", source)
         self.assertIn('"max_travel_acceleration_mm_s2"', source)
         self.assertIn("if not force", source)
 
