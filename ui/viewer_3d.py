@@ -591,10 +591,16 @@ class ProductViewer(QWidget):
 
         for key, label_text in checkbox_items:
             checkbox = QCheckBox(label_text)
+            checkbox.setAutoFillBackground(False)
             if key == "planar":
                 checkbox.setObjectName("TrajectoryPlanarSurfaceCheckbox")
                 checkbox.setStyleSheet("""
-                    QCheckBox { color: #EAF4FA; spacing: 7px; }
+                    QCheckBox {
+                        color: #EAF4FA;
+                        spacing: 7px;
+                        background-color: transparent;
+                        border: none;
+                    }
                     QCheckBox:disabled { color: #DCE8EF; }
                     QCheckBox::indicator {
                         width: 17px; height: 17px;
@@ -638,6 +644,16 @@ class ProductViewer(QWidget):
                         background-color: #D97732;
                         border: 2px solid #FFC18D;
                     }
+                """)
+            else:
+                checkbox.setStyleSheet("""
+                    QCheckBox {
+                        color: #EAF4FA;
+                        spacing: 7px;
+                        background-color: transparent;
+                        border: none;
+                    }
+                    QCheckBox:disabled { color: #DCE8EF; }
                 """)
             checkbox.setChecked(self.trajectory_visibility[key])
             checkbox.toggled.connect(
