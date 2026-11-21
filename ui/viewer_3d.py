@@ -687,7 +687,8 @@ class ProductViewer(QWidget):
         display_row.addStretch()
         root.addLayout(display_row)
 
-        # Minimal HUD-style playback strip: one transport row and one timeline row.
+        # Spray playback controls are hosted in the right sidebar.
+        # Keep only 3D layer visibility controls above the viewport.
         playback_panel = QFrame()
         playback_panel.setObjectName("TrajectoryPlaybackPanel")
         playback_panel.setStyleSheet("""
@@ -732,25 +733,40 @@ class ProductViewer(QWidget):
             QFrame#TrajectoryPlaybackPanel QProgressBar {
                 background: #0E1A22; color: #EAF4F8;
                 border: 1px solid #405B69; border-radius: 3px;
-                text-align: center; min-width: 76px; max-width: 88px;
+                text-align: center; min-width: 76px; max-width: 100%;
                 min-height: 15px; max-height: 15px;
             }
             QFrame#TrajectoryPlaybackPanel QProgressBar::chunk {
                 background: #37A6D5; border-radius: 2px;
             }
         """)
+        self.trajectory_playback_panel = playback_panel
         playback_layout = QVBoxLayout(playback_panel)
-        playback_layout.setContentsMargins(8, 6, 8, 6)
-        playback_layout.setSpacing(4)
+        playback_layout.setContentsMargins(8, 7, 8, 7)
+        playback_layout.setSpacing(6)
 
-        transport_row = QHBoxLayout()
-        transport_row.setSpacing(5)
-
+        status_row = QHBoxLayout()
         playback_title = QLabel("PLAYBACK")
         playback_title.setStyleSheet(
             "color: #8EADBC; font-size: 9px; font-weight: 800; letter-spacing: 1px;"
         )
-        transport_row.addWidget(playback_title)
+        status_row.addWidget(playback_title)
+        status_row.addStretch(1)
+
+        self.trajectory_spray_state_label = QLabel("● SPRAY OFF")
+        self.trajectory_spray_state_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.trajectory_spray_state_label.setStyleSheet(
+            "color: #91A4AE; font-size: 9px; font-weight: 800; padding: 2px 5px;"
+        )
+        self.trajectory_spray_state_label.setToolTip(
+            "SPRAY ON means the nozzle is applying the selected paint color. "
+            "SPRAY OFF indicates a repositioning segment."
+        )
+        status_row.addWidget(self.trajectory_spray_state_label)
+        playback_layout.addLayout(status_row)
+
+        transport_row = QHBoxLayout()
+        transport_row.setSpacing(5)
 
         self.trajectory_play_button = QPushButton("▶")
         self.trajectory_play_button.setFixedWidth(38)
@@ -771,20 +787,22 @@ class ProductViewer(QWidget):
         transport_row.addWidget(self.trajectory_reset_button)
 
         self.trajectory_playback_label = QLabel("0 / 0")
-        self.trajectory_playback_label.setMinimumWidth(82)
+        self.trajectory_playback_label.setMinimumWidth(70)
         self.trajectory_playback_label.setAlignment(Qt.AlignCenter)
         self.trajectory_playback_label.setStyleSheet(
             "color: #B9CCD5; font-size: 10px; font-weight: 700;"
         )
-        transport_row.addWidget(self.trajectory_playback_label)
+        transport_row.addWidget(self.trajectory_playback_label, 1)
+        playback_layout.addLayout(transport_row)
 
-        transport_row.addStretch(1)
+        settings_row = QHBoxLayout()
+        settings_row.setSpacing(6)
 
-        color_label = QLabel("PAINT")
+        color_label = QLabel("PAINT COLOR")
         color_label.setStyleSheet(
             "color: #8EADBC; font-size: 9px; font-weight: 700;"
         )
-        transport_row.addWidget(color_label)
+        settings_row.addWidget(color_label)
 
         self.trajectory_paint_color_button = QPushButton("●")
         self.trajectory_paint_color_button.setFixedSize(32, 28)
@@ -798,39 +816,24 @@ class ProductViewer(QWidget):
         self.trajectory_paint_color_button.clicked.connect(
             self._choose_trajectory_paint_color
         )
-        transport_row.addWidget(self.trajectory_paint_color_button)
+        settings_row.addWidget(self.trajectory_paint_color_button)
+        settings_row.addStretch(1)
 
         speed_label = QLabel("SPEED")
         speed_label.setStyleSheet(
             "color: #8EADBC; font-size: 9px; font-weight: 700;"
         )
-        transport_row.addWidget(speed_label)
+        settings_row.addWidget(speed_label)
 
         self.trajectory_playback_speed = QDoubleSpinBox()
         self.trajectory_playback_speed.setRange(0.25, 10.0)
         self.trajectory_playback_speed.setSingleStep(0.25)
         self.trajectory_playback_speed.setValue(1.0)
         self.trajectory_playback_speed.setSuffix("x")
-        self.trajectory_playback_speed.setFixedWidth(64)
-        transport_row.addWidget(self.trajectory_playback_speed)
+        self.trajectory_playback_speed.setFixedWidth(70)
+        settings_row.addWidget(self.trajectory_playback_speed)
+        playback_layout.addLayout(settings_row)
 
-        # Status is deliberately docked at the far right; it does not push
-        # or reorder the central playback controls.
-        self.trajectory_spray_state_label = QLabel("● SPRAY OFF")
-        self.trajectory_spray_state_label.setMinimumWidth(116)
-        self.trajectory_spray_state_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.trajectory_spray_state_label.setStyleSheet(
-            "color: #91A4AE; font-size: 9px; font-weight: 800; padding: 2px 5px;"
-        )
-        self.trajectory_spray_state_label.setToolTip(
-            "SPRAY ON means the nozzle is applying the selected paint color. "
-            "SPRAY OFF indicates a repositioning segment."
-        )
-        transport_row.addWidget(self.trajectory_spray_state_label)
-        playback_layout.addLayout(transport_row)
-
-        timeline_row = QHBoxLayout()
-        timeline_row.setSpacing(8)
         self.trajectory_playback_slider = QSlider(Qt.Horizontal)
         self.trajectory_playback_slider.setRange(0, 0)
         self.trajectory_playback_slider.setSingleStep(1)
@@ -839,22 +842,23 @@ class ProductViewer(QWidget):
         self.trajectory_playback_slider.valueChanged.connect(
             self._on_trajectory_playback_slider_changed
         )
-        timeline_row.addWidget(self.trajectory_playback_slider, 1)
+        playback_layout.addWidget(self.trajectory_playback_slider)
 
+        coverage_row = QHBoxLayout()
         coverage_title = QLabel("COVERAGE")
         coverage_title.setStyleSheet(
             "color: #8EADBC; font-size: 9px; font-weight: 700;"
         )
-        timeline_row.addWidget(coverage_title)
+        coverage_row.addWidget(coverage_title)
 
         self.trajectory_coverage_bar = QProgressBar()
         self.trajectory_coverage_bar.setRange(0, 1000)
         self.trajectory_coverage_bar.setValue(0)
         self.trajectory_coverage_bar.setFormat("%p%")
         self.trajectory_coverage_bar.setFixedHeight(16)
-        timeline_row.addWidget(self.trajectory_coverage_bar)
+        coverage_row.addWidget(self.trajectory_coverage_bar, 1)
 
-        self.trajectory_coverage_label = QLabel("0.0%  |  0.000 / 0.000 area")
+        self.trajectory_coverage_label = QLabel("0.0% | 0.000 / 0.000 area")
         self.trajectory_coverage_label.setMinimumWidth(0)
         self.trajectory_coverage_label.setStyleSheet(
             "color: #AFC2CB; font-size: 9px;"
@@ -863,29 +867,33 @@ class ProductViewer(QWidget):
             "Estimated geometric area reached by the spray envelope; "
             "not a measured coating-thickness or paint-mass result."
         )
-        timeline_row.addWidget(self.trajectory_coverage_label)
-        playback_layout.addLayout(timeline_row)
-
-        root.addWidget(playback_panel)
+        coverage_row.addWidget(self.trajectory_coverage_label)
+        playback_layout.addLayout(coverage_row)
 
         self.trajectory_path_stats_label = QLabel(
             "PATH SAMPLES | Planar: —  Curved: —  Fallback: —  Total: —"
         )
         self.trajectory_path_stats_label.setMinimumHeight(18)
+        self.trajectory_path_stats_label.setWordWrap(True)
+        self.trajectory_path_stats_label.setStyleSheet(
+            "color: #AFC2CB; font-size: 9px;"
+        )
         self.trajectory_path_stats_label.setToolTip(
             "Counts are based on the final generated playback samples and "
             "the path generator assigned to each surface patch."
         )
-        root.addWidget(self.trajectory_path_stats_label)
 
         self.trajectory_validation_label = QLabel(
             "PATH CHECKS | Coverage: —  Continuity: —  Orientation: —  Spray: —"
         )
         self.trajectory_validation_label.setMinimumHeight(18)
+        self.trajectory_validation_label.setWordWrap(True)
+        self.trajectory_validation_label.setStyleSheet(
+            "color: #AFC2CB; font-size: 9px;"
+        )
         self.trajectory_validation_label.setToolTip(
             "Geometric inspection results. These checks do not certify paint deposition or robot reachability."
         )
-        root.addWidget(self.trajectory_validation_label)
         return panel
 
     def _update_trajectory_validation_label(self):
