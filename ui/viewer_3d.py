@@ -2507,6 +2507,59 @@ class ProductViewer(QWidget):
             bool(self.trajectory_visibility.get("safety", True))
         )
 
+    def update_spray_standoff_preview(self, standoff_mm):
+        """
+        Move the displayed nozzle samples to the newly configured stand-off.
+
+        This updates only the viewer's preview data. The generated Stage 3
+        result remains unchanged and is correctly marked outdated by the
+        owning workflow when its parameters no longer match.
+        """
+        if self.trajectory_data is None or self.display_mode != "trajectory":
+            return False
+
+        distance_mm = float(standoff_mm)
+        if not math.isfinite(distance_mm) or distance_mm <= 0.0:
+            raise ValueError("Spray working distance must be finite and positive.")
+
+        mm_per_unit = MM_PER_UNIT.get(self.source_unit, 1.0)
+        distance_coordinate_units = distance_mm / mm_per_unit
+        surface_points = np.asarray(
+            self.trajectory_data["surface_points"], dtype=np.float64
+        )
+        surface_normals = np.asarray(
+            self.trajectory_data["surface_normals"], dtype=np.float64
+        )
+        normal_lengths = np.linalg.norm(surface_normals, axis=1)
+        if (
+            surface_points.ndim != 2
+            or surface_points.shape[1] != 3
+            or surface_normals.shape != surface_points.shape
+            or not np.all(np.isfinite(surface_points))
+            or not np.all(np.isfinite(surface_normals))
+            or np.any(normal_lengths <= 1e-12)
+        ):
+            raise ValueError("Cannot update spray points: invalid surface geometry.")
+
+        unit_normals = surface_normals / normal_lengths[:, None]
+        self.trajectory_data["nozzle_points"] = (
+            surface_points + distance_coordinate_units * unit_normals
+        )
+
+        parameters = dict(self.trajectory_data.get("parameters", {}))
+        parameters["standoff_mm"] = distance_mm
+        parameters["standoff_coordinate_units"] = distance_coordinate_units
+        profile = dict(parameters.get("sprayer_profile", {}))
+        profile["standoff_mm"] = distance_mm
+        parameters["sprayer_profile"] = profile
+        self.trajectory_data["parameters"] = parameters
+
+        # Cached playback geometry is based on the previous nozzle locations.
+        self._playback_cache = None
+        self._stop_trajectory_playback(reset=True)
+        self._render_product(reset_camera=False)
+        return True
+
     def _add_trajectory_visualization(self):
         """Display independent nozzle spray points at the configured stand-off."""
         data = self.trajectory_data
