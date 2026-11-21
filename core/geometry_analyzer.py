@@ -241,156 +241,76 @@ def _build_threshold_configuration(mesh, coordinate_unit):
 def _build_topology_mesh(
     source_mesh: trimesh.Trimesh,
 ) -> tuple[trimesh.Trimesh, dict]:
+    """Build a separate topology mesh without modifying the source mesh.
+
+    Only exactly equal finite coordinates are merged. Triangle count and
+    order are preserved. Invalid faces receive private dummy vertices so
+    they cannot create false adjacency with valid or other invalid faces.
     """
-    Build a separate topology mesh.
-
-    Important:
-    - Source mesh is never modified.
-    - Only exactly equal finite coordinates are merged.
-    - No distance tolerance is used.
-    - Triangle count and triangle order are preserved.
-    - Face indices in the returned mesh correspond to source
-      face indices.
-    - Invalid faces remain isolated and are not used for
-      adjacency-based analysis.
-    """
-
-    source_vertices = np.asarray(
-        source_mesh.vertices,
-        dtype=np.float64,
-    )
-
-    source_faces = np.asarray(
-        source_mesh.faces,
-        dtype=np.int64,
-    )
-
+    source_vertices = np.asarray(source_mesh.vertices, dtype=np.float64)
+    source_faces = np.asarray(source_mesh.faces, dtype=np.int64)
     vertex_count = len(source_vertices)
     face_count = len(source_faces)
-
     if vertex_count == 0 or face_count == 0:
-        raise ValueError(
-            "STL mesh contains no vertices or triangles."
-        )
+        raise ValueError("STL mesh contains no vertices or triangles.")
 
-    finite_vertex_mask = np.all(
-        np.isfinite(source_vertices),
-        axis=1,
-    )
-
-    source_to_topology = np.full(
-        vertex_count,
-        -1,
-        dtype=np.int64,
-    )
-
-    finite_ids = np.flatnonzero(
-        finite_vertex_mask
-    )
-
-    finite_coordinates = source_vertices[
-        finite_ids
-    ]
-
+    finite_vertex_mask = np.all(np.isfinite(source_vertices), axis=1)
+    source_to_topology = np.full(vertex_count, -1, dtype=np.int64)
+    finite_ids = np.flatnonzero(finite_vertex_mask)
+    finite_coordinates = source_vertices[finite_ids]
     if len(finite_ids):
-
         unique_coordinates, inverse = np.unique(
-            finite_coordinates,
-            axis=0,
-            return_inverse=True,
+            finite_coordinates, axis=0, return_inverse=True
         )
-
-        topology_vertices = [
-            row.copy()
-            for row in unique_coordinates
-        ]
-
+        topology_vertices = np.asarray(unique_coordinates, dtype=np.float64).copy()
         source_to_topology[finite_ids] = inverse
-
     else:
+        topology_vertices = np.empty((0, 3), dtype=np.float64)
 
-        unique_coordinates = np.empty(
-            (0, 3),
-            dtype=np.float64,
+    # Keep invalid source vertices isolated, but append them in one allocation.
+    invalid_ids = np.flatnonzero(~finite_vertex_mask)
+    if len(invalid_ids):
+        first_invalid_vertex = len(topology_vertices)
+        source_to_topology[invalid_ids] = (
+            first_invalid_vertex + np.arange(len(invalid_ids), dtype=np.int64)
         )
+        topology_vertices = np.concatenate((
+            topology_vertices,
+            np.zeros((len(invalid_ids), 3), dtype=np.float64),
+        ), axis=0)
 
-        topology_vertices = []
-
-    # Invalid vertices are kept separate.
-    # They must never accidentally connect valid triangles.
-    invalid_ids = np.flatnonzero(
-        ~finite_vertex_mask
-    )
-
-    for source_id in invalid_ids:
-
-        topology_id = len(topology_vertices)
-
-        source_to_topology[source_id] = topology_id
-
-        topology_vertices.append(
-            np.zeros(3, dtype=np.float64)
-        )
-
-    topology_vertices = np.asarray(
-        topology_vertices,
-        dtype=np.float64,
-    )
-
-    topology_faces = source_to_topology[
-        source_faces
-    ]
-
-    # Validate original face indices.
+    # Validate indices before indexing source_to_topology. This also makes the
+    # invalid-index fallback effective instead of raising IndexError early.
     valid_indices = np.all(
-        (source_faces >= 0)
-        & (source_faces < vertex_count),
-        axis=1,
+        (source_faces >= 0) & (source_faces < vertex_count), axis=1
     )
-
-    valid_coordinates = np.zeros(
-        face_count,
-        dtype=bool,
-    )
-
-    valid_ids = np.flatnonzero(
-        valid_indices
-    )
-
+    valid_coordinates = np.zeros(face_count, dtype=bool)
+    valid_ids = np.flatnonzero(valid_indices)
     if len(valid_ids):
         valid_coordinates[valid_ids] = np.all(
-            finite_vertex_mask[
-                source_faces[valid_ids]
-            ],
-            axis=1,
+            finite_vertex_mask[source_faces[valid_ids]], axis=1
         )
+    valid_source_faces = valid_indices & valid_coordinates
 
-    valid_source_faces = (
-        valid_indices
-        & valid_coordinates
-    )
+    topology_faces = np.empty_like(source_faces)
+    valid_face_ids = np.flatnonzero(valid_source_faces)
+    if len(valid_face_ids):
+        topology_faces[valid_face_ids] = source_to_topology[
+            source_faces[valid_face_ids]
+        ]
 
-    # Give invalid faces unique dummy vertices.
-    # This prevents invalid geometry from creating false
-    # adjacency with other invalid faces.
-    for face_id in np.flatnonzero(
-        ~valid_source_faces
-    ):
-
-        new_indices = []
-
-        for _ in range(3):
-
-            new_indices.append(
-                len(topology_vertices)
-            )
-
-            topology_vertices = np.vstack((
-                topology_vertices,
-                np.zeros((1, 3), dtype=np.float64),
-            ))
-
-        topology_faces[face_id] = new_indices
+    invalid_face_ids = np.flatnonzero(~valid_source_faces)
+    if len(invalid_face_ids):
+        first_dummy_vertex = len(topology_vertices)
+        dummy_faces = (
+            first_dummy_vertex
+            + np.arange(3 * len(invalid_face_ids), dtype=np.int64)
+        ).reshape(-1, 3)
+        topology_faces[invalid_face_ids] = dummy_faces
+        topology_vertices = np.concatenate((
+            topology_vertices,
+            np.zeros((3 * len(invalid_face_ids), 3), dtype=np.float64),
+        ), axis=0)
 
     topology_mesh = trimesh.Trimesh(
         vertices=topology_vertices,
@@ -398,40 +318,21 @@ def _build_topology_mesh(
         process=False,
         validate=False,
     )
-
-    topology_mesh.metadata = deepcopy(
-        getattr(source_mesh, "metadata", {})
-    )
-
-    merged_vertex_count = (
-        len(finite_ids) - len(unique_coordinates)
-    )
+    topology_mesh.metadata = deepcopy(getattr(source_mesh, "metadata", {}))
 
     info = {
         "source_vertex_count": int(vertex_count),
-        "topology_vertex_count": int(
-            len(topology_vertices)
-        ),
+        "topology_vertex_count": int(len(topology_vertices)),
         "source_triangle_count": int(face_count),
-        "topology_triangle_count": int(
-            len(topology_mesh.faces)
-        ),
-        "exact_duplicate_vertices_merged": int(
-            merged_vertex_count
-        ),
-        "invalid_source_faces": int(
-            np.count_nonzero(~valid_source_faces)
-        ),
+        "topology_triangle_count": int(len(topology_mesh.faces)),
+        "exact_duplicate_vertices_merged": int(len(finite_ids) - len(np.unique(finite_coordinates, axis=0))),
+        "invalid_source_faces": int(np.count_nonzero(~valid_source_faces)),
         "welding_method": "exact_coordinate_equality",
         "welding_tolerance_coordinate_units": 0.0,
         "source_mesh_modified": False,
-        "face_order_preserved": bool(
-            len(topology_mesh.faces) == face_count
-        ),
+        "face_order_preserved": bool(len(topology_mesh.faces) == face_count),
     }
-
     return topology_mesh, info
-
 
 # ============================================================
 # UNION FIND
