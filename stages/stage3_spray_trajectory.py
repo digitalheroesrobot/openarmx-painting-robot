@@ -2010,6 +2010,48 @@ def _generate_partitioned_surface_raster_for_patch(
     return combined
 
 
+def _step_surface_types_for_mesh_triangles(
+    mesh: trimesh.Trimesh,
+    triangle_indices: np.ndarray,
+) -> tuple[str, ...] | None:
+    """Return authoritative STEP surface types for selected display triangles."""
+    from core.step_loader import get_step_brep_context
+
+    context = get_step_brep_context(mesh)
+    if context is None:
+        return None
+
+    indices = np.unique(np.asarray(triangle_indices, dtype=np.int64))
+    triangle_face_ids = np.asarray(context["triangle_face_ids"], dtype=np.int64)
+    if indices.ndim != 1 or np.any(indices < 0) or np.any(indices >= len(triangle_face_ids)):
+        raise ValueError("STEP surface classification received an invalid mesh triangle index.")
+
+    face_records = context["face_records"]
+    surface_types = set()
+    for triangle_index in indices:
+        face_id = int(triangle_face_ids[int(triangle_index)])
+        if face_id < 1 or face_id > len(face_records):
+            raise ValueError("STEP triangle mapping references an invalid source Face ID.")
+        record = face_records[face_id - 1]
+        surface_type = str(record.get("surface_type", "OTHER")).strip().upper()
+        surface_types.add(surface_type or "OTHER")
+    return tuple(sorted(surface_types))
+
+
+def _step_patch_requires_curved_raster(
+    mesh: trimesh.Trimesh,
+    triangle_indices: np.ndarray,
+) -> tuple[bool, tuple[str, ...] | None]:
+    """Use exact CAD surface type, not a flat display facet, to choose raster mode."""
+    surface_types = _step_surface_types_for_mesh_triangles(mesh, triangle_indices)
+    if surface_types is None:
+        return False, None
+    # A display triangle is always planar. Only an exact STEP PLANE is a
+    # physically planar source surface; cylinders, tori, splines, cones, and
+    # mixed/unknown patches must use the surface-following raster path.
+    return any(value != "PLANE" for value in surface_types), surface_types
+
+
 def _order_trajectory_with_planar_raster(
     mesh: trimesh.Trimesh,
     face_normals: np.ndarray,
@@ -2042,18 +2084,30 @@ def _order_trajectory_with_planar_raster(
     fallback_reason_counts = {}
     fallback_patch_reasons = []
     curved_normal_smoothing_deviation_max_deg = 0.0
+    step_curvature_forced_patch_ids = []
+    step_curvature_surface_types_by_patch = {}
 
     for patch_id in np.unique(patch_ids):
         indices = np.flatnonzero(patch_ids == patch_id)
         patch_faces = np.unique(face_indices[indices])
-        raster = _generate_planar_raster_for_patch(
-            mesh=mesh,
-            face_indices=patch_faces,
-            normals=np.asarray(face_normals, dtype=np.float64),
-            standoff_coordinate_units=standoff_coordinate_units,
-            sample_spacing_coordinate_units=sampling_spacing_coordinate_units,
-            track_spacing_coordinate_units=track_spacing_coordinate_units,
+        force_curved_raster, exact_step_surface_types = (
+            _step_patch_requires_curved_raster(mesh, patch_faces)
         )
+        if force_curved_raster:
+            step_curvature_forced_patch_ids.append(int(patch_id))
+            step_curvature_surface_types_by_patch[str(int(patch_id))] = list(
+                exact_step_surface_types or ()
+            )
+            raster = None
+        else:
+            raster = _generate_planar_raster_for_patch(
+                mesh=mesh,
+                face_indices=patch_faces,
+                normals=np.asarray(face_normals, dtype=np.float64),
+                standoff_coordinate_units=standoff_coordinate_units,
+                sample_spacing_coordinate_units=sampling_spacing_coordinate_units,
+                track_spacing_coordinate_units=track_spacing_coordinate_units,
+            )
         if raster is not None:
             patch_result = raster
             rasterized_patch_ids.append(int(patch_id))
@@ -2314,6 +2368,15 @@ def _order_trajectory_with_planar_raster(
         "fallback_patch_ids": [int(value) for value in fallback_patch_ids],
         "fallback_reason_counts": fallback_reason_counts,
         "fallback_patch_reasons": fallback_patch_reasons,
+        "step_curvature_forced_patch_ids": [
+            int(value) for value in step_curvature_forced_patch_ids
+        ],
+        "step_curvature_forced_patch_count": int(
+            len(step_curvature_forced_patch_ids)
+        ),
+        "step_curvature_surface_types_by_patch": (
+            step_curvature_surface_types_by_patch
+        ),
         "per_patch": per_patch_statistics,
         "note": (
             "Playback samples are generated path points. Source candidate samples "
@@ -2322,6 +2385,23 @@ def _order_trajectory_with_planar_raster(
         ),
     }
     result["path_statistics"] = path_statistics
+
+    if step_curvature_forced_patch_ids:
+        surface_type_counts = {}
+        for values in step_curvature_surface_types_by_patch.values():
+            for surface_type in values:
+                surface_type_counts[surface_type] = (
+                    surface_type_counts.get(surface_type, 0) + 1
+                )
+        print(
+            "STEP SURFACE-AWARE RASTER | "
+            f"{len(step_curvature_forced_patch_ids)} exact non-planar/mixed patches "
+            "routed away from planar raster | "
+            + ", ".join(
+                f"{key}: {value}"
+                for key, value in sorted(surface_type_counts.items())
+            )
+        )
 
     print("\n" + "=" * 68)
     print("STAGE 3 PATH GENERATION DIAGNOSTICS")
@@ -6169,6 +6249,79 @@ def run_stage3_numerical_tests() -> dict:
     assert inspection_result["spray_control"]["spray_off_transition_count"] == 1
     assert inspection_result["spray_control"]["spray_on_sample_count"] == 3
 
+    # --------------------------------------------------------
+    # Test 24G: Exact STEP surface type overrides planar display facets.
+    # A flat tessellation of a cylinder must not be mistaken for a planar CAD face.
+    # --------------------------------------------------------
+    surface_type_test_mesh = trimesh.Trimesh(
+        vertices=np.asarray([
+            [0.0, 0.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [20.0, 20.0, 0.0],
+            [0.0, 20.0, 0.0],
+        ], dtype=np.float64),
+        faces=np.asarray([[0, 1, 2], [0, 2, 3]], dtype=np.int64),
+        process=False,
+    )
+    surface_type_test_mesh._step_brep_context = {
+        "shape": object(),
+        "faces": (object(),),
+        "face_records": ({"surface_type": "CYLINDER"},),
+        "triangle_face_ids": np.asarray([1, 1], dtype=np.int64),
+        "triangle_uvs": np.zeros((2, 3, 2), dtype=np.float64),
+        "triangle_uv_valid": np.ones(2, dtype=bool),
+        "face_adjacency": {"1": []},
+        "schema_identifier": "AUTOMOTIVE_DESIGN",
+    }
+    force_curved, exact_types = _step_patch_requires_curved_raster(
+        surface_type_test_mesh,
+        np.asarray([0, 1], dtype=np.int64),
+    )
+    assert force_curved is True
+    assert exact_types == ("CYLINDER",)
+
+    # Exercise the complete dispatcher. STEP evaluation is isolated because
+    # this synthetic test validates raster selection, not Open CASCADE geometry.
+    original_step_refiner = globals()["_refine_trajectory_with_step_brep"]
+    try:
+        def _test_skip_step_refinement(mesh, trajectory, standoff_coordinate_units, coordinate_unit):
+            return dict(trajectory), {"status": "NOT_APPLICABLE"}
+
+        globals()["_refine_trajectory_with_step_brep"] = _test_skip_step_refinement
+        test_face_normals = np.asarray(surface_type_test_mesh.face_normals, dtype=np.float64)
+        test_surface_points = np.asarray(surface_type_test_mesh.triangles_center, dtype=np.float64)
+        test_raster_result = _order_trajectory_with_planar_raster(
+            mesh=surface_type_test_mesh,
+            face_normals=test_face_normals,
+            surface_points=test_surface_points,
+            surface_normals=test_face_normals.copy(),
+            nozzle_points=test_surface_points + 100.0 * test_face_normals,
+            spray_directions=-test_face_normals,
+            nozzle_frames=_build_nozzle_frames(-test_face_normals),
+            face_indices=np.asarray([0, 1], dtype=np.int64),
+            patch_ids=np.asarray([7, 7], dtype=np.int64),
+            standoff_coordinate_units=100.0,
+            sampling_spacing_coordinate_units=5.0,
+            track_spacing_coordinate_units=5.0,
+            coordinate_unit="mm",
+        )
+    finally:
+        globals()["_refine_trajectory_with_step_brep"] = original_step_refiner
+    assert test_raster_result["rasterized_curved_patch_ids"] == [7]
+    assert test_raster_result["rasterized_planar_patch_ids"] == []
+    assert test_raster_result["path_statistics"]["curved_sample_count"] > 0
+
+    # An exact STEP plane remains eligible for the planar raster.
+    surface_type_test_mesh._step_brep_context["face_records"] = (
+        {"surface_type": "PLANE"},
+    )
+    force_curved_plane, plane_types = _step_patch_requires_curved_raster(
+        surface_type_test_mesh,
+        np.asarray([0, 1], dtype=np.int64),
+    )
+    assert force_curved_plane is False
+    assert plane_types == ("PLANE",)
+
     return {
         "status": "PASS",
         "tests": {
@@ -6207,6 +6360,7 @@ def run_stage3_numerical_tests() -> dict:
             "full_nozzle_frame_roll_inspection": "PASS",
             "surface_discontinuity_spray_off_splitting": "PASS",
             "step_brep_refinement_failure_diagnostics": "PASS",
+            "step_surface_type_aware_raster_selection": "PASS",
         },
         "sample_count": int(sample_count),
         "unit_standoff_tests": unit_test_results,
