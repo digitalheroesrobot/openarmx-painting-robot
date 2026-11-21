@@ -4089,15 +4089,10 @@ class MainWindow(QMainWindow):
             "INTERACTIVE SPRAY ACTIVE | MOVE THE MOUSE OVER THE PRODUCT TO RECORD"
         )
         self.analysis_summary.setText(
-            "INTERACTIVE SPRAY RECORDING
-
-"
-            "Move the mouse over the product surface.
-"
-            "The nozzle follows the surface at the configured standoff.
-"
-            "Valid surface poses are recorded automatically.
-"
+            "INTERACTIVE SPRAY RECORDING\n\n"
+            "Move the mouse over the product surface.\n"
+            "The nozzle follows the surface at the configured standoff.\n"
+            "Valid surface poses are recorded automatically.\n"
             "Use FINISH SPRAY PATH in this panel to complete recording."
         )
 
