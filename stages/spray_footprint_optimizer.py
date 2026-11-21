@@ -149,6 +149,7 @@ def optimize_redundant_spray_points(
     total_area = float(np.sum(weights))
 
     return {
+        "keep_indices": kept_indices,
         "status": "COMPLETED_MESH_SAMPLED_CONE_OVERLAP_REDUCTION",
         "algorithm": "3D_CONE_MEMBERSHIP_WITH_AREA_WEIGHTED_GREEDY_REDUNDANCY_REMOVAL",
         "overlap_threshold_percent": threshold,
