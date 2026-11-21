@@ -1137,22 +1137,32 @@ def _generate_planar_raster_for_patch(
             return None
         return float(values[0]), float(values[-1])
 
+    def barycentric_2d(point: np.ndarray, triangle: np.ndarray):
+        """Return projected-triangle barycentric weights, including edge points."""
+        a, b, c = np.asarray(triangle, dtype=np.float64)
+        v0 = b - a
+        v1 = c - a
+        v2 = np.asarray(point, dtype=np.float64) - a
+        denominator = float(v0[0] * v1[1] - v1[0] * v0[1])
+        if not math.isfinite(denominator) or abs(denominator) <= 1e-14:
+            return None
+        beta = float((v2[0] * v1[1] - v1[0] * v2[1]) / denominator)
+        gamma = float((v0[0] * v2[1] - v0[1] * v2[0]) / denominator)
+        weights = np.asarray([1.0 - beta - gamma, beta, gamma], dtype=np.float64)
+        if (
+            not np.all(np.isfinite(weights))
+            or float(np.min(weights)) < -1e-8
+            or float(np.max(weights)) > 1.0 + 1e-8
+        ):
+            return None
+        weights = np.clip(weights, 0.0, 1.0)
+        total = float(np.sum(weights))
+        if total <= NORMAL_EPSILON:
+            return None
+        return weights / total
+
     def point_in_triangle_2d(point: np.ndarray, triangle: np.ndarray) -> bool:
-        a, b, c = triangle
-        v0 = c - a
-        v1 = b - a
-        v2 = point - a
-        dot00 = float(np.dot(v0, v0))
-        dot01 = float(np.dot(v0, v1))
-        dot02 = float(np.dot(v0, v2))
-        dot11 = float(np.dot(v1, v1))
-        dot12 = float(np.dot(v1, v2))
-        denominator = dot00 * dot11 - dot01 * dot01
-        if abs(denominator) <= 1e-14:
-            return False
-        u = (dot11 * dot02 - dot01 * dot12) / denominator
-        v = (dot00 * dot12 - dot01 * dot02) / denominator
-        return u >= -1e-8 and v >= -1e-8 and u + v <= 1.0 + 1e-8
+        return barycentric_2d(point, triangle) is not None
 
     out_surface = []
     out_normals = []
@@ -1193,16 +1203,39 @@ def _generate_planar_raster_for_patch(
             segment_faces = []
             for along in along_values:
                 point_2d = np.array([along, float(offset)], dtype=np.float64)
-                source_face = None
+                source_local_index = None
+                source_weights = None
                 for local_index in source_local_indices:
-                    if point_in_triangle_2d(point_2d, projected_triangles[local_index]):
-                        source_face = int(face_indices[local_index])
+                    weights = barycentric_2d(
+                        point_2d, projected_triangles[local_index]
+                    )
+                    if weights is not None:
+                        source_local_index = int(local_index)
+                        source_weights = weights
                         break
-                if source_face is None:
-                    # Boundary tolerance fallback: select the closest triangle in
-                    # this merged interval, while retaining its exact clipped line.
-                    source_face = int(face_indices[source_local_indices[0]])
-                point_3d = origin + lane_axis * along + offset_axis * float(offset)
+
+                if source_local_index is None:
+                    # Merged 2-D intervals can contain a tiny numerical gap.
+                    # Search the complete patch before rejecting the planar
+                    # raster; never assign a point to an arbitrary first triangle.
+                    for local_index, projected_triangle in enumerate(projected_triangles):
+                        weights = barycentric_2d(point_2d, projected_triangle)
+                        if weights is not None:
+                            source_local_index = int(local_index)
+                            source_weights = weights
+                            break
+
+                if source_local_index is None or source_weights is None:
+                    # Do not invent a source-face association. Reject this planar
+                    # patch so the curved raster / explicit fallback can handle it.
+                    return None
+
+                source_face = int(face_indices[source_local_index])
+                # Reconstruct on the actual source triangle, not on the mean
+                # PCA plane. This preserves a valid 3-D barycentric mapping even
+                # when the patch is within the allowed planar tolerance but is
+                # not mathematically perfectly coplanar.
+                point_3d = source_weights @ triangles[source_local_index]
                 segment_points.append(point_3d)
                 segment_faces.append(source_face)
 
@@ -5675,6 +5708,51 @@ def run_stage3_numerical_tests() -> dict:
         5.0,
         atol=1e-6,
     )
+
+    # --------------------------------------------------------
+    # Test 22H: Planar raster samples must retain a valid source-triangle
+    # barycentric association even when the accepted patch is slightly warped.
+    # The raster must reconstruct points on the selected 3-D triangle rather
+    # than on the average PCA plane.
+    # --------------------------------------------------------
+    warped_planar_mesh = trimesh.Trimesh(
+        vertices=np.asarray([
+            [0.0, 0.0, 0.0],
+            [100.0, 0.0, 0.0],
+            [100.0, 100.0, 0.20],
+            [0.0, 100.0, 0.20],
+        ], dtype=np.float64),
+        faces=np.asarray([[0, 1, 2], [0, 2, 3]], dtype=np.int64),
+        process=False,
+    )
+    warped_planar_normals = np.asarray(
+        warped_planar_mesh.face_normals, dtype=np.float64
+    )
+    warped_planar_raster = _generate_planar_raster_for_patch(
+        mesh=warped_planar_mesh,
+        face_indices=np.asarray([0, 1], dtype=np.int64),
+        normals=warped_planar_normals,
+        standoff_coordinate_units=10.0,
+        sample_spacing_coordinate_units=10.0,
+        track_spacing_coordinate_units=25.0,
+    )
+    assert warped_planar_raster is not None
+    assert len(warped_planar_raster["surface_points"]) > 0
+    for point, face_index in zip(
+        warped_planar_raster["surface_points"],
+        warped_planar_raster["face_indices"],
+    ):
+        source_triangle = warped_planar_mesh.vertices[
+            warped_planar_mesh.faces[int(face_index)]
+        ]
+        weights = _barycentric_coordinates_on_triangle(
+            point, source_triangle, tolerance=2e-5
+        )
+        assert weights is not None, (
+            "Planar raster emitted a sample outside its selected source triangle."
+        )
+        reconstructed = weights @ source_triangle
+        assert np.allclose(point, reconstructed, atol=1e-7, rtol=1e-9)
 
     # --------------------------------------------------------
     # Test 23: Adaptive speed decreases at a sharp path turn.
