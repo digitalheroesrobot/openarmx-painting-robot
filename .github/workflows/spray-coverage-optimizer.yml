@@ -20,6 +20,8 @@ on:
       - "scripts/test_spray_coverage_path_planner.py"
       - "stages/spray_deposition_path_optimizer.py"
       - "scripts/test_spray_deposition_path_optimizer.py"
+      - "stages/spray_stroke_route_optimizer.py"
+      - "scripts/test_spray_stroke_route_optimizer.py"
       - "ui/viewer_3d.py"
       - "ui/sprayer_settings.py"
       - "app/main_window.py"
@@ -41,6 +43,8 @@ on:
       - "scripts/test_spray_coverage_path_planner.py"
       - "stages/spray_deposition_path_optimizer.py"
       - "scripts/test_spray_deposition_path_optimizer.py"
+      - "stages/spray_stroke_route_optimizer.py"
+      - "scripts/test_spray_stroke_route_optimizer.py"
       - ".github/workflows/spray-coverage-optimizer.yml"
 
 jobs:
@@ -56,7 +60,7 @@ jobs:
       - name: Install numerical dependencies
         run: python -m pip install --upgrade numpy scipy trimesh
       - name: Compile trajectory, safety, optimizer, and GUI modules
-        run: python -m compileall -q core/spray_coverage_optimizer.py stages/trajectory_safety.py stages/human_like_spray_planner.py stages/spray_footprint_optimizer.py stages/spray_deposition_model.py stages/stage3_spray_trajectory.py ui/sprayer_settings.py ui/viewer_3d.py app/main_window.py scripts/test_spray_coverage_optimizer.py scripts/test_trajectory_safety.py scripts/test_human_like_spray_planner.py scripts/test_spray_footprint_optimizer.py scripts/test_spray_deposition_model.py stages/spray_coverage_path_planner.py scripts/test_spray_coverage_path_planner.py stages/spray_deposition_path_optimizer.py scripts/test_spray_deposition_path_optimizer.py scripts/test_stage3_global_sweep.py scripts/test_circular_spray_footprint.py
+        run: python -m compileall -q core/spray_coverage_optimizer.py stages/trajectory_safety.py stages/human_like_spray_planner.py stages/spray_footprint_optimizer.py stages/spray_deposition_model.py stages/stage3_spray_trajectory.py ui/sprayer_settings.py ui/viewer_3d.py app/main_window.py scripts/test_spray_coverage_optimizer.py scripts/test_trajectory_safety.py scripts/test_human_like_spray_planner.py scripts/test_spray_footprint_optimizer.py scripts/test_spray_deposition_model.py stages/spray_coverage_path_planner.py scripts/test_spray_coverage_path_planner.py stages/spray_deposition_path_optimizer.py scripts/test_spray_deposition_path_optimizer.py stages/spray_stroke_route_optimizer.py scripts/test_spray_stroke_route_optimizer.py scripts/test_stage3_global_sweep.py scripts/test_circular_spray_footprint.py
       - name: Run coverage optimizer tests
         run: python scripts/test_spray_coverage_optimizer.py
       - name: Run trajectory safety tests
@@ -73,5 +77,7 @@ jobs:
         run: python -m unittest scripts.test_spray_coverage_path_planner -v
       - name: Run relative deposition path optimizer tests
         run: python -m unittest scripts.test_spray_deposition_path_optimizer -v
+      - name: Run spray stroke route optimizer tests
+        run: python -m unittest scripts.test_spray_stroke_route_optimizer -v
       - name: Run circular spray footprint tests
         run: python -m unittest scripts.test_circular_spray_footprint -v
