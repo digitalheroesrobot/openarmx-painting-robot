@@ -3575,6 +3575,8 @@ class ProductViewer(QWidget):
         rewound = index < cache["coverage_processed_index"]
         if rewound:
             cache["coverage_correction_plan"] = None
+            if hasattr(self, "trajectory_correction_apply_button"):
+                self.trajectory_correction_apply_button.setEnabled(False)
             if hasattr(self, "trajectory_correction_label"):
                 self.trajectory_correction_label.setText(
                     "COVERAGE CORRECTION | PLAYBACK REWOUND — ANALYSIS INVALIDATED"
