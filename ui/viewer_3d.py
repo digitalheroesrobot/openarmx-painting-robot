@@ -188,10 +188,11 @@ class ProductViewer(QWidget):
             "curved": True,
             "nozzle": False,
             "arrows": False,
-            "paths": False,
-            "samples": False,
+            "paths": True,
+            "samples": True,
+            "footprints": True,
             "frames": False,
-            "safety": True,
+            "safety": False,
         }
         self.trajectory_product_transform = np.eye(4, dtype=float)
         self._last_product_transform = np.eye(4, dtype=float)
@@ -649,8 +650,9 @@ class ProductViewer(QWidget):
         checkbox_items = [
             ("planar", "Planar surface"),
             ("curved", "Curved surface"),
+            ("samples", "Spray points"),
+            ("footprints", "Circular spray footprints"),
             ("paths", "Trajectory path"),
-            ("safety", "Safety overlay"),
         ]
 
         for key, label_text in checkbox_items:
@@ -2529,6 +2531,66 @@ class ProductViewer(QWidget):
                 point_size=6,
                 render_points_as_spheres=True,
             )
+
+        # Draw the circular cone footprint on each sampled target point.
+        # The radius is derived from the exact saved profile and CAD-unit
+        # standoff; no second set of UI/default parameters is introduced.
+        if self.trajectory_visibility.get("footprints", True):
+            parameters = data.get("parameters", {})
+            profile = parameters.get("sprayer_profile", {})
+            angle_deg = float(profile.get("spray_cone_angle_deg", 0.0) or 0.0)
+            standoff_units = float(
+                parameters.get("standoff_coordinate_units", 0.0) or 0.0
+            )
+            if (
+                str(profile.get("pattern_type", "round_cone")).lower() == "round_cone"
+                and 0.0 < angle_deg < 179.0
+                and standoff_units > 0.0
+            ):
+                radius = standoff_units * np.tan(np.deg2rad(angle_deg * 0.5))
+                stride = max(1, int(np.ceil(count / 1800)))
+                disk_indices = np.arange(0, count, stride, dtype=np.int64)
+                ring_count = 20
+                disk_points = []
+                disk_faces = []
+                for sample_index in disk_indices:
+                    normal = data["surface_normals"][sample_index].astype(float)
+                    normal /= max(float(np.linalg.norm(normal)), 1e-12)
+                    reference = np.array([1.0, 0.0, 0.0])
+                    if abs(float(np.dot(reference, normal))) > 0.90:
+                        reference = np.array([0.0, 1.0, 0.0])
+                    tangent_x = np.cross(normal, reference)
+                    tangent_x /= max(float(np.linalg.norm(tangent_x)), 1e-12)
+                    tangent_y = np.cross(normal, tangent_x)
+                    center = data["surface_points"][sample_index]
+                    base = len(disk_points)
+                    disk_points.append(center.tolist())
+                    for ring_index in range(ring_count):
+                        theta = 2.0 * np.pi * ring_index / ring_count
+                        point = center + radius * (
+                            np.cos(theta) * tangent_x + np.sin(theta) * tangent_y
+                        )
+                        disk_points.append(point.tolist())
+                    for ring_index in range(ring_count):
+                        a = base + 1 + ring_index
+                        b = base + 1 + ((ring_index + 1) % ring_count)
+                        disk_faces.extend((3, base, a, b))
+                if disk_points:
+                    source_points = np.asarray(disk_points, dtype=float)
+                    world_points = source_points @ rotation.T + translation
+                    footprint_mesh = pv.PolyData(
+                        world_points, np.asarray(disk_faces, dtype=np.int64)
+                    )
+                    self.plotter.add_mesh(
+                        footprint_mesh,
+                        color="#36C5D8",
+                        opacity=0.20,
+                        show_edges=True,
+                        edge_color="#58D9E8",
+                        line_width=0.6,
+                        lighting=False,
+                        pickable=False,
+                    )
 
         if self.trajectory_visibility["nozzle"]:
             self.plotter.add_points(
