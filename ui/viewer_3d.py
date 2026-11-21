@@ -2192,6 +2192,13 @@ class ProductViewer(QWidget):
             base_rgb[curved_mask] = [230, 150, 75]
             face_opacity[classified_mask & ~curved_mask] = 0.20
 
+        if self.face_status_labels is not None:
+            status = np.asarray(self.face_status_labels, dtype=np.uint8)
+            base_rgb[status == FACE_EXCLUDED] = [89, 99, 107]
+            base_rgb[status == FACE_PAINTABLE_CANDIDATE] = [0, 230, 118]
+            base_rgb[status == FACE_REQUIRES_INSPECTION] = [255, 215, 64]
+            base_rgb[status == FACE_INVALID] = [255, 82, 82]
+
         self._trajectory_surface_base_rgb = base_rgb
         self._trajectory_surface_base_alpha = np.clip(
             np.rint(face_opacity * 255.0), 0, 255
@@ -3853,6 +3860,13 @@ class ProductViewer(QWidget):
                 np.rint(face_opacity * 255.0), 0, 255
             ).astype(np.uint8)
 
+            if self.face_status_labels is not None:
+                status = np.asarray(self.face_status_labels, dtype=np.uint8)
+                base_rgb[status == FACE_EXCLUDED] = [89, 99, 107]
+                base_rgb[status == FACE_PAINTABLE_CANDIDATE] = [0, 230, 118]
+                base_rgb[status == FACE_REQUIRES_INSPECTION] = [255, 215, 64]
+                base_rgb[status == FACE_INVALID] = [255, 82, 82]
+
             self._trajectory_surface_face_mask = np.ones(face_count, dtype=bool)
             self._trajectory_surface_base_rgb = base_rgb.copy()
             self._trajectory_surface_base_alpha = face_alpha.copy()
@@ -3878,6 +3892,8 @@ class ProductViewer(QWidget):
             )
 
             self._add_trajectory_visualization()
+            if self.face_status_labels is not None:
+                self._add_classification_legend()
 
         # DEFAULT PRODUCT MODE
         # -------------------------------------------------
