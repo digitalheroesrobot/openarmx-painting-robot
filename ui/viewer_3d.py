@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QPushButton,
     QSlider,
@@ -103,6 +104,12 @@ class ProductViewer(QWidget):
         # Currently selected Stage 2 surface patch.
         self.selected_patch_id = None
         self.hole_candidates = []
+        self.hole_filter = {
+            "minimum_diameter_mm": 0.0,
+            "maximum_diameter_mm": 100000.0,
+            "hole_type": "all",
+            "display_mode": "full",
+        }
 
         self.display_mode = "product"
 
@@ -191,6 +198,8 @@ class ProductViewer(QWidget):
 
         self.display_control_panel = self._build_trajectory_controls()
         layout.addWidget(self.display_control_panel)
+        self.hole_control_panel = self._build_hole_controls()
+        layout.addWidget(self.hole_control_panel)
         self.pose_control_panel = self._build_pose_controls()
         self.pose_control_panel.setMinimumHeight(42)
         self.pose_control_panel.setMaximumHeight(48)
@@ -200,6 +209,7 @@ class ProductViewer(QWidget):
         self.plotter.set_background("#07111D", top="#142B40")
 
         self.display_control_panel.hide()
+        self.hole_control_panel.hide()
         self.pose_control_panel.hide()
         self._draw_empty_scene()
 
@@ -239,113 +249,266 @@ class ProductViewer(QWidget):
 
         return value
 
+    def _build_hole_controls(self):
+        """Build independent hole filters and overlay controls for the CAD view."""
+        panel = QFrame()
+        panel.setObjectName("HoleDisplayControls")
+        panel.setStyleSheet("""
+            QFrame#HoleDisplayControls {
+                background-color: #0D1822;
+                border: 1px solid #6A3D72;
+                border-radius: 5px;
+            }
+            QFrame#HoleDisplayControls QLabel {
+                color: #E7D7EA;
+            }
+            QFrame#HoleDisplayControls QComboBox,
+            QFrame#HoleDisplayControls QDoubleSpinBox {
+                background: #172A35;
+                color: #F3EAF5;
+                border: 1px solid #6A526E;
+                border-radius: 3px;
+                padding: 3px 5px;
+                min-height: 20px;
+            }
+        """)
+        row = QHBoxLayout(panel)
+        row.setContentsMargins(8, 5, 8, 5)
+        row.setSpacing(7)
+
+        title = QLabel("HOLES:")
+        title.setStyleSheet("font-weight: 700; color: #FF78E5;")
+        row.addWidget(title)
+
+        row.addWidget(QLabel("Type"))
+        self.hole_type_selector = QComboBox()
+        self.hole_type_selector.addItem("All (including unclassified)", "all")
+        self.hole_type_selector.addItem("Through-holes", "through")
+        self.hole_type_selector.addItem("Blind-holes", "blind")
+        self.hole_type_selector.setToolTip(
+            "Through/blind filters show only features whose topology classifier "
+            "has assigned that type. Unclassified candidates remain visible in All."
+        )
+        self.hole_type_selector.currentIndexChanged.connect(
+            self._on_hole_filter_changed
+        )
+        row.addWidget(self.hole_type_selector)
+
+        row.addWidget(QLabel("Diameter (mm)"))
+        self.hole_min_diameter = QDoubleSpinBox()
+        self.hole_min_diameter.setRange(0.0, 100000.0)
+        self.hole_min_diameter.setDecimals(2)
+        self.hole_min_diameter.setSingleStep(0.5)
+        self.hole_min_diameter.setValue(0.0)
+        self.hole_min_diameter.setPrefix("Min ")
+        self.hole_min_diameter.setMaximumWidth(112)
+        self.hole_min_diameter.valueChanged.connect(
+            self._on_hole_filter_changed
+        )
+        row.addWidget(self.hole_min_diameter)
+
+        self.hole_max_diameter = QDoubleSpinBox()
+        self.hole_max_diameter.setRange(0.0, 100000.0)
+        self.hole_max_diameter.setDecimals(2)
+        self.hole_max_diameter.setSingleStep(0.5)
+        self.hole_max_diameter.setValue(100000.0)
+        self.hole_max_diameter.setPrefix("Max ")
+        self.hole_max_diameter.setMaximumWidth(112)
+        self.hole_max_diameter.valueChanged.connect(
+            self._on_hole_filter_changed
+        )
+        row.addWidget(self.hole_max_diameter)
+
+        row.addWidget(QLabel("Display"))
+        self.hole_display_selector = QComboBox()
+        for label, value in (
+            ("Point", "point"),
+            ("Label + diameter", "label"),
+            ("XYZ coordinates", "coordinate"),
+            ("Axis direction", "axis"),
+            ("Full information", "full"),
+        ):
+            self.hole_display_selector.addItem(label, value)
+        self.hole_display_selector.setCurrentIndex(4)
+        self.hole_display_selector.currentIndexChanged.connect(
+            self._on_hole_filter_changed
+        )
+        row.addWidget(self.hole_display_selector)
+
+        self.hole_count_label = QLabel("0 / 0")
+        self.hole_count_label.setMinimumWidth(74)
+        self.hole_count_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        row.addWidget(self.hole_count_label)
+        return panel
+
+    def _on_hole_filter_changed(self, *_):
+        if not hasattr(self, "hole_type_selector"):
+            return
+        minimum = float(self.hole_min_diameter.value())
+        maximum = float(self.hole_max_diameter.value())
+        if maximum < minimum:
+            maximum = minimum
+            self.hole_max_diameter.blockSignals(True)
+            self.hole_max_diameter.setValue(maximum)
+            self.hole_max_diameter.blockSignals(False)
+        self.hole_filter.update({
+            "minimum_diameter_mm": minimum,
+            "maximum_diameter_mm": maximum,
+            "hole_type": self.hole_type_selector.currentData(),
+            "display_mode": self.hole_display_selector.currentData(),
+        })
+        if self.current_mesh is not None:
+            self._render_product(reset_camera=False)
+
+    def _filtered_hole_candidates(self):
+        minimum = float(self.hole_filter["minimum_diameter_mm"])
+        maximum = float(self.hole_filter["maximum_diameter_mm"])
+        selected_type = self.hole_filter["hole_type"]
+        result = []
+        for item in self.hole_candidates:
+            try:
+                diameter = float(item["diameter_coordinate_units"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not np.isfinite(diameter) or diameter < minimum or diameter > maximum:
+                continue
+            classification = str(
+                item.get("hole_type", item.get("classification", "unclassified"))
+            ).lower()
+            if selected_type != "all":
+                if selected_type not in classification:
+                    continue
+            result.append(item)
+        return result
+
     def set_hole_candidates(self, candidates):
-        """Set preliminary STEP internal-cylinder candidates for 3D overlay."""
+        """Set STEP bore candidates; keep source CAD coordinates unchanged."""
         normalized = []
         for item in candidates or []:
             try:
-                center = np.asarray(
-                    item["axis_center_coordinate_units"], dtype=float
+                center_value = item.get(
+                    "opening_center_coordinate_units",
+                    item.get("axis_center_coordinate_units"),
                 )
-                axis_point = np.asarray(
-                    item["closest_axis_point_to_origin_coordinate_units"],
-                    dtype=float,
-                )
+                center = np.asarray(center_value, dtype=float)
                 axis = np.asarray(item["axis_direction"], dtype=float)
                 if (
                     center.shape != (3,)
-                    or axis_point.shape != (3,)
                     or axis.shape != (3,)
                     or not np.all(np.isfinite(center))
-                    or not np.all(np.isfinite(axis_point))
                     or not np.all(np.isfinite(axis))
                 ):
                     continue
-                normalized.append(dict(item))
+                axis_norm = float(np.linalg.norm(axis))
+                if axis_norm <= 1e-12:
+                    continue
+                normalized.append({**dict(item), "_display_center": center.tolist()})
             except (KeyError, TypeError, ValueError):
                 continue
         self.hole_candidates = normalized
+        self.hole_control_panel.setVisible(bool(normalized))
         if self.current_mesh is not None:
             self._render_product(reset_camera=False)
 
     def _add_hole_candidate_overlay(self):
-        """Render hole-axis representative points with CAD-coordinate labels.
+        """Draw filtered hole markers in the viewport.
 
-        Coordinates are always reported in the original STEP coordinate
-        system (millimetres). The actor transform affects only marker
-        placement in the viewport; it never changes the reported CAD values.
+        Label coordinates are always the original STEP-frame coordinates.
+        The actor transform is used only to position the overlay in the view.
         """
         if not self.hole_candidates or self._pose_actor is None:
+            return
+
+        candidates = self._filtered_hole_candidates()
+        display_mode = self.hole_filter["display_mode"]
+        self.hole_count_label.setText(
+            f"{len(candidates)} / {len(self.hole_candidates)}"
+        )
+        if not candidates:
+            self.plotter.add_text(
+                "NO HOLES MATCH THE CURRENT FILTER",
+                position="upper_left",
+                font_size=10,
+                color="#FFB74D",
+            )
             return
 
         matrix = self._actor_matrix_array()
 
         def transform_point(point):
-            homogeneous = matrix @ np.append(
-                np.asarray(point, dtype=float), 1.0
-            )
+            homogeneous = matrix @ np.append(np.asarray(point, dtype=float), 1.0)
             return homogeneous[:3] / homogeneous[3]
 
         centers_view = []
         labels = []
+        axis_lines = []
         unit_label = self._display_unit_label()
 
-        for item in self.hole_candidates:
-            center_source = np.asarray(
-                item["axis_center_coordinate_units"], dtype=float
-            )
+        for item in candidates:
+            center_source = np.asarray(item["_display_center"], dtype=float)
             if center_source.shape != (3,) or not np.all(np.isfinite(center_source)):
                 continue
-
             centers_view.append(transform_point(center_source))
 
-            # These are original STEP CAD coordinates, not world coordinates
-            # and not distances from the origin.
-            x = self._convert_source_length_to_display(float(center_source[0]))
-            y = self._convert_source_length_to_display(float(center_source[1]))
-            z = self._convert_source_length_to_display(float(center_source[2]))
-            diameter = self._convert_source_length_to_display(
-                float(item["diameter_coordinate_units"])
-            )
+            diameter_source = float(item["diameter_coordinate_units"])
+            diameter = self._convert_source_length_to_display(diameter_source)
             hole_id = int(item.get("hole_id", len(labels) + 1))
-            labels.append(
-                f"H{hole_id}  X={x:.2f} {unit_label}\n"
-                f"Y={y:.2f} {unit_label}  Z={z:.2f} {unit_label}\n"
-                f"D={diameter:.2f} {unit_label}"
-            )
+            hole_type = str(item.get("hole_type", "unclassified")).replace("_", " ").upper()
+
+            if display_mode in ("label", "coordinate", "full"):
+                if display_mode == "label":
+                    labels.append(f"H{hole_id}  D={diameter:.2f} {unit_label}")
+                else:
+                    x = self._convert_source_length_to_display(float(center_source[0]))
+                    y = self._convert_source_length_to_display(float(center_source[1]))
+                    z = self._convert_source_length_to_display(float(center_source[2]))
+                    labels.append(
+                        f"H{hole_id} [{hole_type}]  D={diameter:.2f} {unit_label}\n"
+                        f"X={x:.2f}  Y={y:.2f}  Z={z:.2f} {unit_label}"
+                    )
+
+            if display_mode in ("axis", "full"):
+                axis = np.asarray(item["axis_direction"], dtype=float)
+                axis /= max(float(np.linalg.norm(axis)), 1e-12)
+                # A short glyph indicates direction only; it is not a measured
+                # bore length. Exact start/end points are added by B-Rep analysis.
+                glyph_length = max(diameter_source * 1.5, 1.0)
+                axis_lines.append((
+                    transform_point(center_source - axis * glyph_length * 0.5),
+                    transform_point(center_source + axis * glyph_length * 0.5),
+                ))
 
         if not centers_view:
             return
 
         points = pv.PolyData(np.asarray(centers_view, dtype=float))
         self.plotter.add_mesh(
-            points,
-            color="#FF3DCE",
-            style="points",
-            point_size=17,
-            render_points_as_spheres=True,
-            lighting=False,
-            pickable=False,
+            points, color="#FF3DCE", style="points", point_size=17,
+            render_points_as_spheres=True, lighting=False, pickable=False,
         )
-        self.plotter.add_point_labels(
-            np.asarray(centers_view, dtype=float),
-            labels,
-            font_size=10,
-            text_color="#FFFFFF",
-            shape="rounded_rect",
-            shape_color="#35152F",
-            shape_opacity=0.94,
-            always_visible=True,
-            show_points=False,
-            margin=4,
-            pickable=False,
-        )
+        if labels:
+            self.plotter.add_point_labels(
+                np.asarray(centers_view, dtype=float), labels,
+                font_size=10, text_color="#FFFFFF", shape="rounded_rect",
+                shape_color="#35152F", shape_opacity=0.94,
+                always_visible=True, show_points=False, margin=4, pickable=False,
+            )
+        if axis_lines:
+            line_points = np.asarray(axis_lines, dtype=float).reshape(-1, 3)
+            line_cells = np.column_stack((
+                np.full(len(axis_lines), 2, dtype=np.int64),
+                np.arange(0, len(axis_lines) * 2, 2, dtype=np.int64),
+                np.arange(1, len(axis_lines) * 2, 2, dtype=np.int64),
+            )).reshape(-1)
+            line_data = pv.PolyData(line_points)
+            line_data.lines = line_cells
+            self.plotter.add_mesh(
+                line_data, color="#FF78E5", line_width=2.5,
+                render_lines_as_tubes=True, lighting=False, pickable=False,
+            )
         self.plotter.add_text(
-            f"HOLE AXIS REFERENCE COORDINATES | ORIGINAL STEP FRAME (0,0,0)"
-            f" | {len(labels)} CANDIDATE(S)",
-            position="upper_left",
-            font_size=10,
-            color="#FF78E5",
+            f"HOLE OVERLAY | ORIGINAL STEP COORDINATES | {len(centers_view)} SHOWN",
+            position="upper_left", font_size=10, color="#FF78E5",
         )
 
     def set_source_unit(self, unit):
