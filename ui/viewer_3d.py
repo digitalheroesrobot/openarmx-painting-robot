@@ -6,6 +6,7 @@ import numpy as np
 import pyvista as pv
 
 from PySide6.QtCore import QEvent, Qt, Signal, QTimer
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSlider,
     QProgressBar,
+    QColorDialog,
 )
 from pyvistaqt import QtInteractor
 from vtkmodules.vtkRenderingCore import vtkCellPicker
@@ -164,6 +166,7 @@ class ProductViewer(QWidget):
         self._playback_nozzle_actor = None
         self._playback_gun_actors = []
         self._playback_cache = None
+        self._trajectory_paint_color_hex = None
         self._trajectory_surface_polydata = None
         self._trajectory_surface_face_mask = None
         self._trajectory_surface_base_rgb = None
@@ -684,126 +687,122 @@ class ProductViewer(QWidget):
         display_row.addStretch()
         root.addLayout(display_row)
 
-        # Compact media-player style playback console.
+        # Minimal HUD-style playback strip: one transport row and one timeline row.
         playback_panel = QFrame()
         playback_panel.setObjectName("TrajectoryPlaybackPanel")
         playback_panel.setStyleSheet("""
             QFrame#TrajectoryPlaybackPanel {
-                background-color: #182A35;
-                border: 1px solid #385260;
-                border-radius: 8px;
+                background: #14232D;
+                border: 1px solid #344B58;
+                border-radius: 6px;
             }
             QFrame#TrajectoryPlaybackPanel QLabel {
                 background: transparent;
                 border: none;
-                color: #DCE8EF;
+                color: #D8E4EA;
             }
             QFrame#TrajectoryPlaybackPanel QPushButton {
-                background-color: #263F4D;
-                color: #EAF4FA;
-                border: 1px solid #527080;
-                border-radius: 5px;
-                padding: 5px 10px;
-                min-width: 34px;
-                min-height: 25px;
+                background: #203642;
+                color: #EAF4F8;
+                border: 1px solid #405B69;
+                border-radius: 4px;
+                padding: 4px 9px;
+                min-height: 23px;
                 font-weight: 600;
             }
             QFrame#TrajectoryPlaybackPanel QPushButton:hover {
-                background-color: #345668;
-                border-color: #79AFC7;
-            }
-            QFrame#TrajectoryPlaybackPanel QPushButton:pressed {
-                background-color: #1D3440;
+                background: #2A4858;
+                border-color: #6D9CB1;
             }
             QFrame#TrajectoryPlaybackPanel QSlider::groove:horizontal {
-                height: 5px;
-                background: #405967;
-                border-radius: 2px;
+                height: 4px; background: #3A515D; border-radius: 2px;
             }
             QFrame#TrajectoryPlaybackPanel QSlider::sub-page:horizontal {
-                background: #35A7D8;
-                border-radius: 2px;
+                background: #37A6D5; border-radius: 2px;
             }
             QFrame#TrajectoryPlaybackPanel QSlider::handle:horizontal {
-                background: #EAF7FC;
-                border: 2px solid #35A7D8;
-                width: 13px;
-                margin: -5px 0;
-                border-radius: 7px;
+                background: #EAF4F8; border: 2px solid #37A6D5;
+                width: 12px; margin: -5px 0; border-radius: 7px;
             }
             QFrame#TrajectoryPlaybackPanel QDoubleSpinBox {
-                background: #213743;
-                color: #EAF4FA;
-                border: 1px solid #527080;
-                border-radius: 4px;
-                padding: 3px 5px;
-                min-height: 22px;
+                background: #1C303B; color: #EAF4F8;
+                border: 1px solid #405B69; border-radius: 4px;
+                padding: 2px 4px; min-height: 22px;
             }
             QFrame#TrajectoryPlaybackPanel QProgressBar {
-                background: #10212B;
-                color: #EAF7FC;
-                border: 1px solid #45616F;
-                border-radius: 4px;
-                text-align: center;
-                min-width: 78px;
-                max-width: 92px;
-                min-height: 17px;
-                max-height: 17px;
+                background: #0E1A22; color: #EAF4F8;
+                border: 1px solid #405B69; border-radius: 3px;
+                text-align: center; min-width: 76px; max-width: 88px;
+                min-height: 15px; max-height: 15px;
             }
             QFrame#TrajectoryPlaybackPanel QProgressBar::chunk {
-                background: #D95B43;
-                border-radius: 3px;
+                background: #37A6D5; border-radius: 2px;
             }
         """)
         playback_layout = QVBoxLayout(playback_panel)
-        playback_layout.setContentsMargins(10, 7, 10, 7)
-        playback_layout.setSpacing(5)
+        playback_layout.setContentsMargins(8, 6, 8, 6)
+        playback_layout.setSpacing(4)
 
-        # Main transport row: title/status, transport buttons, and speed.
         transport_row = QHBoxLayout()
-        transport_row.setSpacing(6)
+        transport_row.setSpacing(5)
 
-        playback_title = QLabel("PATH PLAYBACK")
+        playback_title = QLabel("PLAYBACK")
         playback_title.setStyleSheet(
-            "color: #9FC3D4; font-size: 10px; font-weight: 800; letter-spacing: 1px;"
+            "color: #8EADBC; font-size: 9px; font-weight: 800; letter-spacing: 1px;"
         )
         transport_row.addWidget(playback_title)
 
-        self.trajectory_spray_state_label = QLabel("SPRAY: OFF")
-        self.trajectory_spray_state_label.setMinimumWidth(112)
-        self.trajectory_spray_state_label.setStyleSheet(
-            "color: #8FA3B2; font-weight: 700; padding: 2px 5px;"
-        )
-        self.trajectory_spray_state_label.setToolTip(
-            "The translucent spray preview follows the configured pattern and footprint. "
-            "Surface-area highlighting requires a known footprint thickness for flat-fan mode. "
-            "Spray is OFF between strokes; orange travel links are straight-line estimates only "
-            "and are not collision-checked or robot-reachability validated."
-        )
-        transport_row.addWidget(self.trajectory_spray_state_label)
-
-        self.trajectory_play_button = QPushButton("▶ Play")
-        self.trajectory_play_button.setToolTip("Play or pause the nozzle path")
-        self.trajectory_play_button.setMinimumWidth(76)
+        self.trajectory_play_button = QPushButton("▶")
+        self.trajectory_play_button.setFixedWidth(38)
+        self.trajectory_play_button.setToolTip("Play or pause trajectory playback")
         self.trajectory_play_button.clicked.connect(self._toggle_trajectory_playback)
         transport_row.addWidget(self.trajectory_play_button)
 
-        self.trajectory_step_button = QPushButton("Step ›")
-        self.trajectory_step_button.setToolTip("Advance by one trajectory sample")
-        self.trajectory_step_button.setMinimumWidth(64)
+        self.trajectory_step_button = QPushButton("›")
+        self.trajectory_step_button.setFixedWidth(32)
+        self.trajectory_step_button.setToolTip("Advance one trajectory sample")
         self.trajectory_step_button.clicked.connect(self._step_trajectory_playback)
         transport_row.addWidget(self.trajectory_step_button)
 
         self.trajectory_reset_button = QPushButton("↺")
-        self.trajectory_reset_button.setToolTip("Return playback to the beginning")
-        self.trajectory_reset_button.setFixedWidth(36)
+        self.trajectory_reset_button.setFixedWidth(32)
+        self.trajectory_reset_button.setToolTip("Reset playback to the beginning")
         self.trajectory_reset_button.clicked.connect(self._reset_trajectory_playback)
         transport_row.addWidget(self.trajectory_reset_button)
 
+        self.trajectory_playback_label = QLabel("0 / 0")
+        self.trajectory_playback_label.setMinimumWidth(82)
+        self.trajectory_playback_label.setAlignment(Qt.AlignCenter)
+        self.trajectory_playback_label.setStyleSheet(
+            "color: #B9CCD5; font-size: 10px; font-weight: 700;"
+        )
+        transport_row.addWidget(self.trajectory_playback_label)
+
         transport_row.addStretch(1)
+
+        color_label = QLabel("PAINT")
+        color_label.setStyleSheet(
+            "color: #8EADBC; font-size: 9px; font-weight: 700;"
+        )
+        transport_row.addWidget(color_label)
+
+        self.trajectory_paint_color_button = QPushButton("●")
+        self.trajectory_paint_color_button.setFixedSize(32, 28)
+        self.trajectory_paint_color_button.setToolTip(
+            "Choose the paint color used by the spray and painted-surface preview"
+        )
+        self.trajectory_paint_color_button.setStyleSheet(
+            "QPushButton { color: #D95B43; font-size: 17px; padding: 0px; "
+            "background: #1C303B; border: 1px solid #607986; border-radius: 4px; }"
+        )
+        self.trajectory_paint_color_button.clicked.connect(
+            self._choose_trajectory_paint_color
+        )
+        transport_row.addWidget(self.trajectory_paint_color_button)
+
         speed_label = QLabel("SPEED")
         speed_label.setStyleSheet(
-            "color: #9FB3BE; font-size: 9px; font-weight: 700;"
+            "color: #8EADBC; font-size: 9px; font-weight: 700;"
         )
         transport_row.addWidget(speed_label)
 
@@ -812,11 +811,24 @@ class ProductViewer(QWidget):
         self.trajectory_playback_speed.setSingleStep(0.25)
         self.trajectory_playback_speed.setValue(1.0)
         self.trajectory_playback_speed.setSuffix("x")
-        self.trajectory_playback_speed.setFixedWidth(68)
+        self.trajectory_playback_speed.setFixedWidth(64)
         transport_row.addWidget(self.trajectory_playback_speed)
+
+        # Status is deliberately docked at the far right; it does not push
+        # or reorder the central playback controls.
+        self.trajectory_spray_state_label = QLabel("● SPRAY OFF")
+        self.trajectory_spray_state_label.setMinimumWidth(116)
+        self.trajectory_spray_state_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.trajectory_spray_state_label.setStyleSheet(
+            "color: #91A4AE; font-size: 9px; font-weight: 800; padding: 2px 5px;"
+        )
+        self.trajectory_spray_state_label.setToolTip(
+            "SPRAY ON means the nozzle is applying the selected paint color. "
+            "SPRAY OFF indicates a repositioning segment."
+        )
+        transport_row.addWidget(self.trajectory_spray_state_label)
         playback_layout.addLayout(transport_row)
 
-        # Seek row: a long timeline with a compact current/total counter.
         timeline_row = QHBoxLayout()
         timeline_row.setSpacing(8)
         self.trajectory_playback_slider = QSlider(Qt.Horizontal)
@@ -829,39 +841,30 @@ class ProductViewer(QWidget):
         )
         timeline_row.addWidget(self.trajectory_playback_slider, 1)
 
-        self.trajectory_playback_label = QLabel("0 / 0")
-        self.trajectory_playback_label.setMinimumWidth(82)
-        self.trajectory_playback_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.trajectory_playback_label.setStyleSheet(
-            "color: #C8D8E0; font-size: 10px; font-weight: 700;"
-        )
-        timeline_row.addWidget(self.trajectory_playback_label)
-        playback_layout.addLayout(timeline_row)
-
-        # Coverage row: progress bar and concise area summary.
-        coverage_row = QHBoxLayout()
-        coverage_row.setSpacing(7)
-        coverage_title = QLabel("PAINT COVERAGE")
+        coverage_title = QLabel("COVERAGE")
         coverage_title.setStyleSheet(
-            "color: #9FB3BE; font-size: 9px; font-weight: 700;"
+            "color: #8EADBC; font-size: 9px; font-weight: 700;"
         )
-        coverage_row.addWidget(coverage_title)
+        timeline_row.addWidget(coverage_title)
 
         self.trajectory_coverage_bar = QProgressBar()
         self.trajectory_coverage_bar.setRange(0, 1000)
         self.trajectory_coverage_bar.setValue(0)
         self.trajectory_coverage_bar.setFormat("%p%")
-        self.trajectory_coverage_bar.setFixedHeight(17)
-        coverage_row.addWidget(self.trajectory_coverage_bar)
+        self.trajectory_coverage_bar.setFixedHeight(16)
+        timeline_row.addWidget(self.trajectory_coverage_bar)
 
         self.trajectory_coverage_label = QLabel("0.0%  |  0.000 / 0.000 area")
         self.trajectory_coverage_label.setMinimumWidth(0)
-        self.trajectory_coverage_label.setToolTip(
-            "Estimated geometric area reached by the spray envelope. "
-            "This is not a measured coating-thickness or paint-mass result."
+        self.trajectory_coverage_label.setStyleSheet(
+            "color: #AFC2CB; font-size: 9px;"
         )
-        coverage_row.addWidget(self.trajectory_coverage_label, 1)
-        playback_layout.addLayout(coverage_row)
+        self.trajectory_coverage_label.setToolTip(
+            "Estimated geometric area reached by the spray envelope; "
+            "not a measured coating-thickness or paint-mass result."
+        )
+        timeline_row.addWidget(self.trajectory_coverage_label)
+        playback_layout.addLayout(timeline_row)
 
         root.addWidget(playback_panel)
 
@@ -2320,7 +2323,7 @@ class ProductViewer(QWidget):
         if hasattr(self, "_playback_timer"):
             self._playback_timer.stop()
         if hasattr(self, "trajectory_play_button"):
-            self.trajectory_play_button.setText("▶ Play")
+            self.trajectory_play_button.setText("▶")
         if reset:
             actors = list(self._playback_gun_actors)
             actors.extend((
@@ -2354,7 +2357,7 @@ class ProductViewer(QWidget):
             if hasattr(self, "trajectory_coverage_label"):
                 self.trajectory_coverage_label.setText("0.0% | 0.000 / 0.000 area")
             if hasattr(self, "trajectory_spray_state_label"):
-                self.trajectory_spray_state_label.setText("SPRAY: OFF")
+                self.trajectory_spray_state_label.setText("● SPRAY OFF")
             self._restore_trajectory_surface_base_colors()
             if hasattr(self, "trajectory_playback_slider"):
                 self.trajectory_playback_slider.blockSignals(True)
@@ -2462,7 +2465,11 @@ class ProductViewer(QWidget):
             else fan_thickness_units * standoff_units / fan_reference_distance_units
         )
 
-        paint_color_text = str(profile.get("paint_color", "#D95B43")).strip()
+        paint_color_text = str(
+            self._trajectory_paint_color_hex or profile.get("paint_color", "#D95B43")
+        ).strip()
+        if not paint_color_text.startswith("#"):
+            paint_color_text = "#" + paint_color_text
         try:
             paint_rgb = np.asarray([
                 int(paint_color_text.lstrip("#")[offset:offset + 2], 16)
@@ -2470,6 +2477,8 @@ class ProductViewer(QWidget):
             ], dtype=float)
         except (ValueError, IndexError):
             paint_rgb = np.asarray([217.0, 91.0, 67.0], dtype=float)
+            paint_color_text = "#D95B43"
+        self._trajectory_paint_color_hex = paint_color_text
 
         display_face_ids = (
             np.flatnonzero(self._trajectory_surface_face_mask)
@@ -2639,7 +2648,7 @@ class ProductViewer(QWidget):
             hits = self._get_surface_sample_hits_from_spray(path_index)
             if len(hits):
                 face_positions = np.unique(hits // cache["sample_count_per_face"])
-                rgba[face_positions] = [255, 151, 48, 190]
+                rgba[face_positions] = [*np.clip(np.rint(cache["paint_rgb"]), 0, 255).astype(np.uint8), 190]
         polydata.cell_data["Spray Footprint RGBA"] = rgba
         vtk_array = polydata.GetCellData().GetArray("Spray Footprint RGBA")
         if vtk_array is not None:
@@ -2886,7 +2895,7 @@ class ProductViewer(QWidget):
             sheet_mesh = pv.PolyData(sheet_points, sheet_faces)
         self._playback_spray_sheet_actor = self.plotter.add_mesh(
             sheet_mesh,
-            color="#FF9D32",
+            color=self._trajectory_paint_color_hex or "#D95B43",
             opacity=0.34,
             show_edges=(cache["pattern_type"] == "flat_fan"),
             edge_color="#FFD08A",
@@ -2988,7 +2997,7 @@ class ProductViewer(QWidget):
             if spray_on:
                 if cache["pattern_type"] == "flat_fan" and cache["fan_thickness_units"] <= 0.0:
                     self.trajectory_spray_state_label.setText(
-                        f"SPRAY: ON · FAN SHEET "
+                        f"● SPRAY ON · FAN SHEET "
                         f"({cache['footprint_width_mm']:.1f} mm width; thickness unknown)"
                     )
                 else:
@@ -2997,12 +3006,12 @@ class ProductViewer(QWidget):
                         f"{cache['footprint_thickness_mm']:.1f} mm"
                     )
                 self.trajectory_spray_state_label.setStyleSheet(
-                    "color: #FFB454; font-weight: 700; padding: 2px 6px;"
+                    "color: #68D391; font-size: 9px; font-weight: 800; padding: 2px 5px;"
                 )
             else:
-                self.trajectory_spray_state_label.setText("SPRAY: OFF · REPOSITION")
+                self.trajectory_spray_state_label.setText("● SPRAY OFF · MOVE")
                 self.trajectory_spray_state_label.setStyleSheet(
-                    "color: #8FA3B2; font-weight: 700; padding: 2px 6px;"
+                    "color: #91A4AE; font-size: 9px; font-weight: 800; padding: 2px 5px;"
                 )
         self._update_paint_coverage_visualization(index)
 
@@ -3010,19 +3019,57 @@ class ProductViewer(QWidget):
         current_speed = float(cache["travel_speeds_mm_s"][index])
         spray_text = "SPRAY ON" if spray_on else "SPRAY OFF"
         self.trajectory_playback_label.setText(
-            f"{index + 1} / {total} | {current_speed:.0f} mm/s | {spray_text}"
+            f"{index + 1:,} / {total:,}  ·  {current_speed:.0f} mm/s  ·  {spray_text}"
         )
         self.trajectory_playback_slider.blockSignals(True)
         self.trajectory_playback_slider.setValue(index)
         self.trajectory_playback_slider.blockSignals(False)
         self.plotter.render()
 
+    def _choose_trajectory_paint_color(self):
+        """Choose the paint color used by the spray and coverage previews."""
+        current = self._trajectory_paint_color_hex or "#D95B43"
+        selected = QColorDialog.getColor(
+            QColor(current), self, "Select spray paint color"
+        )
+        if not selected.isValid():
+            return
+
+        self._trajectory_paint_color_hex = selected.name().upper()
+        if hasattr(self, "trajectory_paint_color_button"):
+            self.trajectory_paint_color_button.setStyleSheet(
+                "QPushButton { color: %s; font-size: 17px; padding: 0px; "
+                "background: #1C303B; border: 1px solid #607986; border-radius: 4px; }"
+                % self._trajectory_paint_color_hex
+            )
+            self.trajectory_paint_color_button.setToolTip(
+                "Selected spray paint: %s" % self._trajectory_paint_color_hex
+            )
+
+        cache = self._playback_cache
+        if cache is not None:
+            hex_value = self._trajectory_paint_color_hex.lstrip("#")
+            cache["paint_rgb"] = np.asarray(
+                [int(hex_value[i:i + 2], 16) for i in (0, 2, 4)],
+                dtype=float,
+            )
+            cache["coverage_sample_hits"].fill(False)
+            cache["coverage_processed_index"] = -1
+            cache["coverage_last_render_index"] = -1
+            if self._playback_spray_sheet_actor is not None:
+                self._playback_spray_sheet_actor.GetProperty().SetColor(
+                    selected.redF(), selected.greenF(), selected.blueF()
+                )
+            if self.trajectory_data is not None and self.display_mode == "trajectory":
+                self._update_trajectory_playback_visuals(self._playback_index)
+                self.plotter.render()
+
     def _on_trajectory_playback_slider_changed(self, value):
         if self.display_mode != "trajectory" or self.trajectory_data is None:
             return
         self._playback_timer.stop()
         self._playback_finished = False
-        self.trajectory_play_button.setText("Play")
+        self.trajectory_play_button.setText("▶")
         self._update_trajectory_playback_visuals(value)
 
     def _toggle_trajectory_playback(self):
@@ -3046,7 +3093,7 @@ class ProductViewer(QWidget):
                 self._playback_elapsed_s = float(times[self._playback_index])
             if self._playback_path_actor is None and self._playback_nozzle_actor is None:
                 self._update_trajectory_playback_visuals(self._playback_index)
-        self.trajectory_play_button.setText("Ⅱ Pause")
+        self.trajectory_play_button.setText("Ⅱ")
         self._playback_timer.start()
 
     def _complete_trajectory_playback(self):
