@@ -13,7 +13,7 @@ from core.spray_coverage import (
 )
 
 from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
-from vtkmodules.vtkCommonDataModel import vtkStaticCellLocator
+from vtkmodules.vtkFiltersGeneral import vtkOBBTree
 
 from PySide6.QtCore import QEvent, Qt, Signal, QTimer
 from PySide6.QtGui import QColor
@@ -2588,7 +2588,7 @@ class ProductViewer(QWidget):
         occlusion_polydata = pv.PolyData(
             mesh_vertices_world, mesh_cell_array
         )
-        occlusion_locator = vtkStaticCellLocator()
+        occlusion_locator = vtkOBBTree()
         occlusion_locator.SetDataSet(occlusion_polydata)
         occlusion_locator.BuildLocator()
         mesh_bounds = np.asarray(self.current_mesh.bounds, dtype=np.float64)
