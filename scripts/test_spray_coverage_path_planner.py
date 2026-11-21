@@ -49,7 +49,7 @@ class PatchwiseSprayPlannerTests(unittest.TestCase):
             self.assertEqual(component["status"], "RASTERIZED")
         for segment_id in np.unique(result["segment_ids"]):
             ids = np.flatnonzero(result["segment_ids"] == segment_id)
-            self.assertEqual(len(np.unique(result["face_indices"][ids] // 2)), 1)
+            self.assertEqual(len(np.unique(np.array([4, 9])[result["face_indices"][ids]])), 1)
         np.testing.assert_allclose(
             np.linalg.norm(result["nozzle_points"] - result["surface_points"], axis=1),
             100., atol=1e-7,
