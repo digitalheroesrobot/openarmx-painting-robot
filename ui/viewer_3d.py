@@ -593,8 +593,52 @@ class ProductViewer(QWidget):
             checkbox = QCheckBox(label_text)
             if key == "planar":
                 checkbox.setObjectName("TrajectoryPlanarSurfaceCheckbox")
+                checkbox.setStyleSheet("""
+                    QCheckBox { color: #EAF4FA; spacing: 7px; }
+                    QCheckBox:disabled { color: #DCE8EF; }
+                    QCheckBox::indicator {
+                        width: 17px; height: 17px;
+                        border: 2px solid #8FA7B5;
+                        border-radius: 3px;
+                        background-color: #263945;
+                    }
+                    QCheckBox::indicator:checked {
+                        background-color: #2388D1;
+                        border: 2px solid #72C4FF;
+                    }
+                    QCheckBox::indicator:disabled {
+                        border: 2px solid #A9BBC5;
+                        background-color: #344B59;
+                    }
+                    QCheckBox::indicator:checked:disabled {
+                        background-color: #2388D1;
+                        border: 2px solid #72C4FF;
+                    }
+                """)
             elif key == "curved":
                 checkbox.setObjectName("TrajectoryCurvedSurfaceCheckbox")
+                checkbox.setStyleSheet("""
+                    QCheckBox { color: #EAF4FA; spacing: 7px; }
+                    QCheckBox:disabled { color: #DCE8EF; }
+                    QCheckBox::indicator {
+                        width: 17px; height: 17px;
+                        border: 2px solid #8FA7B5;
+                        border-radius: 3px;
+                        background-color: #263945;
+                    }
+                    QCheckBox::indicator:checked {
+                        background-color: #D97732;
+                        border: 2px solid #FFC18D;
+                    }
+                    QCheckBox::indicator:disabled {
+                        border: 2px solid #A9BBC5;
+                        background-color: #344B59;
+                    }
+                    QCheckBox::indicator:checked:disabled {
+                        background-color: #D97732;
+                        border: 2px solid #FFC18D;
+                    }
+                """)
             checkbox.setChecked(self.trajectory_visibility[key])
             checkbox.toggled.connect(
                 lambda checked, item=key:
