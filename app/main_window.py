@@ -28,7 +28,8 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
-    QStyle
+    QStyle,
+    QColorDialog
 )
 
 from core.step_loader import load_step, convert_step_report_units
@@ -1293,6 +1294,17 @@ class MainWindow(QMainWindow):
         )
         self.interactive_spray_path_button.hide()
         layout.addWidget(self.interactive_spray_path_button)
+
+        self.interactive_paint_color_button = QPushButton("PAINT COLOR")
+        self.interactive_paint_color_button.setObjectName("SecondaryButton")
+        self.interactive_paint_color_button.setToolTip(
+            "Choose the paint color used by interactive spray-footprint previews."
+        )
+        self.interactive_paint_color_button.clicked.connect(
+            self._choose_interactive_paint_color
+        )
+        self.interactive_paint_color_button.hide()
+        layout.addWidget(self.interactive_paint_color_button)
 
         # ----------------------------------------------------
         # OPERATION PROGRESS
@@ -2792,6 +2804,10 @@ class MainWindow(QMainWindow):
                 and self.viewer._interactive_spray_active
                 and not self._operation_running
             )
+            self.interactive_paint_color_button.setVisible(interactive_available)
+            self.interactive_paint_color_button.setEnabled(
+                interactive_available and not self._operation_running
+            )
 
         if self.active_stage == STAGE_SPRAY_TRAJECTORY:
             self.operation_panel.hide()
@@ -4021,6 +4037,21 @@ class MainWindow(QMainWindow):
 
         self._worker.start()
 
+    def _choose_interactive_paint_color(self):
+        current = getattr(self.viewer, "_trajectory_paint_color_hex", None) or "#D95B43"
+        selected = QColorDialog.getColor(QColor(current), self, "Select spray paint color")
+        if not selected.isValid():
+            return
+        self.viewer._trajectory_paint_color_hex = selected.name().upper()
+        self.interactive_paint_color_button.setStyleSheet(
+            "QPushButton { color: %s; font-weight: 700; }"
+            % self.viewer._trajectory_paint_color_hex
+        )
+        self.interactive_paint_color_button.setText(
+            "PAINT COLOR  " + self.viewer._trajectory_paint_color_hex
+        )
+        self.viewer._interactive_refresh_recorded_paint_color()
+
     def _start_interactive_spray_path(self):
         """Automatically start mouse-driven spray recording on Stage 3 entry."""
         if (
@@ -4044,10 +4075,14 @@ class MainWindow(QMainWindow):
             parameters["sprayer_profile"],
             float(parameters["standoff_mm"]),
         )
-        self.viewer.start_interactive_spray_path(
-            standoff=float(parameters["standoff_mm"]) / mm_per_unit,
-            cone_angle_deg=float(footprint["included_angle_deg"]),
-        )
+        try:
+            self.viewer.start_interactive_spray_path(
+                standoff=float(parameters["standoff_mm"]) / mm_per_unit,
+                cone_angle_deg=float(footprint["included_angle_deg"]),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Interactive Spray Path Error", str(exc))
+            return
         self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
         self.interactive_spray_path_button.setEnabled(True)
         self.status_bar.showMessage(
