@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
 )
 from pyvistaqt import QtInteractor
 from vtkmodules.vtkRenderingCore import vtkCellPicker
+from vtkmodules.vtkInteractionStyle import vtkInteractorStyleUser
 
 
 def _build_spray_footprint_overlay(
@@ -439,6 +440,8 @@ class ProductViewer(QWidget):
         self._interactive_spray_live_actors = []
         self._interactive_spray_path_actor = None
         self._interactive_saved_style_enabled = True
+        self._interactive_saved_style = None
+        self._interactive_spray_input_style = None
         self._interactive_hud_actor = None
         self._interactive_last_record_time = 0.0
         self._interactive_mouse_move_observer_id = interactor.AddObserver(
@@ -907,12 +910,23 @@ class ProductViewer(QWidget):
 
         self._interactive_view_mode = mode
         interactor = self.plotter.iren.interactor
-        style = interactor.GetInteractorStyle()
-        if style is not None and self._interactive_spray_active:
+        if self._interactive_spray_active:
             if mode == "camera":
-                style.SetEnabled(1 if self._interactive_saved_style_enabled else 0)
+                # Restore the exact original PyVista/VTK camera style.
+                if self._interactive_saved_style is not None:
+                    interactor.SetInteractorStyle(self._interactive_saved_style)
+                    self._interactive_saved_style.SetEnabled(
+                        1 if self._interactive_saved_style_enabled else 0
+                    )
             else:
-                style.SetEnabled(0)
+                # Replacing (rather than merely disabling) the camera style
+                # prevents its observers from reacting to drag events. The
+                # interactor itself remains active, so our spray observers
+                # still receive press/move/release events.
+                if self._interactive_spray_input_style is None:
+                    self._interactive_spray_input_style = vtkInteractorStyleUser()
+                interactor.SetInteractorStyle(self._interactive_spray_input_style)
+                self._interactive_spray_input_style.SetEnabled(1)
 
         self.camera_mode_button.setChecked(mode == "camera")
         self.spray_mode_button.setChecked(mode == "spray")
@@ -2394,8 +2408,10 @@ class ProductViewer(QWidget):
 
         interactor = self.plotter.iren.interactor
         style = interactor.GetInteractorStyle()
+        self._interactive_saved_style = style
         if style is not None:
             self._interactive_saved_style_enabled = bool(style.GetEnabled())
+        self._interactive_spray_input_style = vtkInteractorStyleUser()
         self.interaction_mode_panel.show()
         self.spray_mode_button.setEnabled(True)
         self._set_interactive_view_mode("spray")
@@ -3391,9 +3407,13 @@ class ProductViewer(QWidget):
         self._interactive_remove_live_actors()
 
         interactor = self.plotter.iren.interactor
-        style = interactor.GetInteractorStyle()
-        if style is not None:
-            style.SetEnabled(1 if self._interactive_saved_style_enabled else 0)
+        if self._interactive_saved_style is not None:
+            interactor.SetInteractorStyle(self._interactive_saved_style)
+            self._interactive_saved_style.SetEnabled(
+                1 if self._interactive_saved_style_enabled else 0
+            )
+        self._interactive_spray_input_style = None
+        self._interactive_saved_style = None
         self.interaction_mode_panel.hide()
         self.camera_mode_button.setChecked(True)
         self.spray_mode_button.setChecked(False)
