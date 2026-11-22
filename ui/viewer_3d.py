@@ -2700,26 +2700,35 @@ class ProductViewer(QWidget):
                     self.current_mesh, int(triangle_index),
                     np.asarray([1.0 / 3.0] * 3, dtype=np.float64),
                 )
-                uv_mapping = get_step_triangle_surface_coordinates(
-                    self.current_mesh, int(triangle_index),
-                    np.asarray([1.0 / 3.0] * 3, dtype=np.float64),
-                )
-                face_surface = evaluate_step_face_surface(
-                    self.current_mesh,
-                    int(uv_mapping["face_id"]),
-                    float(uv_mapping["uv"][0]),
-                    float(uv_mapping["uv"][1]),
-                )
                 uv = uv_triangles[int(triangle_index)]
                 uv_area = 0.5 * abs(
                     (uv[1, 0] - uv[0, 0]) * (uv[2, 1] - uv[0, 1])
                     - (uv[1, 1] - uv[0, 1]) * (uv[2, 0] - uv[0, 0])
                 )
-                jacobian = float(np.linalg.norm(np.cross(
-                    face_surface["du_mm_per_u"],
-                    face_surface["dv_mm_per_v"],
-                )))
-                exact_area_mm2 = uv_area * jacobian
+                # Three-point degree-2 quadrature of the CAD surface
+                # Jacobian over this source UV triangle.
+                area_barycentric = (
+                    (2.0 / 3.0, 1.0 / 6.0, 1.0 / 6.0),
+                    (1.0 / 6.0, 2.0 / 3.0, 1.0 / 6.0),
+                    (1.0 / 6.0, 1.0 / 6.0, 2.0 / 3.0),
+                )
+                jacobians = []
+                for area_weights in area_barycentric:
+                    area_uv = get_step_triangle_surface_coordinates(
+                        self.current_mesh, int(triangle_index),
+                        np.asarray(area_weights, dtype=np.float64),
+                    )
+                    area_surface = evaluate_step_face_surface(
+                        self.current_mesh,
+                        int(area_uv["face_id"]),
+                        float(area_uv["uv"][0]),
+                        float(area_uv["uv"][1]),
+                    )
+                    jacobians.append(float(np.linalg.norm(np.cross(
+                        area_surface["du_mm_per_u"],
+                        area_surface["dv_mm_per_v"],
+                    ))))
+                exact_area_mm2 = uv_area * float(np.mean(jacobians))
                 if np.isfinite(exact_area_mm2) and exact_area_mm2 > 1e-12:
                     areas[int(triangle_index)] = exact_area_mm2
                 centroids_local[local_index] = center_sample["point_mm"]
@@ -3734,6 +3743,12 @@ class ProductViewer(QWidget):
             ),
             "route_length_product_units": route_length,
             "route_optimization": route_optimization,
+            "surface_film_thickness_field": self._interactive_spray_surface_field,
+            "face_thickness_um": (
+                self._interactive_spray_face_thickness_um.copy()
+                if self._interactive_spray_face_thickness_um is not None
+                else None
+            ),
             "product_transform_4x4": self._interactive_spray_transform.copy(),
         }
         self.plotter.add_text(
