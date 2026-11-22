@@ -3365,138 +3365,150 @@ class ProductViewer(QWidget):
         self, *, ids, pose, nozzle_world, source_factor, transform, dt,
         travel_speed_mm_s, flow, efficiency, solids, coats, brep_context,
     ):
-        """Deposit directly on selected B-Rep UV texels with persistent CAD sample caching."""
-        from core.step_loader import evaluate_step_face_surface
+        """Apply sparse triangle-integrated spray physics and bake it to CAD Face UV textures.
+
+        CAD tessellation is used only as a precomputed quadrature/support mesh.
+        No OpenCascade Surface evaluation, UV rasterization, or full-face scan
+        occurs in the interactive deposition loop.
+        """
         from core.uv_coating_texture import (
-            DEFAULT_UV_TEXTURE_RESOLUTION, face_uv_layout, rasterize_face_uv_grid,
+            DEFAULT_UV_TEXTURE_RESOLUTION,
+            accumulate_face_uv_thickness,
+            face_uv_layout,
+            face_uv_triangles_to_texture_coordinates,
+            surface_metric_to_pixel_covariance,
         )
+
+        mesh = self.current_mesh
         face_ids = np.asarray(brep_context["triangle_face_ids"], dtype=np.int64)
         triangle_uvs = np.asarray(brep_context["triangle_uvs"], dtype=np.float64)
         uv_valid = np.asarray(brep_context["triangle_uv_valid"], dtype=bool)
         selected = np.unique(np.asarray(ids, dtype=np.int64))
-        selected = selected[(selected >= 0) & (selected < len(face_ids))]
+        selected = selected[(selected >= 0) & (selected < len(mesh.faces))]
+        selected = selected[uv_valid[selected]]
         if not selected.size:
             return
 
+        # Build inexpensive, tessellation-derived surface samples once per mesh.
+        # The old path evaluated OpenCascade at hundreds/thousands of UV texels
+        # during every mouse update; this cache eliminates those calls entirely.
+        cache = getattr(self, "_interactive_brep_surface_sample_cache", None)
+        cache_key = id(mesh)
+        if not isinstance(cache, dict) or cache.get("mesh_id") != cache_key:
+            vertices = np.asarray(mesh.vertices, dtype=np.float64)
+            triangles = np.asarray(mesh.faces, dtype=np.int64)
+            triangle_points = vertices[triangles]
+            sample_count = len(triangles)
+            uv_centers = np.full((sample_count, 2), np.nan, dtype=np.float64)
+            metrics = np.full((sample_count, 2, 2), np.nan, dtype=np.float64)
+            face_layouts = {}
+            for face_value in np.unique(face_ids[uv_valid]):
+                face_id = int(face_value)
+                face_tri_ids = np.flatnonzero((face_ids == face_id) & uv_valid)
+                if not len(face_tri_ids):
+                    continue
+                layout = face_uv_layout(
+                    brep_context["face_records"][face_id - 1],
+                    triangle_uvs[face_tri_ids],
+                )
+                bounds = np.asarray(layout["uv_bounds"], dtype=np.float64)
+                normalized = face_uv_triangles_to_texture_coordinates(
+                    triangle_uvs[face_tri_ids],
+                    bounds,
+                    periodic_u=layout["periodic_u"],
+                    periodic_v=layout["periodic_v"],
+                )
+                unwrapped_uv = (
+                    bounds[:, 0][None, None, :]
+                    + normalized * (bounds[:, 1] - bounds[:, 0])[None, None, :]
+                )
+                uv_centers[face_tri_ids] = (
+                    bounds[:, 0][None, :]
+                    + np.mean(normalized, axis=1)
+                    * (bounds[:, 1] - bounds[:, 0])[None, :]
+                )
+                xyz = triangle_points[face_tri_ids]
+                for local_index, triangle_id in enumerate(face_tri_ids):
+                    delta_uv = unwrapped_uv[local_index, 1:] - unwrapped_uv[local_index, 0]
+                    delta_xyz = xyz[local_index, 1:] - xyz[local_index, 0]
+                    try:
+                        jacobian = np.linalg.lstsq(
+                            delta_uv, delta_xyz, rcond=None
+                        )[0]
+                        metric = jacobian @ jacobian.T
+                        if np.isfinite(metric).all() and np.linalg.det(metric) > 1e-14:
+                            metrics[int(triangle_id)] = 0.5 * (metric + metric.T)
+                    except np.linalg.LinAlgError:
+                        pass
+                face_layouts[face_id] = {
+                    **layout,
+                    "resolution": int(DEFAULT_UV_TEXTURE_RESOLUTION),
+                    "triangle_count": int(len(face_tri_ids)),
+                    "triangle_ids": face_tri_ids,
+                }
+            cache = {
+                "mesh_id": cache_key,
+                "points_local": np.mean(triangle_points, axis=1),
+                "vertices_local": triangle_points,
+                "normals_local": np.asarray(mesh.face_normals, dtype=np.float64).copy(),
+                "areas_source": np.asarray(mesh.area_faces, dtype=np.float64).copy(),
+                "face_ids": face_ids.copy(),
+                "uv_valid": uv_valid.copy(),
+                "uv_centers": uv_centers,
+                "surface_metrics": metrics,
+                "face_layouts": face_layouts,
+            }
+            self._interactive_brep_surface_sample_cache = cache
+            self._interactive_spray_texture_layout.update(face_layouts)
+
         if not isinstance(self._interactive_spray_surface_field, dict):
             self._interactive_spray_surface_field = {
-                "schema": "STEP_BREP_UV_FILM_THICKNESS_FIELD_V3",
+                "schema": "STEP_BREP_UV_FILM_THICKNESS_FIELD_V4",
                 "coordinate_frame": "ORIGINAL_STEP_FACE_UV",
-                "field_representation": "DIRECT_ORIGINAL_BREP_UV_TEXEL_FIELD",
-                "interpolation_method": "DIRECT_BREP_UV_TEXEL_DEPOSITION",
-                "texture_resolution": DEFAULT_UV_TEXTURE_RESOLUTION,
+                "field_representation": "SPARSE_TRIANGLE_INTEGRATION_BAKED_TO_FACE_UV",
+                "interpolation_method": "PRECOMPUTED_SURFACE_SAMPLE_GAUSSIAN_BAKE",
+                "texture_resolution": int(DEFAULT_UV_TEXTURE_RESOLUTION),
                 "faces": {},
             }
         fields = self._interactive_spray_surface_field["faces"]
-        cache = getattr(self, "_interactive_brep_uv_sample_cache", None)
-        if not isinstance(cache, dict):
-            cache = {}
-            self._interactive_brep_uv_sample_cache = cache
 
-        batches, metadata = [], []
-        for face_value in np.unique(face_ids[selected]):
-            face_id = int(face_value)
-            tri_ids = selected[(face_ids[selected] == face_id) & uv_valid[selected]]
-            if not len(tri_ids):
-                continue
-            layout = self._interactive_spray_texture_layout.get(face_id)
-            if layout is None:
-                all_ids = np.flatnonzero((face_ids == face_id) & uv_valid)
-                if not len(all_ids):
-                    continue
-                layout = {
-                    **face_uv_layout(
-                        brep_context["face_records"][face_id - 1], triangle_uvs[all_ids]
-                    ),
-                    "resolution": int(DEFAULT_UV_TEXTURE_RESOLUTION),
-                    "triangle_count": int(len(all_ids)),
-                }
-                self._interactive_spray_texture_layout[face_id] = layout
-
-            size = int(layout["resolution"])
-            bounds = np.asarray(layout["uv_bounds"], dtype=np.float64)
-            raster = rasterize_face_uv_grid(
-                triangle_uvs[tri_ids], bounds, size,
-                bool(layout["periodic_u"]), bool(layout["periodic_v"]),
-            )
-            mask = raster["valid_mask"]
-            key = (id(self.current_mesh), face_id, size)
-            item = cache.get(key)
-            if item is None:
-                shape = (size, size)
-                item = {
-                    "attempted": np.zeros(shape, dtype=bool),
-                    "valid": np.zeros(shape, dtype=bool),
-                    "points": np.zeros((*shape, 3), dtype=np.float64),
-                    "normals": np.zeros((*shape, 3), dtype=np.float64),
-                    "areas": np.zeros(shape, dtype=np.float64),
-                }
-                cache[key] = item
-
-            missing_r, missing_c = np.nonzero(mask & ~item["attempted"])
-            du_step = (bounds[0, 1] - bounds[0, 0]) / (size - 1)
-            dv_step = (bounds[1, 1] - bounds[1, 0]) / (size - 1)
-            for row, col in zip(missing_r, missing_c):
-                item["attempted"][row, col] = True
-                uv = raster["uv_grid"][row, col]
-                try:
-                    sample = evaluate_step_face_surface(
-                        self.current_mesh, face_id, float(uv[0]), float(uv[1])
-                    )
-                    p = np.asarray(sample["point_mm"], dtype=np.float64)
-                    n = np.asarray(sample["normal"], dtype=np.float64)
-                    du = np.asarray(sample["du_mm_per_u"], dtype=np.float64)
-                    dv = np.asarray(sample["dv_mm_per_v"], dtype=np.float64)
-                    jac = float(np.linalg.norm(np.cross(du, dv)))
-                    wu = 1.0 if layout["periodic_u"] or col not in (0, size - 1) else 0.5
-                    wv = 1.0 if layout["periodic_v"] or row not in (0, size - 1) else 0.5
-                    area = jac * du_step * dv_step * wu * wv * source_factor**2
-                    if not (np.isfinite(p).all() and np.isfinite(n).all()
-                            and math.isfinite(area) and area > 1e-12):
-                        continue
-                    item["points"][row, col] = p
-                    item["normals"][row, col] = n
-                    item["areas"][row, col] = area
-                    item["valid"][row, col] = True
-                except (RuntimeError, ValueError, FloatingPointError):
-                    continue
-
-            rows, cols = np.nonzero(mask & item["valid"])
-            if not len(rows):
-                continue
-            pts = item["points"][rows, cols]
-            nrm = item["normals"][rows, cols]
-            world_pts = (pts @ transform[:3, :3].T + transform[:3, 3]) * source_factor
-            world_nrm = nrm @ transform[:3, :3].T
-            world_nrm /= np.maximum(np.linalg.norm(world_nrm, axis=1)[:, None], 1e-12)
-            batches.append((world_pts, world_nrm, item["areas"][rows, cols]))
-            metadata.append((face_id, rows, cols, len(rows)))
-
-            fields.setdefault(face_id, {
-                "uv_bounds": [list(map(float, x)) for x in layout["uv_bounds"]],
-                "surface_type": layout["surface_type"],
-                "periodic_u": bool(layout["periodic_u"]),
-                "periodic_v": bool(layout["periodic_v"]),
-                "texture_resolution": size,
-                "interpolation_method": "DIRECT_BREP_UV_TEXEL_DEPOSITION",
-                "thickness_grid_um": np.zeros((size, size), dtype=np.float32),
-                "samples_by_triangle": {},
-            })
-
-        if not batches:
+        source_to_mm = float(source_factor)
+        rotation = np.asarray(transform[:3, :3], dtype=np.float64)
+        translation = np.asarray(transform[:3, 3], dtype=np.float64)
+        points_world_mm = (
+            cache["points_local"][selected] @ rotation.T + translation
+        ) * source_to_mm
+        vertices_world_mm = (
+            cache["vertices_local"][selected] @ rotation.T + translation
+        ) * source_to_mm
+        normals_world = cache["normals_local"][selected] @ rotation.T
+        normals_world /= np.maximum(
+            np.linalg.norm(normals_world, axis=1)[:, None], 1e-12
+        )
+        areas_mm2 = cache["areas_source"][selected] * source_to_mm ** 2
+        valid_area = np.isfinite(areas_mm2) & (areas_mm2 > 1e-12)
+        if not np.all(valid_area):
+            selected = selected[valid_area]
+            points_world_mm = points_world_mm[valid_area]
+            vertices_world_mm = vertices_world_mm[valid_area]
+            normals_world = normals_world[valid_area]
+            areas_mm2 = areas_mm2[valid_area]
+        if not len(selected):
             return
-        points = np.concatenate([x[0] for x in batches])
-        normals = np.concatenate([x[1] for x in batches])
-        areas = np.concatenate([x[2] for x in batches])
+
         result = calculate_cone_deposition_step(
-            surface_points_mm=points, surface_normals=normals,
-            sample_area_mm2=areas,
-            nozzle_position_mm=nozzle_world * source_factor,
+            surface_points_mm=points_world_mm,
+            sample_vertices_mm=vertices_world_mm,
+            surface_normals=normals_world,
+            sample_area_mm2=areas_mm2,
+            nozzle_position_mm=np.asarray(nozzle_world, dtype=np.float64) * source_to_mm,
             spray_direction=pose["spray_direction_world"],
             cone_angle_deg=self._interactive_spray_cone_angle_deg,
-            duration_s=dt, fluid_flow_ml_min=flow,
+            duration_s=dt,
+            fluid_flow_ml_min=flow,
             transfer_efficiency_percent=efficiency,
-            volume_solids_percent=solids, number_of_coats=coats,
+            volume_solids_percent=solids,
+            number_of_coats=coats,
             travel_speed_mm_s=travel_speed_mm_s,
             radial_alpha=float(self._interactive_sprayer_profile.get("deposition_beta", 2.0)),
             radial_beta=float(self._interactive_sprayer_profile.get("deposition_beta", 2.0)),
@@ -3504,20 +3516,117 @@ class ProductViewer(QWidget):
             overspray_tail_fraction=float(self._interactive_sprayer_profile.get("overspray_tail_fraction", 0.12)),
             overspray_tail_sigma_fraction=float(self._interactive_sprayer_profile.get("overspray_tail_sigma_fraction", 0.35)),
         )
-        deposited = np.asarray(result.get("deposited_volume_mm3", []), dtype=np.float64)
-        if deposited.shape != (len(areas),):
+        deposited = np.asarray(
+            result.get("deposited_volume_mm3", np.zeros(len(selected))),
+            dtype=np.float64,
+        )
+        if deposited.shape != (len(selected),):
             return
-        increments = deposited / np.maximum(areas, 1e-12) * 1000.0
-        offset = 0
-        for face_id, rows, cols, count in metadata:
-            grid = fields[face_id]["thickness_grid_um"]
-            grid[rows, cols] += increments[offset:offset + count].astype(np.float32)
-            fields[face_id]["direct_deposition_sample_count"] = int(count)
-            fields[face_id]["direct_deposition_volume_mm3"] = float(
-                np.sum(deposited[offset:offset + count])
+        thickness_increment = deposited / np.maximum(areas_mm2, 1e-12) * 1000.0
+        if self._interactive_spray_face_thickness_um is None:
+            self._interactive_spray_face_thickness_um = np.zeros(
+                len(mesh.faces), dtype=np.float64
             )
-            offset += count
+        self._interactive_spray_face_thickness_um[selected] += thickness_increment
+
+        # Bake only the affected samples into their owning original CAD Face.
+        for face_value in np.unique(cache["face_ids"][selected]):
+            face_id = int(face_value)
+            local_mask = cache["face_ids"][selected] == face_id
+            triangle_ids = selected[local_mask]
+            face_layout = cache["face_layouts"].get(face_id)
+            if face_layout is None:
+                continue
+            face_record = fields.setdefault(face_id, {
+                "uv_bounds": [
+                    list(map(float, interval))
+                    for interval in face_layout["uv_bounds"]
+                ],
+                "surface_type": face_layout["surface_type"],
+                "periodic_u": bool(face_layout["periodic_u"]),
+                "periodic_v": bool(face_layout["periodic_v"]),
+                "texture_resolution": int(face_layout["resolution"]),
+                "interpolation_method": "PRECOMPUTED_SURFACE_SAMPLE_GAUSSIAN_BAKE",
+                "thickness_grid_um": np.zeros(
+                    (int(face_layout["resolution"]), int(face_layout["resolution"])),
+                    dtype=np.float32,
+                ),
+                "samples_by_triangle": {},
+            })
+            uv_samples = cache["uv_centers"][triangle_ids]
+            increments = thickness_increment[local_mask]
+            sample_areas = areas_mm2[local_mask]
+            metrics = cache["surface_metrics"][triangle_ids]
+            covariances = []
+            bounds = np.asarray(face_layout["uv_bounds"], dtype=np.float64)
+            sigma_fallback = max(
+                1.5,
+                min(
+                    8.0,
+                    0.65 * int(face_layout["resolution"])
+                    / math.sqrt(max(float(face_layout["triangle_count"]), 1.0)),
+                ),
+            )
+            for metric, sample_area in zip(metrics, sample_areas):
+                try:
+                    if not np.isfinite(metric).all():
+                        raise ValueError("Degenerate tessellation UV metric.")
+                    covariance = surface_metric_to_pixel_covariance(
+                        metric,
+                        bounds,
+                        int(face_layout["resolution"]),
+                        float(sample_area),
+                        smoothing_factor=0.60,
+                    )
+                except ValueError:
+                    covariance = np.eye(2, dtype=np.float64) * sigma_fallback ** 2
+                covariances.append(covariance)
+
+            accumulate_face_uv_thickness(
+                face_record["thickness_grid_um"],
+                uv_samples,
+                increments,
+                bounds,
+                sigma_px=sigma_fallback,
+                periodic_u=bool(face_layout["periodic_u"]),
+                periodic_v=bool(face_layout["periodic_v"]),
+                sample_covariance_px=np.asarray(covariances, dtype=np.float64),
+            )
+            face_record["direct_deposition_sample_count"] = int(len(triangle_ids))
+            face_record["direct_deposition_volume_mm3"] = float(
+                np.sum(deposited[local_mask])
+            )
+            for triangle_id, uv, increment, area in zip(
+                triangle_ids, uv_samples, increments, sample_areas
+            ):
+                face_record["samples_by_triangle"][int(triangle_id)] = {
+                    "triangle_id": int(triangle_id),
+                    "uv": np.asarray(uv, dtype=np.float64).tolist(),
+                    "thickness_um": float(
+                        self._interactive_spray_face_thickness_um[int(triangle_id)]
+                    ),
+                    "area_mm2": float(area),
+                    "patch_id": (
+                        int(self.patch_labels[int(triangle_id)])
+                        if self.patch_labels is not None
+                        and len(self.patch_labels) == len(mesh.faces)
+                        else None
+                    ),
+                    "stage2_status": (
+                        int(self.face_status_labels[int(triangle_id)])
+                        if self.face_status_labels is not None
+                        and len(self.face_status_labels) == len(mesh.faces)
+                        else None
+                    ),
+                }
             self._interactive_spray_dirty_face_ids.add(face_id)
+
+        self._interactive_spray_surface_field["field_representation"] = (
+            "SPARSE_TRIANGLE_INTEGRATION_BAKED_TO_FACE_UV"
+        )
+        self._interactive_spray_surface_field["interpolation_method"] = (
+            "PRECOMPUTED_SURFACE_SAMPLE_GAUSSIAN_BAKE"
+        )
 
     def _interactive_build_gun_visual(self, nozzle, spray_direction):
         """Build a lightweight sprayer envelope from the active profile."""
