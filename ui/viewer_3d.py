@@ -3223,7 +3223,9 @@ class ProductViewer(QWidget):
                 edge_u[(valid_cols == 0) | (valid_cols == resolution - 1)] = 0.5
                 edge_v[(valid_rows == 0) | (valid_rows == resolution - 1)] = 0.5
                 quadrature_area_weights = edge_u * edge_v
-                for uv_value, area_weight in zip(uv_values, quadrature_area_weights):
+                for sample_index, (uv_value, area_weight) in enumerate(
+                    zip(uv_values, quadrature_area_weights)
+                ):
                     try:
                         surface = evaluate_step_face_surface(
                             self.current_mesh, face_id,
@@ -3247,8 +3249,8 @@ class ProductViewer(QWidget):
                     face_points.append(point)
                     face_normals.append(normal)
                     face_areas.append(sample_area * float(source_factor) ** 2)
-                    accepted_rows.append(int(valid_rows[len(accepted_rows)]))
-                    accepted_cols.append(int(valid_cols[len(accepted_cols)]))
+                    accepted_rows.append(int(valid_rows[sample_index]))
+                    accepted_cols.append(int(valid_cols[sample_index]))
 
                 if not face_points:
                     continue
