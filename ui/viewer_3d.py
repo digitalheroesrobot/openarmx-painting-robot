@@ -2668,8 +2668,65 @@ class ProductViewer(QWidget):
         )
         triangles_world_mm = triangles_world * float(source_factor)
         normals_local = np.asarray(self.current_mesh.face_normals[ids], dtype=np.float64)
+
+        # STEP deposition uses original B-Rep centroids, normals and surface
+        # area Jacobians. Triangle vertices remain the quadrature support so
+        # the existing, validated cone kernel and per-triangle state layout
+        # are preserved. STL continues to use its native triangle geometry.
+        from core.step_loader import (
+            get_step_brep_context,
+            get_step_triangle_surface_coordinates,
+            evaluate_step_face_surface,
+            evaluate_step_triangle_sample,
+        )
+        brep_context = get_step_brep_context(self.current_mesh)
+        if brep_context is not None:
+            uv_triangles = np.asarray(
+                brep_context["triangle_uvs"], dtype=np.float64
+            )
+            uv_valid = np.asarray(
+                brep_context["triangle_uv_valid"], dtype=bool
+            )
+            for local_index, triangle_index in enumerate(ids):
+                if not uv_valid[int(triangle_index)]:
+                    continue
+                center_sample = evaluate_step_triangle_sample(
+                    self.current_mesh, int(triangle_index),
+                    np.asarray([1.0 / 3.0] * 3, dtype=np.float64),
+                )
+                uv_mapping = get_step_triangle_surface_coordinates(
+                    self.current_mesh, int(triangle_index),
+                    np.asarray([1.0 / 3.0] * 3, dtype=np.float64),
+                )
+                face_surface = evaluate_step_face_surface(
+                    self.current_mesh,
+                    int(uv_mapping["face_id"]),
+                    float(uv_mapping["uv"][0]),
+                    float(uv_mapping["uv"][1]),
+                )
+                uv = uv_triangles[int(triangle_index)]
+                uv_area = 0.5 * abs(
+                    (uv[1, 0] - uv[0, 0]) * (uv[2, 1] - uv[0, 1])
+                    - (uv[1, 1] - uv[0, 1]) * (uv[2, 0] - uv[0, 0])
+                )
+                jacobian = float(np.linalg.norm(np.cross(
+                    face_surface["du_mm_per_u"],
+                    face_surface["dv_mm_per_v"],
+                )))
+                exact_area_mm2 = uv_area * jacobian
+                if np.isfinite(exact_area_mm2) and exact_area_mm2 > 1e-12:
+                    areas[int(triangle_index)] = exact_area_mm2
+                centroids_local[local_index] = center_sample["point_mm"]
+                exact_normal = np.asarray(
+                    center_sample["normal"], dtype=np.float64
+                )
+                if float(np.dot(exact_normal, normals_local[local_index])) < 0.0:
+                    exact_normal *= -1.0
+                normals_local[local_index] = exact_normal
+
         normals_world = normals_local @ transform[:3, :3].T
         normals_world /= np.maximum(np.linalg.norm(normals_world, axis=1)[:, None], 1e-12)
+        centroids_world = centroids_local @ transform[:3, :3].T + transform[:3, 3]
         result = calculate_cone_deposition_step(
             surface_points_mm=centroids_world * float(source_factor),
             sample_vertices_mm=triangles_world_mm,
