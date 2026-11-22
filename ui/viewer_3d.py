@@ -449,6 +449,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_display_mode = "thickness"
         self._interactive_recorded_replay_index = 0
         self._interactive_recorded_replay_actor = None
+        self._interactive_spray_path_actor = None
         self._interactive_recorded_replay_timer = QTimer(self)
         self._interactive_recorded_replay_timer.setInterval(40)
         self._interactive_recorded_replay_timer.timeout.connect(
@@ -2668,6 +2669,14 @@ class ProductViewer(QWidget):
                 * overspray_extent_factor
             )
         )
+        self._interactive_recorded_replay_timer.stop()
+        if self._interactive_recorded_replay_actor is not None:
+            try:
+                self.plotter.remove_actor(self._interactive_recorded_replay_actor, render=False)
+            except Exception:
+                pass
+            self._interactive_recorded_replay_actor = None
+        self.interactive_recorded_path_panel.hide()
         self._interactive_spray_transform = self._actor_matrix_array().copy()
         self._interactive_spray_surface = self._to_polydata(self.current_mesh).clean()
         self._interactive_spray_locator = vtkOBBTree()
@@ -3807,8 +3816,8 @@ class ProductViewer(QWidget):
         if not len(selected):
             return
 
-        # Expand sparse ray-hit triangles to the complete visible portion of
-        # every CAD Face actually touched by the footprint. This is critical
+        # Expand sparse ray-hit triangles to the complete front-facing cone
+        # portion of every CAD Face actually touched by the footprint. This is critical
         # for narrow faces: a handful of preview rays must not create isolated
         # painted dots on otherwise uncoated Face regions.
         hit_face_ids = np.unique(cache["face_ids"][selected])
@@ -3824,7 +3833,9 @@ class ProductViewer(QWidget):
                 np.linalg.norm(candidate_normals, axis=1)[:, None], 1e-12
             )
             nozzle_mm = np.asarray(nozzle_world, dtype=np.float64) * source_to_mm
-            spray_direction = np.asarray(pose["spray_direction_world"], dtype=np.float64)
+            spray_direction = np.asarray(
+                pose["spray_direction_world"], dtype=np.float64
+            ).copy()
             spray_direction /= max(float(np.linalg.norm(spray_direction)), 1e-12)
             delta = candidate_points_mm - nozzle_mm[None, :]
             axial = delta @ spray_direction
