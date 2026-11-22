@@ -71,6 +71,62 @@ def face_uv_triangles_to_texture_coordinates(
     )[None, None, :]
 
 
+def surface_metric_to_pixel_covariance(
+    surface_metric_mm2_per_uv,
+    uv_bounds,
+    resolution,
+    sample_area_mm2,
+    smoothing_factor=0.60,
+    min_sigma_px=0.75,
+    max_sigma_px=32.0,
+):
+    """Convert an isotropic physical Gaussian footprint into UV-pixel space.
+
+    surface_metric_mm2_per_uv is the first fundamental form
+    [[du·du, du·dv], [du·dv, dv·dv]] evaluated on the original CAD Surface.
+    The resulting covariance is generally anisotropic in UV texture pixels,
+    which compensates for parameterization scale and skew.
+    """
+    metric = np.asarray(surface_metric_mm2_per_uv, dtype=np.float64)
+    bounds = np.asarray(uv_bounds, dtype=np.float64)
+    resolution = int(resolution)
+    area = float(sample_area_mm2)
+    factor = float(smoothing_factor)
+    min_sigma = float(min_sigma_px)
+    max_sigma = float(max_sigma_px)
+    if metric.shape != (2, 2) or not np.isfinite(metric).all():
+        raise ValueError("surface metric must be a finite 2x2 matrix.")
+    if bounds.shape != (2, 2) or not np.isfinite(bounds).all():
+        raise ValueError("uv_bounds must be a finite 2x2 array.")
+    if resolution < 8 or np.any(bounds[:, 1] <= bounds[:, 0]):
+        raise ValueError("Texture resolution and UV bounds are invalid.")
+    if not math.isfinite(area) or area <= 0.0:
+        raise ValueError("sample_area_mm2 must be finite and positive.")
+    if (
+        not math.isfinite(factor) or factor <= 0.0
+        or not math.isfinite(min_sigma) or min_sigma <= 0.0
+        or not math.isfinite(max_sigma) or max_sigma < min_sigma
+    ):
+        raise ValueError("Gaussian smoothing parameters are invalid.")
+
+    metric = 0.5 * (metric + metric.T)
+    spans = bounds[:, 1] - bounds[:, 0]
+    pixel_to_uv = np.diag(spans / float(resolution - 1))
+    metric_per_pixel = pixel_to_uv.T @ metric @ pixel_to_uv
+    eigenvalues, eigenvectors = np.linalg.eigh(metric_per_pixel)
+    if np.any(eigenvalues <= 1e-14):
+        raise ValueError("Surface metric is singular at this UV sample.")
+
+    sigma_mm = factor * math.sqrt(area)
+    variances = np.clip(
+        (sigma_mm * sigma_mm) / eigenvalues,
+        min_sigma * min_sigma,
+        max_sigma * max_sigma,
+    )
+    covariance = eigenvectors @ np.diag(variances) @ eigenvectors.T
+    return 0.5 * (covariance + covariance.T)
+
+
 def accumulate_face_uv_thickness(
     thickness_grid_um,
     sample_uv,
@@ -79,6 +135,7 @@ def accumulate_face_uv_thickness(
     sigma_px=3.0,
     periodic_u=False,
     periodic_v=False,
+    sample_covariance_px=None,
 ):
     """Accumulate one deposition interval as a smooth UV-domain thickness field.
 
@@ -104,19 +161,33 @@ def accumulate_face_uv_thickness(
     sigma = float(sigma_px)
     if not math.isfinite(sigma) or sigma <= 0.0:
         raise ValueError("sigma_px must be finite and positive.")
+    if sample_covariance_px is None:
+        covariances = np.repeat(
+            (np.eye(2, dtype=np.float64) * sigma * sigma)[None, :, :],
+            len(samples), axis=0,
+        )
+    else:
+        covariances = np.asarray(sample_covariance_px, dtype=np.float64)
+        if covariances.shape != (len(samples), 2, 2) or not np.isfinite(covariances).all():
+            raise ValueError("sample_covariance_px must be finite with shape (N,2,2).")
+        covariances = 0.5 * (covariances + np.swapaxes(covariances, 1, 2))
+        if len(covariances) and np.any(np.linalg.eigvalsh(covariances) <= 0.0):
+            raise ValueError("Every sample covariance must be positive definite.")
 
     size = int(grid.shape[0])
     span = bounds[:, 1] - bounds[:, 0]
     centers = (samples - bounds[:, 0]) / span * (size - 1)
-    radius = max(1, int(math.ceil(3.0 * sigma)))
-    offsets = np.arange(-radius, radius + 1, dtype=np.int64)
     numerator = np.zeros_like(grid, dtype=np.float64)
     denominator = np.zeros_like(grid, dtype=np.float64)
     periodic = (bool(periodic_u), bool(periodic_v))
 
-    for center, increment in zip(centers, increments):
+    for center, increment, covariance in zip(centers, increments, covariances):
         cx, cy = float(center[0]), float(center[1])
         x_center, y_center = int(round(cx)), int(round(cy))
+        radius = max(1, int(math.ceil(3.0 * math.sqrt(
+            float(np.max(np.linalg.eigvalsh(covariance)))
+        ))))
+        offsets = np.arange(-radius, radius + 1, dtype=np.int64)
         xs = x_center + offsets
         ys = y_center + offsets
         x_valid = np.ones(xs.shape, dtype=bool)
@@ -131,14 +202,18 @@ def accumulate_face_uv_thickness(
             y_valid = (ys >= 0) & (ys < size)
         if not np.any(x_valid) or not np.any(y_valid):
             continue
-        # Measure distance in the unwrapped local offset coordinates.
-        # Wrapped pixel indices are used only for addressing the periodic grid;
-        # using them for distance would make the opposite seam look far away.
-        dx = offsets.astype(np.float64) + (x_center - cx)
-        dy = offsets.astype(np.float64) + (y_center - cy)
-        wx = np.exp(-0.5 * (dx / sigma) ** 2)
-        wy = np.exp(-0.5 * (dy / sigma) ** 2)
-        kernel = np.outer(wy, wx)
+        # Distances use unwrapped local offsets; wrapped indices are only
+        # addresses into the periodic texture.
+        delta_x = offsets.astype(np.float64) + (x_center - cx)
+        delta_y = offsets.astype(np.float64) + (y_center - cy)
+        dx, dy = np.meshgrid(delta_x, delta_y)
+        inverse_covariance = np.linalg.inv(covariance)
+        mahalanobis = (
+            inverse_covariance[0, 0] * dx * dx
+            + 2.0 * inverse_covariance[0, 1] * dx * dy
+            + inverse_covariance[1, 1] * dy * dy
+        )
+        kernel = np.exp(-0.5 * mahalanobis)
         valid_kernel = kernel[np.ix_(y_valid, x_valid)]
         yy = ys[y_valid]
         xx = xs[x_valid]
