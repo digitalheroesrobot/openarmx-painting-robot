@@ -426,6 +426,7 @@ class ProductViewer(QWidget):
         # transparent VTK actor per mouse sample.
         self._interactive_spray_painted_actors = []
         self._interactive_spray_face_thickness_um = None
+        self._interactive_spray_surface_field = None
         self._interactive_spray_face_area_mm2 = None
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
@@ -2358,6 +2359,11 @@ class ProductViewer(QWidget):
         self._interactive_spray_face_thickness_um = np.zeros(
             len(self.current_mesh.faces), dtype=np.float64
         )
+        self._interactive_spray_surface_field = {
+            "schema": "STEP_BREP_UV_FILM_THICKNESS_FIELD_V1",
+            "coordinate_frame": "ORIGINAL_STEP_FACE_UV",
+            "faces": {},
+        }
         self._interactive_spray_face_area_mm2 = None
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
@@ -2768,7 +2774,55 @@ class ProductViewer(QWidget):
             return
         if self._interactive_spray_face_thickness_um is None:
             self._interactive_spray_face_thickness_um = np.zeros(len(self.current_mesh.faces), dtype=np.float64)
-        self._interactive_spray_face_thickness_um[ids] += deposited / np.maximum(areas[ids], 1e-12) * 1000.0
+        thickness_increment_um = (
+            deposited / np.maximum(areas[ids], 1e-12) * 1000.0
+        )
+        self._interactive_spray_face_thickness_um[ids] += thickness_increment_um
+
+        # Keep the coating field in original CAD Face UV coordinates. The
+        # triangle-indexed array remains the fast rendering cache; this
+        # surface-domain record is the persistent, location-dependent source.
+        if brep_context is not None:
+            if not isinstance(self._interactive_spray_surface_field, dict):
+                self._interactive_spray_surface_field = {
+                    "schema": "STEP_BREP_UV_FILM_THICKNESS_FIELD_V1",
+                    "coordinate_frame": "ORIGINAL_STEP_FACE_UV",
+                    "faces": {},
+                }
+            triangle_face_ids = np.asarray(
+                brep_context["triangle_face_ids"], dtype=np.int64
+            )
+            face_samples = self._interactive_spray_surface_field["faces"]
+            for local_index, triangle_index in enumerate(ids):
+                triangle_index = int(triangle_index)
+                uv_mapping = get_step_triangle_surface_coordinates(
+                    self.current_mesh, triangle_index,
+                    np.asarray([1.0 / 3.0] * 3, dtype=np.float64),
+                )
+                face_id = int(triangle_face_ids[triangle_index])
+                face_record = face_samples.setdefault(
+                    face_id, {"samples_by_triangle": {}}
+                )
+                face_record["samples_by_triangle"][triangle_index] = {
+                    "uv": np.asarray(uv_mapping["uv"], dtype=float).tolist(),
+                    "thickness_um": float(
+                        self._interactive_spray_face_thickness_um[triangle_index]
+                    ),
+                    "area_mm2": float(areas[triangle_index]),
+                    "patch_id": (
+                        int(self.patch_labels[triangle_index])
+                        if self.patch_labels is not None
+                        and len(self.patch_labels) == len(self.current_mesh.faces)
+                        else None
+                    ),
+                    "stage2_status": (
+                        int(self.face_status_labels[triangle_index])
+                        if self.face_status_labels is not None
+                        and len(self.face_status_labels) == len(self.current_mesh.faces)
+                        else None
+                    ),
+                }
+
         self._interactive_spray_paint_state_dirty = True
 
     def _interactive_build_gun_visual(self, nozzle, spray_direction):
