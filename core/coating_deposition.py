@@ -283,14 +283,12 @@ def calculate_cone_deposition_step(
         tail_q[~np.isfinite(tail_q)] = 0.0
 
         face_cosine = np.clip(normals @ (-direction), 0.0, 1.0)
-        face_forward = axial_q > 1e-9
         core_integrand = core_q * 4.0 / np.maximum(footprint_q, 1e-12)
         tail_integrand = tail_q
         core_mean = np.sum(core_integrand * quadrature_weights[None, :], axis=1)
         tail_mean = np.sum(tail_integrand * quadrature_weights[None, :], axis=1)
-        forward_mean = np.sum(face_forward * quadrature_weights[None, :], axis=1)
         return (
-            core_mean, tail_mean, face_cosine * forward_mean,
+            core_mean, tail_mean, face_cosine,
             np.any(inside_q, axis=1), np.any(outside_q, axis=1),
             np.sum(radius_q * quadrature_weights[None, :], axis=1),
             np.sum(footprint_q * quadrature_weights[None, :], axis=1),
