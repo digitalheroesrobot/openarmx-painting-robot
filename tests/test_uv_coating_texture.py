@@ -141,3 +141,45 @@ def test_uv_blur_width_scales_with_local_surface_sample_area():
         **common, sample_area_mm2=0.04
     )
     assert np.allclose(large, 4.0 * small, rtol=1e-8, atol=1e-10)
+
+
+def test_uv_grid_rasterization_respects_selected_triangle_domain():
+    from core.uv_coating_texture import rasterize_face_uv_grid
+
+    # The lower-right quarter is intentionally absent (a trimmed-out region).
+    triangles = np.asarray([
+        [[0.0, 0.0], [0.5, 0.0], [0.0, 0.5]],
+        [[0.5, 0.0], [0.5, 0.5], [0.0, 0.5]],
+    ])
+    result = rasterize_face_uv_grid(
+        triangles,
+        np.asarray([[0.0, 1.0], [0.0, 1.0]]),
+        resolution=33,
+    )
+    mask = result["valid_mask"]
+    assert mask.shape == (33, 33)
+    assert mask[4, 4]
+    assert not mask[28, 28]
+    assert result["valid_texel_count"] > 0
+
+
+def test_uv_grid_rasterization_handles_periodic_seam_crossing():
+    from core.uv_coating_texture import rasterize_face_uv_grid
+
+    period = 2.0 * np.pi
+    triangles = np.asarray([[
+        [period - 0.12, 0.2],
+        [0.08, 0.2],
+        [period - 0.12, 0.8],
+    ]])
+    result = rasterize_face_uv_grid(
+        triangles,
+        np.asarray([[0.0, period], [0.0, 1.0]]),
+        resolution=65,
+        periodic_u=True,
+    )
+    mask = result["valid_mask"]
+    # Both sides of the periodic texture seam belong to the same small patch.
+    assert np.count_nonzero(mask[:, :4]) > 0
+    assert np.count_nonzero(mask[:, -4:]) > 0
+    assert np.count_nonzero(mask) < 65 * 20
