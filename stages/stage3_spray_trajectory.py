@@ -887,6 +887,14 @@ def _sample_candidate_faces(
     valid_face_indices = geometry_face_indices[valid_geometry_mask]
     valid_normals = candidate_normals[valid_normal_mask][valid_geometry_mask]
 
+    # A live STEP context enables exact original-CAD surface evaluation.
+    # STL inputs intentionally retain the existing triangle-based path.
+    from core.step_loader import (
+        get_step_brep_context,
+        evaluate_step_triangle_sample,
+    )
+    step_brep_context = get_step_brep_context(mesh)
+
     all_points = []
     all_normals = []
     all_face_indices = []
@@ -916,10 +924,47 @@ def _sample_candidate_faces(
                 "STL coordinate units. Increase sampling spacing."
             )
 
+        # STEP inputs use the original B-Rep Surface as the geometric
+        # authority. The display triangle is retained only as a stable
+        # triangle/Patch/Face index carrier and UV interpolation domain.
+        if step_brep_context is not None:
+            a, b, c = triangle
+            edge_a = b - a
+            edge_b = c - a
+            gram_aa = float(np.dot(edge_a, edge_a))
+            gram_ab = float(np.dot(edge_a, edge_b))
+            gram_bb = float(np.dot(edge_b, edge_b))
+            determinant = gram_aa * gram_bb - gram_ab * gram_ab
+            if determinant <= NORMAL_EPSILON:
+                skipped_invalid_geometry += len(points)
+                continue
+            offsets = points - a
+            rhs_a = offsets @ edge_a
+            rhs_b = offsets @ edge_b
+            weight_b = (gram_bb * rhs_a - gram_ab * rhs_b) / determinant
+            weight_c = (gram_aa * rhs_b - gram_ab * rhs_a) / determinant
+            barycentric = np.column_stack((
+                1.0 - weight_b - weight_c, weight_b, weight_c
+            ))
+            exact_points = np.empty_like(points)
+            exact_normals = np.empty_like(points)
+            for sample_index, weights in enumerate(barycentric):
+                exact = evaluate_step_triangle_sample(
+                    mesh, int(face_index), weights
+                )
+                exact_points[sample_index] = exact["point_mm"]
+                exact_normal = np.asarray(exact["normal"], dtype=np.float64)
+                # Preserve Stage 3's established outward-normal convention.
+                if float(np.dot(exact_normal, normal)) < 0.0:
+                    exact_normal *= -1.0
+                exact_normals[sample_index] = exact_normal
+            points = exact_points
+            sample_normals = exact_normals
+        else:
+            sample_normals = np.repeat(normal[None, :], len(points), axis=0)
+
         all_points.append(points)
-        all_normals.append(
-            np.repeat(normal[None, :], len(points), axis=0)
-        )
+        all_normals.append(sample_normals)
         all_face_indices.append(
             np.full(len(points), face_index, dtype=np.int64)
         )
@@ -943,6 +988,10 @@ def _sample_candidate_faces(
         "face_indices": np.concatenate(all_face_indices),
         "patch_ids": np.concatenate(all_patch_ids),
         "candidate_face_count": int(len(candidate_faces)),
+        "surface_geometry_source": (
+            "ORIGINAL_STEP_BREP_SURFACE"
+            if step_brep_context is not None else "DISPLAY_MESH_TRIANGLES"
+        ),
         "sample_count": int(sample_count),
         "skipped_invalid_normals": int(skipped_invalid_normals),
         "skipped_invalid_geometry": int(skipped_invalid_geometry),
@@ -4332,6 +4381,17 @@ def generate_spray_trajectory(
         normals=normals,
         spacing_coordinate_units=spacing_coordinate_units,
     )
+    from core.step_loader import (
+        get_step_brep_context,
+        build_step_patch_face_mapping,
+    )
+    step_context = get_step_brep_context(mesh)
+    surface_mapping = (
+        build_step_patch_face_mapping(
+            mesh, patch_labels, face_status_labels
+        )
+        if step_context is not None else None
+    )
 
     surface_points = sampling_result["surface_points"]
     surface_normals = sampling_result["surface_normals"]
@@ -4806,6 +4866,10 @@ def generate_spray_trajectory(
         "step_surface_refinement": ordered.get("step_surface_refinement", {
             "status": "NOT_APPLICABLE", "normal_source": "DISPLAY_MESH"
         }),
+        "surface_geometry_source": sampling_result.get(
+            "surface_geometry_source", "DISPLAY_MESH_TRIANGLES"
+        ),
+        "patch_brep_face_mapping": surface_mapping,
         "path_statistics": ordered.get("path_statistics", {}),
         "trajectory_validation": trajectory_validation,
         "inter_segment_travel_plan": inter_segment_travel_plan,
