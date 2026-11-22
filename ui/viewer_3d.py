@@ -280,9 +280,9 @@ def map_film_thickness_to_rgb(thickness_um, target_um):
     thresholds = np.asarray(FILM_THICKNESS_COLOR_THRESHOLDS, dtype=np.float64)
     palette = np.asarray(FILM_THICKNESS_COLOR_RGB, dtype=np.uint8)
     band_ids = np.searchsorted(thresholds, ratio, side="right")
-    # Keep exactly 100% in the target-reached (yellow) band; only values
-    # strictly above target are classified as excessive (red).
-    band_ids = np.where(ratio == 1.0, 4, band_ids)
+    # Exactly 100% is target reached (yellow); every value above target
+    # belongs to the excessive-film (red) band.
+    band_ids = np.where(ratio > 1.0, 5, band_ids)
     return palette[band_ids]
 
 
