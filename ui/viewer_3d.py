@@ -2998,6 +2998,7 @@ class ProductViewer(QWidget):
                 DEFAULT_UV_TEXTURE_RESOLUTION,
                 accumulate_face_uv_thickness,
                 face_uv_layout,
+                surface_metric_to_pixel_covariance,
             )
             if not isinstance(self._interactive_spray_surface_field, dict):
                 self._interactive_spray_surface_field = {
@@ -3013,6 +3014,8 @@ class ProductViewer(QWidget):
             face_samples = self._interactive_spray_surface_field["faces"]
             uv_by_face = {}
             increment_by_face = {}
+            metric_by_face = {}
+            area_by_face = {}
             provenance_by_face = {}
             for local_index, triangle_index in enumerate(ids):
                 triangle_index = int(triangle_index)
@@ -3023,11 +3026,26 @@ class ProductViewer(QWidget):
                     np.asarray([1.0 / 3.0] * 3, dtype=np.float64),
                 )
                 face_id = int(triangle_face_ids[triangle_index])
-                uv_by_face.setdefault(face_id, []).append(
-                    np.asarray(uv_mapping["uv"], dtype=np.float64)
+                sample_uv = np.asarray(uv_mapping["uv"], dtype=np.float64)
+                exact_surface = evaluate_step_face_surface(
+                    self.current_mesh,
+                    face_id,
+                    float(sample_uv[0]),
+                    float(sample_uv[1]),
                 )
+                du = np.asarray(exact_surface["du_mm_per_u"], dtype=np.float64)
+                dv = np.asarray(exact_surface["dv_mm_per_v"], dtype=np.float64)
+                surface_metric = np.asarray([
+                    [float(np.dot(du, du)), float(np.dot(du, dv))],
+                    [float(np.dot(du, dv)), float(np.dot(dv, dv))],
+                ], dtype=np.float64)
+                uv_by_face.setdefault(face_id, []).append(sample_uv)
                 increment_by_face.setdefault(face_id, []).append(
                     float(thickness_increment_um[local_index])
+                )
+                metric_by_face.setdefault(face_id, []).append(surface_metric)
+                area_by_face.setdefault(face_id, []).append(
+                    float(areas[triangle_index])
                 )
                 provenance_by_face.setdefault(face_id, []).append({
                     "triangle_id": triangle_index,
@@ -3094,14 +3112,41 @@ class ProductViewer(QWidget):
                         / math.sqrt(float(sample_count)),
                     ),
                 )
+                uv_bounds_array = np.asarray(
+                    texture_layout["uv_bounds"], dtype=np.float64
+                )
+                covariance_samples = []
+                for metric, sample_area in zip(
+                    metric_by_face[face_id], area_by_face[face_id]
+                ):
+                    try:
+                        covariance_samples.append(
+                            surface_metric_to_pixel_covariance(
+                                metric,
+                                uv_bounds_array,
+                                int(texture_layout["resolution"]),
+                                sample_area,
+                                smoothing_factor=0.60,
+                            )
+                        )
+                    except ValueError:
+                        # Surface singularities (for example sphere poles)
+                        # use a bounded isotropic fallback rather than
+                        # dropping paint deposition at that sample.
+                        covariance_samples.append(
+                            np.eye(2, dtype=np.float64) * sigma_px * sigma_px
+                        )
                 accumulate_face_uv_thickness(
                     face_record["thickness_grid_um"],
                     np.asarray(uv_samples, dtype=np.float64),
                     np.asarray(increment_by_face[face_id], dtype=np.float64),
-                    np.asarray(texture_layout["uv_bounds"], dtype=np.float64),
+                    uv_bounds_array,
                     sigma_px=sigma_px,
                     periodic_u=bool(texture_layout["periodic_u"]),
                     periodic_v=bool(texture_layout["periodic_v"]),
+                    sample_covariance_px=np.asarray(
+                        covariance_samples, dtype=np.float64
+                    ),
                 )
                 for provenance in provenance_by_face[face_id]:
                     face_record["samples_by_triangle"][
