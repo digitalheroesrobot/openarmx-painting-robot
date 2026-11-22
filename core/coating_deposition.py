@@ -300,9 +300,18 @@ def calculate_cone_deposition_step(
             "footprint_radius_mm": radius,
         }
 
-    # Integrate over the actual face area. The footprint area grows with
-    # standoff, so identical paint flow produces a thinner film farther away.
-    weight = density * 4.0 * areas / np.maximum(footprint_area, 1e-12)
+    # Integrate over the actual face area. The finite-range Beta core is
+    # expressed in normalized [-1,1]^2 coordinates, while the Gaussian tail
+    # is already a physical 1/mm² density. Keep those Jacobians separate.
+    core_weight = (
+        core_fraction
+        * core_density
+        * 4.0
+        * areas
+        / np.maximum(footprint_area, 1e-12)
+    )
+    tail_weight = tail_fraction * tail_density * areas
+    weight = core_weight + tail_weight
     weight *= np.clip(facing, 0.0, 1.0)
     weight[~inside] = 0.0
     total = float(np.sum(weight))
