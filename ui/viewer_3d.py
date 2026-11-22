@@ -3385,7 +3385,10 @@ class ProductViewer(QWidget):
         camera = self.plotter.camera
         sensitivity = 0.5  # degrees per screen pixel
         camera.Azimuth(-float(dx) * sensitivity)
-        camera.Elevation(float(dy) * sensitivity)
+        # VTK display coordinates use a bottom-left origin, while the
+        # operator's drag convention is top-left (downward-positive).
+        # Negate dy so dragging down moves the view downward naturally.
+        camera.Elevation(-float(dy) * sensitivity)
         camera.OrthogonalizeViewUp()
         self.plotter.reset_camera_clipping_range()
         self.plotter.render()
