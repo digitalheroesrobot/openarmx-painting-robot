@@ -3958,7 +3958,32 @@ class ProductViewer(QWidget):
                     / math.sqrt(max(float(face_layout["triangle_count"]), 1.0)),
                 ),
             )
-            for metric, sample_area in zip(metrics, sample_areas):
+
+            # The paint footprint is a property of the spray plume, not of
+            # the CAD tessellation density. Using triangle area here creates
+            # one small Gaussian spot per triangle (the visible "droplet"
+            # artifact). Derive the physical Gaussian width from the local
+            # nozzle-to-surface cone radius instead, then map it through the
+            # exact local CAD surface metric into anisotropic UV pixels.
+            face_points_mm = points_world_mm[local_mask]
+            nozzle_mm = np.asarray(nozzle_world, dtype=np.float64) * source_to_mm
+            spray_axis = np.asarray(
+                pose["spray_direction_world"], dtype=np.float64
+            )
+            spray_axis /= max(float(np.linalg.norm(spray_axis)), 1e-12)
+            axial_mm = np.maximum(
+                (face_points_mm - nozzle_mm[None, :]) @ spray_axis, 0.0
+            )
+            cone_radius_mm = axial_mm * math.tan(
+                math.radians(self._interactive_spray_cone_angle_deg * 0.5)
+            )
+            # A broad, overlapping footprint gives a continuous wet film;
+            # the 32 px covariance cap prevents a single sample washing out
+            # an entire small CAD Face.
+            plume_sigma_mm = np.maximum(0.45, cone_radius_mm * 0.18)
+            equivalent_sample_areas = (plume_sigma_mm / 0.60) ** 2
+
+            for metric, effective_area in zip(metrics, equivalent_sample_areas):
                 try:
                     if not np.isfinite(metric).all():
                         raise ValueError("Degenerate tessellation UV metric.")
@@ -3966,8 +3991,9 @@ class ProductViewer(QWidget):
                         metric * (source_to_mm ** 2),
                         bounds,
                         int(face_layout["resolution"]),
-                        float(sample_area),
+                        float(effective_area),
                         smoothing_factor=0.60,
+                        max_sigma_px=32.0,
                     )
                 except ValueError:
                     covariance = np.eye(2, dtype=np.float64) * sigma_fallback ** 2
