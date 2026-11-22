@@ -3581,7 +3581,7 @@ class ProductViewer(QWidget):
                     if not np.isfinite(metric).all():
                         raise ValueError("Degenerate tessellation UV metric.")
                     covariance = surface_metric_to_pixel_covariance(
-                        metric,
+                        metric * (source_to_mm ** 2),
                         bounds,
                         int(face_layout["resolution"]),
                         float(sample_area),
