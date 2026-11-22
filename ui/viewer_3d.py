@@ -2895,6 +2895,7 @@ class ProductViewer(QWidget):
             uv_valid = np.asarray(
                 brep_context["triangle_uv_valid"], dtype=bool
             )
+            surface_samples_by_triangle = {}
             for local_index, triangle_index in enumerate(ids):
                 if not uv_valid[int(triangle_index)]:
                     continue
@@ -2903,6 +2904,7 @@ class ProductViewer(QWidget):
                     np.asarray([1.0 / 3.0] * 3, dtype=np.float64),
                 )
                 uv = uv_triangles[int(triangle_index)]
+                surface_samples_by_triangle[int(triangle_index)] = center_sample
                 uv_area = 0.5 * abs(
                     (uv[1, 0] - uv[0, 0]) * (uv[2, 1] - uv[0, 1])
                     - (uv[1, 1] - uv[0, 1]) * (uv[2, 0] - uv[0, 0])
@@ -3021,18 +3023,23 @@ class ProductViewer(QWidget):
                 triangle_index = int(triangle_index)
                 if not bool(brep_context["triangle_uv_valid"][triangle_index]):
                     continue
-                uv_mapping = get_step_triangle_surface_coordinates(
-                    self.current_mesh, triangle_index,
-                    np.asarray([1.0 / 3.0] * 3, dtype=np.float64),
-                )
+                sample_record = surface_samples_by_triangle.get(triangle_index)
+                if sample_record is None:
+                    uv_mapping = get_step_triangle_surface_coordinates(
+                        self.current_mesh, triangle_index,
+                        np.asarray([1.0 / 3.0] * 3, dtype=np.float64),
+                    )
+                    sample_uv = np.asarray(uv_mapping["uv"], dtype=np.float64)
+                    exact_surface = evaluate_step_face_surface(
+                        self.current_mesh,
+                        int(triangle_face_ids[triangle_index]),
+                        float(sample_uv[0]),
+                        float(sample_uv[1]),
+                    )
+                else:
+                    sample_uv = np.asarray(sample_record["uv"], dtype=np.float64)
+                    exact_surface = sample_record
                 face_id = int(triangle_face_ids[triangle_index])
-                sample_uv = np.asarray(uv_mapping["uv"], dtype=np.float64)
-                exact_surface = evaluate_step_face_surface(
-                    self.current_mesh,
-                    face_id,
-                    float(sample_uv[0]),
-                    float(sample_uv[1]),
-                )
                 du = np.asarray(exact_surface["du_mm_per_u"], dtype=np.float64)
                 dv = np.asarray(exact_surface["dv_mm_per_v"], dtype=np.float64)
                 surface_metric = np.asarray([
