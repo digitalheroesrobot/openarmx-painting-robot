@@ -2899,18 +2899,38 @@ class ProductViewer(QWidget):
         hit = pose["surface_point_world"]
         direction = pose["spray_direction_world"]
 
-        # Keep exactly one cone: the configured nominal spray cone.
+        # Keep exactly one nominal cone. Construct its topology explicitly:
+        # point 0 is the nozzle apex; the circular rim is downstream toward
+        # the product. This avoids vtk/PyVista cone-axis sign ambiguity.
         half_angle = math.radians(self._interactive_spray_cone_angle_deg) * 0.5
         nominal_radius = self._interactive_spray_standoff * math.tan(half_angle)
-        # Spray leaves the nozzle along spray_direction_world. PyVista's
-        # Cone axis points from its base toward its tip, so the cone tip must
-        # be on the product side of the nozzle.
-        cone = pv.Cone(
-            center=nozzle + direction * (self._interactive_spray_standoff * 0.5),
-            direction=direction,
-            height=self._interactive_spray_standoff,
-            radius=max(nominal_radius, 1e-6),
-            resolution=48,
+        spray_axis = np.asarray(direction, dtype=np.float64)
+        spray_axis /= max(float(np.linalg.norm(spray_axis)), 1e-12)
+        reference_axis = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        if abs(float(np.dot(reference_axis, spray_axis))) > 0.92:
+            reference_axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        radial_u = np.cross(spray_axis, reference_axis)
+        radial_u /= max(float(np.linalg.norm(radial_u)), 1e-12)
+        radial_v = np.cross(spray_axis, radial_u)
+        radial_v /= max(float(np.linalg.norm(radial_v)), 1e-12)
+        ring_angles = np.linspace(0.0, 2.0 * math.pi, 49)[:-1]
+        base_center = nozzle + spray_axis * self._interactive_spray_standoff
+        rim = (
+            base_center[None, :]
+            + nominal_radius
+            * (
+                np.cos(ring_angles)[:, None] * radial_u[None, :]
+                + np.sin(ring_angles)[:, None] * radial_v[None, :]
+            )
+        )
+        cone_points = np.vstack((nozzle, rim))
+        cone_faces = []
+        for i in range(len(rim)):
+            j = (i + 1) % len(rim)
+            cone_faces.extend((3, 0, i + 1, j + 1))
+        cone = pv.PolyData(
+            cone_points,
+            faces=np.asarray(cone_faces, dtype=np.int64),
         )
         actor = self.plotter.add_mesh(
             cone,
