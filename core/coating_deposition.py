@@ -140,6 +140,7 @@ def calculate_cone_deposition_step(
     core_deposition_fraction: float = 0.88,
     overspray_tail_fraction: float = 0.12,
     overspray_tail_sigma_fraction: float = 0.35,
+    sample_vertices_mm: np.ndarray | None = None,
 ) -> dict:
     """Calculate one geometry-aware spray interval over face centroids.
 
@@ -216,15 +217,86 @@ def calculate_cone_deposition_step(
         raise ValueError("spray_direction cannot be zero.")
     direction = direction / dlen
 
-    delta = points - nozzle[None, :]
-    axial = delta @ direction
-    radial_vec = delta - axial[:, None] * direction[None, :]
-    radial_distance = np.linalg.norm(radial_vec, axis=1)
-    radius = np.maximum(axial, 0.0) * math.tan(math.radians(cone * 0.5))
-    inside = (axial > 1e-9) & (radial_distance <= radius) & (radius > 1e-9)
-    facing = np.clip(normals @ (-direction), 0.0, 1.0)
+    # Integrate the spray kernel over each triangle instead of evaluating
+    # only at its centroid. This reduces dependence on triangulation density
+    # and shape for otherwise identical planar surfaces.
+    if sample_vertices_mm is None:
+        triangles = np.repeat(points[:, None, :], 3, axis=1)
+    else:
+        triangles = np.asarray(sample_vertices_mm, dtype=np.float64)
+        if triangles.shape != (len(points), 3, 3) or not np.all(np.isfinite(triangles)):
+            raise ValueError("sample_vertices_mm must be finite with shape (N,3,3).")
 
-    # Build a stable orthonormal basis perpendicular to the spray axis.
+    # Seven-point Dunavant quadrature rule (weights sum to one).
+    barycentric = np.array([
+        [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
+        [0.059715871789770, 0.470142064105115, 0.470142064105115],
+        [0.470142064105115, 0.059715871789770, 0.470142064105115],
+        [0.470142064105115, 0.470142064105115, 0.059715871789770],
+        [0.797426985353087, 0.101286507323456, 0.101286507323456],
+        [0.101286507323456, 0.797426985353087, 0.101286507323456],
+        [0.101286507323456, 0.101286507323456, 0.797426985353087],
+    ], dtype=np.float64)
+    quadrature_weights = np.array([
+        0.225,
+        0.132394152788506, 0.132394152788506, 0.132394152788506,
+        0.125939180544827, 0.125939180544827, 0.125939180544827,
+    ], dtype=np.float64)
+    quadrature_points = np.einsum("qv,nvc->nqc", barycentric, triangles)
+
+    def evaluate_kernel(eval_points):
+        delta_q = eval_points - nozzle[None, None, :]
+        axial_q = np.einsum("nqi,i->nq", delta_q, direction)
+        radial_vec_q = delta_q - axial_q[:, :, None] * direction[None, None, :]
+        radial_distance_q = np.linalg.norm(radial_vec_q, axis=2)
+        radius_q = np.maximum(axial_q, 0.0) * math.tan(math.radians(cone * 0.5))
+        inside_q = (
+            (axial_q > 1e-9)
+            & (radial_distance_q <= radius_q)
+            & (radius_q > 1e-9)
+        )
+        local_x_q = np.einsum("nqi,i->nq", radial_vec_q, basis_x)
+        local_y_q = np.einsum("nqi,i->nq", radial_vec_q, basis_y)
+        normalized_xy_q = np.stack((
+            local_x_q / np.maximum(radius_q, 1e-12),
+            local_y_q / np.maximum(radius_q, 1e-12),
+        ), axis=2)
+        normalized_xy_q[~inside_q] = 2.0
+        footprint_q = math.pi * np.maximum(radius_q, 1e-9) ** 2
+        core_q = double_beta_spatial_density(
+            normalized_xy_q.reshape(-1, 2),
+            radial_alpha, radial_beta, radial_alpha, radial_beta,
+        ).reshape(len(points), -1)
+        core_q[~inside_q] = 0.0
+
+        sigma_q = np.maximum(radius_q * tail_sigma_fraction, 1e-6)
+        outside_q = (axial_q > 1e-9) & (radial_distance_q > radius_q)
+        tail_q = np.zeros_like(axial_q)
+        if np.any(outside_q):
+            with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                survival = np.exp(-0.5 * (radius_q[outside_q] / sigma_q[outside_q]) ** 2)
+                norm = 2.0 * math.pi * sigma_q[outside_q] ** 2 * np.maximum(survival, 1e-300)
+                tail_q[outside_q] = (
+                    np.exp(-0.5 * radial_distance_q[outside_q] ** 2 / sigma_q[outside_q] ** 2)
+                    / np.maximum(norm, 1e-300)
+                )
+        tail_q[~np.isfinite(tail_q)] = 0.0
+
+        face_cosine = np.clip(normals @ (-direction), 0.0, 1.0)
+        face_forward = axial_q > 1e-9
+        core_integrand = core_q * 4.0 / np.maximum(footprint_q, 1e-12)
+        tail_integrand = tail_q
+        core_mean = np.sum(core_integrand * quadrature_weights[None, :], axis=1)
+        tail_mean = np.sum(tail_integrand * quadrature_weights[None, :], axis=1)
+        forward_mean = np.sum(face_forward * quadrature_weights[None, :], axis=1)
+        return (
+            core_mean, tail_mean, face_cosine * forward_mean,
+            np.any(inside_q, axis=1), np.any(outside_q, axis=1),
+            np.sum(radius_q * quadrature_weights[None, :], axis=1),
+            np.sum(footprint_q * quadrature_weights[None, :], axis=1),
+        )
+
+    # Construct a stable orthonormal basis perpendicular to the spray axis.
     reference = np.array([0.0, 0.0, 1.0])
     if abs(float(np.dot(reference, direction))) > 0.9:
         reference = np.array([0.0, 1.0, 0.0])
@@ -233,49 +305,7 @@ def calculate_cone_deposition_step(
     basis_y = np.cross(direction, basis_x)
     basis_y /= max(float(np.linalg.norm(basis_y)), 1e-12)
 
-    local_x = radial_vec @ basis_x
-    local_y = radial_vec @ basis_y
-    normalized_xy = np.column_stack(
-        (local_x / np.maximum(radius, 1e-12),
-         local_y / np.maximum(radius, 1e-12))
-    )
-    normalized_xy[~inside] = 2.0
-
-    # The cone cross-section grows with standoff². This is the key distance
-    # term: identical paint volume spread over a larger footprint produces a
-    # lower film thickness.
-    footprint_area = math.pi * np.maximum(radius, 1e-9) ** 2
-
-    core_density = double_beta_spatial_density(
-        normalized_xy, radial_alpha, radial_beta, radial_alpha, radial_beta
-    )
-    core_density[~inside] = 0.0
-
-    # Infinite-range overspray tail. It starts at the nominal footprint edge
-    # and decays radially with a Gaussian law. The conditional normalization
-    # below makes the tail carry exactly its configured mass fraction outside
-    # the nominal radius in the ideal planar integral.
-    sigma = np.maximum(
-        radius * tail_sigma_fraction,
-        1e-6,
-    )
-    radial_sq = np.maximum(radial_distance * radial_distance, 0.0)
-    tail_density = np.zeros(len(points), dtype=np.float64)
-    outside = (axial > 1e-9) & (radial_distance > radius)
-    if np.any(outside):
-        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-            edge_survival = np.exp(
-                -0.5 * (radius[outside] / sigma[outside]) ** 2
-            )
-            gaussian_norm = (
-                2.0 * math.pi * sigma[outside] ** 2
-                * np.maximum(edge_survival, 1e-300)
-            )
-            tail_density[outside] = (
-                np.exp(-0.5 * radial_sq[outside] / sigma[outside] ** 2)
-                / np.maximum(gaussian_norm, 1e-300)
-            )
-        tail_density[~np.isfinite(tail_density)] = 0.0
+    core_density, tail_density, facing, inside, outside, radius, footprint_area = evaluate_kernel(quadrature_points)
 
     # The core density integrates to one over the nominal disk. The tail
     # density integrates to one over the exterior region. Their configured
@@ -304,21 +334,9 @@ def calculate_cone_deposition_step(
     # Integrate over the actual face area. The finite-range Beta core is
     # expressed in normalized [-1,1]^2 coordinates, while the Gaussian tail
     # is already a physical 1/mm² density. Keep those Jacobians separate.
-    core_weight = (
-        core_fraction
-        * core_density
-        * 4.0
-        * areas
-        / np.maximum(footprint_area, 1e-12)
-    )
+    core_weight = core_fraction * core_density * areas
     tail_weight = tail_fraction * tail_density * areas
-    weight = core_weight + tail_weight
-    weight *= np.clip(facing, 0.0, 1.0)
-    # Keep the Gaussian overspray tail outside the nominal cone. Only points
-    # behind the nozzle are excluded; outside-cone points may still receive
-    # a small non-zero tail deposition.
-    forward = axial > 1e-9
-    weight[~forward] = 0.0
+    weight = (core_weight + tail_weight) * facing
     total = float(np.sum(weight))
     if total <= 1e-12:
         return {
