@@ -14,8 +14,14 @@ def _mesh_with_step_context():
         process=False,
     )
     mesh._step_brep_context = {
+        "shape": object(),
         "faces": (object(), object()),
+        "face_records": ({}, {}),
+        "face_adjacency": {},
         "triangle_face_ids": np.asarray([1, 1, 2], dtype=np.int64),
+        "triangle_uvs": np.zeros((3, 3, 2), dtype=np.float64),
+        "triangle_uv_valid": np.ones(3, dtype=bool),
+        "schema_identifier": "TEST",
     }
     return mesh
 
