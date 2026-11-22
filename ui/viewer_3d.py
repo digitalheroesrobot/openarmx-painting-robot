@@ -3428,16 +3428,25 @@ class ProductViewer(QWidget):
                     * (bounds[:, 1] - bounds[:, 0])[None, :]
                 )
                 xyz = triangle_points[face_tri_ids]
-                for local_index, triangle_id in enumerate(face_tri_ids):
-                    delta_uv = unwrapped_uv[local_index, 1:] - unwrapped_uv[local_index, 0]
-                    delta_xyz = xyz[local_index, 1:] - xyz[local_index, 0]
+                delta_uv = unwrapped_uv[:, 1:, :] - unwrapped_uv[:, :1, :]
+                delta_xyz = xyz[:, 1:, :] - xyz[:, :1, :]
+                determinants = np.linalg.det(delta_uv)
+                nonsingular = np.isfinite(determinants) & (np.abs(determinants) > 1e-12)
+                if np.any(nonsingular):
                     try:
-                        jacobian = np.linalg.lstsq(
-                            delta_uv, delta_xyz, rcond=None
-                        )[0]
-                        metric = jacobian @ jacobian.T
-                        if np.isfinite(metric).all() and np.linalg.det(metric) > 1e-14:
-                            metrics[int(triangle_id)] = 0.5 * (metric + metric.T)
+                        jacobians = np.linalg.solve(
+                            delta_uv[nonsingular], delta_xyz[nonsingular]
+                        )
+                        metric_batch = jacobians @ np.swapaxes(jacobians, 1, 2)
+                        metric_valid = (
+                            np.isfinite(metric_batch).all(axis=(1, 2))
+                            & (np.linalg.det(metric_batch) > 1e-14)
+                        )
+                        valid_triangle_ids = face_tri_ids[nonsingular][metric_valid]
+                        metrics[valid_triangle_ids] = 0.5 * (
+                            metric_batch[metric_valid]
+                            + np.swapaxes(metric_batch[metric_valid], 1, 2)
+                        )
                     except np.linalg.LinAlgError:
                         pass
                 face_layouts[face_id] = {
