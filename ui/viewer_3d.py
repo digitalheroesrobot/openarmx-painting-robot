@@ -2368,6 +2368,7 @@ class ProductViewer(QWidget):
             "schema": "STEP_BREP_UV_FILM_THICKNESS_FIELD_V2",
             "coordinate_frame": "ORIGINAL_STEP_FACE_UV",
             "field_representation": "CONTINUOUS_UV_TEXTURE_GRID",
+            "interpolation_method": "CAD_SURFACE_METRIC_AWARE_GAUSSIAN",
             "texture_resolution": 256,
             "faces": {},
         }
@@ -3007,6 +3008,7 @@ class ProductViewer(QWidget):
                     "schema": "STEP_BREP_UV_FILM_THICKNESS_FIELD_V2",
                     "coordinate_frame": "ORIGINAL_STEP_FACE_UV",
                     "field_representation": "CONTINUOUS_UV_TEXTURE_GRID",
+                    "interpolation_method": "CAD_SURFACE_METRIC_AWARE_GAUSSIAN",
                     "texture_resolution": DEFAULT_UV_TEXTURE_RESOLUTION,
                     "faces": {},
                 }
@@ -3101,6 +3103,7 @@ class ProductViewer(QWidget):
                     "periodic_u": bool(texture_layout["periodic_u"]),
                     "periodic_v": bool(texture_layout["periodic_v"]),
                     "texture_resolution": int(texture_layout["resolution"]),
+                    "interpolation_method": "CAD_SURFACE_METRIC_AWARE_GAUSSIAN",
                     "thickness_grid_um": np.zeros(
                         (
                             int(texture_layout["resolution"]),
