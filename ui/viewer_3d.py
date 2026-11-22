@@ -2534,6 +2534,118 @@ class ProductViewer(QWidget):
         self._interactive_spray_face_thickness_um[ids] += deposited / np.maximum(areas[ids], 1e-12) * 1000.0
         self._interactive_spray_paint_state_dirty = True
 
+    def _interactive_build_gun_visual(self, nozzle, spray_direction):
+        """Build a lightweight sprayer envelope from the active profile."""
+        profile = self._interactive_sprayer_profile or {}
+        mm_factor = self._get_source_mm_factor() or 1.0
+
+        def positive(key, default):
+            try:
+                value = float(profile.get(key, default))
+            except (TypeError, ValueError):
+                value = float(default)
+            return max(value, 0.0)
+
+        body_length = positive("gun_body_length_mm", 220.0) / mm_factor
+        body_diameter = positive("gun_body_diameter_mm", 45.0) / mm_factor
+        nozzle_length = positive("nozzle_length_mm", 25.0) / mm_factor
+        nozzle_diameter = max(
+            positive("nozzle_orifice_mm", 1.4) * 2.0 / mm_factor,
+            body_diameter * 0.18,
+        )
+
+        axis = -np.asarray(spray_direction, dtype=np.float64)
+        axis /= max(float(np.linalg.norm(axis)), 1e-12)
+        body_center = nozzle + axis * (nozzle_length + 0.5 * body_length)
+        nozzle_center = nozzle + axis * (0.5 * nozzle_length)
+
+        parts = []
+        if nozzle_length > 1e-6:
+            parts.append(
+                pv.Cylinder(
+                    center=nozzle_center,
+                    direction=axis,
+                    height=nozzle_length,
+                    radius=max(nozzle_diameter * 0.5, 0.2),
+                    resolution=16,
+                )
+            )
+        if body_length > 1e-6 and body_diameter > 1e-6:
+            parts.append(
+                pv.Cylinder(
+                    center=body_center,
+                    direction=axis,
+                    height=body_length,
+                    radius=max(body_diameter * 0.5, 0.5),
+                    resolution=24,
+                )
+            )
+        if not parts:
+            return [], pv.PolyData()
+
+        gun_polydata = parts[0].merge(parts[1:], merge_points=True)
+        actors = []
+        for part in parts:
+            actor = self.plotter.add_mesh(
+                part,
+                color="#B9C4CC",
+                opacity=0.88,
+                smooth_shading=True,
+                lighting=True,
+                pickable=False,
+            )
+            actors.append(actor)
+        return actors, gun_polydata
+
+    @staticmethod
+    def _interactive_matrix4x4(matrix):
+        values = np.asarray(matrix, dtype=np.float64)
+        vtk_matrix = vtkMatrix4x4()
+        for row in range(4):
+            for col in range(4):
+                vtk_matrix.SetElement(row, col, float(values[row, col]))
+        return vtk_matrix
+
+    def _interactive_check_gun_collision(self, gun_polydata):
+        """Check the configured sprayer envelope against the product surface."""
+        if gun_polydata is None or gun_polydata.n_cells == 0:
+            return False
+        if self._interactive_spray_surface is None:
+            return False
+        try:
+            profile = self._interactive_sprayer_profile or {}
+            try:
+                clearance_mm = max(
+                    float(profile.get("gun_collision_clearance_mm", 2.0)),
+                    0.0,
+                )
+            except (TypeError, ValueError):
+                clearance_mm = 2.0
+
+            collision = vtkCollisionDetectionFilter()
+            collision.SetInputData(0, self._interactive_spray_surface)
+            collision.SetInputData(1, gun_polydata)
+            collision.SetMatrix(
+                0,
+                self._interactive_matrix4x4(self._interactive_spray_transform),
+            )
+            collision.SetMatrix(1, self._interactive_matrix4x4(np.eye(4)))
+            collision.SetCollisionModeToFirstContact()
+            collision.SetBoxTolerance(max(clearance_mm, 0.1))
+            collision.SetCellTolerance(max(clearance_mm, 0.1))
+            collision.Update()
+            self._interactive_spray_collision_filter = collision
+            return bool(collision.GetNumberOfContacts() > 0)
+        except Exception as exc:
+            # Fail safe: if the collision query itself is unavailable, do not
+            # allow the interactive spray to paint.
+            print(
+                "[SPRAYER COLLISION WARNING] "
+                f"{type(exc).__name__}: {exc}"
+            )
+            self._interactive_spray_collision_filter = None
+            return True
+
     def _interactive_update_cursor(self, pose):
         self._interactive_remove_live_actors()
         self._interactive_spray_latest_pose = pose
@@ -2585,9 +2697,13 @@ class ProductViewer(QWidget):
         direction = pose["spray_direction_world"]
         half_angle = math.radians(self._interactive_spray_cone_angle_deg) * 0.5
         radius = self._interactive_spray_standoff * math.tan(half_angle)
-        # vtkConeSource/PyVista uses its direction vector from the cone
-        # base toward the apex. The spray axis is nozzle -> product, so the
-        # cone source direction must be opposite to the spray ray here.
+        extended_half_angle = math.radians(
+            self._interactive_spray_paint_footprint_angle_deg
+        ) * 0.5
+        extended_radius = self._interactive_spray_standoff * math.tan(
+            extended_half_angle
+        )
+
         cone = pv.Cone(
             center=((nozzle + hit) * 0.5),
             direction=-direction,
@@ -2601,14 +2717,83 @@ class ProductViewer(QWidget):
             lighting=False, pickable=False,
         )
         self._interactive_spray_live_actors.append(actor)
+
+        if extended_radius > radius * 1.001:
+            overspray_cone = pv.Cone(
+                center=((nozzle + hit) * 0.5),
+                direction=-direction,
+                height=self._interactive_spray_standoff,
+                radius=max(extended_radius, radius + 1e-6),
+                resolution=32,
+            )
+            actor = self.plotter.add_mesh(
+                overspray_cone, color="#FFB74D", opacity=0.035,
+                style="wireframe", line_width=1.0,
+                lighting=False, pickable=False,
+            )
+            self._interactive_spray_live_actors.append(actor)
+
+        # Faint nozzle-to-surface direction vector.
+        arrow_length = max(self._interactive_spray_standoff * 0.92, 1e-6)
+        hit_vector = hit - nozzle
+        arrow = pv.Arrow(
+            start=nozzle,
+            direction=hit_vector,
+            tip_length=0.10,
+            tip_radius=max(arrow_length * 0.012, 0.1),
+            shaft_radius=max(arrow_length * 0.004, 0.04),
+            scale=arrow_length / max(float(np.linalg.norm(hit_vector)), 1e-12),
+        )
+        actor = self.plotter.add_mesh(
+            arrow, color="#B8D7E3", opacity=0.30,
+            lighting=False, pickable=False,
+        )
+        self._interactive_spray_live_actors.append(actor)
+
+        gun_actors, gun_polydata = self._interactive_build_gun_visual(
+            nozzle, direction
+        )
+        self._interactive_spray_gun_actors = gun_actors
+        self._interactive_spray_live_actors.extend(gun_actors)
+
+        collision = self._interactive_check_gun_collision(gun_polydata)
+        self._interactive_spray_gun_collision = collision
+        if collision:
+            status_text = "COLLISION - SPRAY BLOCKED"
+        else:
+            status_text = (
+                f"SPRAYER CLEAR | SPEED "
+                f"{self._interactive_spray_last_speed_mm_s:.1f} mm/s"
+            )
+
+        if self._interactive_hud_actor is not None:
+            self._interactive_hud_actor.SetInput(
+                "SPRAY CURSOR | "
+                + ("HOLD LEFT MOUSE TO PAINT | " if not collision else "")
+                + status_text
+            )
+
         marker = pv.Sphere(
             radius=max(self._interactive_spray_standoff * 0.018, 0.5),
             center=nozzle, theta_resolution=16, phi_resolution=16,
         )
         actor = self.plotter.add_mesh(
-            marker, color="#00E676", smooth_shading=True, pickable=False,
+            marker,
+            color="#FF3B30" if collision else "#00E676",
+            smooth_shading=True,
+            pickable=False,
         )
         self._interactive_spray_live_actors.append(actor)
+
+        gun_color = "#FF3B30" if collision else "#B9C4CC"
+        for gun_actor in gun_actors:
+            try:
+                color = QColor(gun_color)
+                gun_actor.GetProperty().SetColor(
+                    color.redF(), color.greenF(), color.blueF()
+                )
+            except Exception:
+                pass
 
         self.plotter.render()
 
