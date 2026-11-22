@@ -291,9 +291,11 @@ def calculate_cone_deposition_step(
     if input_dry <= 0.0 or not len(points):
         return {
             "thickness_increment_um": increments,
-            "deposited_volume_mm3": 0.0,
+            "deposited_volume_mm3": increments.copy(),
+            "total_deposited_volume_mm3": 0.0,
             "input_dry_volume_mm3": float(max(input_dry, 0.0)),
             "inside_cone": inside,
+            "overspray_outside_cone": outside,
             "facing_cosine": facing,
             "travel_speed_mm_s": speed,
             "footprint_radius_mm": radius,
@@ -321,9 +323,11 @@ def calculate_cone_deposition_step(
     if total <= 1e-12:
         return {
             "thickness_increment_um": increments,
-            "deposited_volume_mm3": 0.0,
+            "deposited_volume_mm3": increments.copy(),
+            "total_deposited_volume_mm3": 0.0,
             "input_dry_volume_mm3": float(input_dry),
             "inside_cone": inside,
+            "overspray_outside_cone": outside,
             "facing_cosine": facing,
             "travel_speed_mm_s": speed,
             "footprint_radius_mm": radius,
