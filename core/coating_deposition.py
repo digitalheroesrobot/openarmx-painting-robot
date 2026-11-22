@@ -280,7 +280,6 @@ def calculate_cone_deposition_step(
     # The core density integrates to one over the nominal disk. The tail
     # density integrates to one over the exterior region. Their configured
     # fractions therefore remain interpretable as core vs overspray paint.
-    density = core_fraction * core_density + tail_fraction * tail_density
 
     input_dry = (
         flow * dt / 60.0 * 1000.0
