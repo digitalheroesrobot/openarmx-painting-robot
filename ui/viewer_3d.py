@@ -3409,18 +3409,20 @@ class ProductViewer(QWidget):
                 self._rotate_camera_from_spray_drag(interactor)
                 return
 
-        # VTK release notifications can be missed by some Qt/VTK window
-        # integrations. Poll Qt's authoritative global button state on every
-        # motion event as a fail-safe: paint is allowed only while LEFT is
-        # physically held, never merely because a press event happened once.
-        if (
-            self._interactive_spray_recording
-            and not bool(QApplication.mouseButtons() & Qt.MouseButton.LeftButton)
-        ):
+        # Qt's global button state is the fallback source of truth. Some
+        # PyVista/VTK integrations do not reliably deliver VTK button-press
+        # observers after the interactor style is replaced. Detect the held
+        # left button here as well, so the first drag sample starts a stroke.
+        left_button_held = bool(
+            QApplication.mouseButtons() & Qt.MouseButton.LeftButton
+        )
+        if self._interactive_spray_recording and not left_button_held:
             self._interactive_spray_recording = False
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
             self._interactive_spray_last_speed_mm_s = 0.0
+        elif left_button_held and not self._interactive_spray_recording:
+            self._interactive_begin_spray_stroke()
 
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y)
@@ -3434,6 +3436,17 @@ class ProductViewer(QWidget):
         # left mouse button is held and collision protection reports clear.
         self._interactive_update_cursor(pose)
 
+    def _interactive_begin_spray_stroke(self):
+        """Start a fresh stroke exactly once when the left button goes down."""
+        if self._interactive_spray_recording:
+            return
+        self._interactive_spray_stroke_id += 1
+        self._interactive_spray_recording = True
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_last_speed_mm_s = 0.0
+        self._interactive_spray_start_timestamp = None
+
     def _on_interactive_spray_left_press(self, interactor, event):
         if (
             not self._interactive_spray_active
@@ -3446,11 +3459,7 @@ class ProductViewer(QWidget):
         pose = self._interactive_pick_surface_pose(x, y)
         if pose is None:
             return
-        self._interactive_spray_stroke_id += 1
-        self._interactive_spray_recording = True
-        self._interactive_spray_last_deposition_timestamp = None
-        self._interactive_spray_previous_nozzle_world = None
-        self._interactive_spray_start_timestamp = None
+        self._interactive_begin_spray_stroke()
         self._interactive_update_cursor(pose)
 
     def _on_interactive_spray_left_release(self, interactor, event):
