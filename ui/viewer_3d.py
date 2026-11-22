@@ -4205,8 +4205,8 @@ class ProductViewer(QWidget):
         plume_v = np.cross(direction_world, plume_u)
         plume_v /= max(float(np.linalg.norm(plume_v)), 1e-12)
         golden_angle = math.pi * (3.0 - math.sqrt(5.0))
-        axial_layers = np.linspace(0.08, 1.0, 8)
-        particles_per_layer = 16
+        axial_layers = np.linspace(0.12, 1.0, 4)
+        particles_per_layer = 8
         particle_groups = [[], [], []]
         for layer_index, axial_fraction in enumerate(axial_layers):
             axial_distance = nominal_standoff * float(axial_fraction)
@@ -4256,8 +4256,8 @@ class ProductViewer(QWidget):
 
         core_hit_segments = []
         segments_by_band = [[], [], []]
-        ray_count = 24
-        radial_fractions = (0.25, 0.50, 0.75, 1.0)
+        ray_count = 8
+        radial_fractions = (0.50, 1.0)
         band_boundaries = (
             nominal_standoff,
             nominal_standoff + tail_extension / 3.0,
@@ -4386,6 +4386,18 @@ class ProductViewer(QWidget):
             self._interactive_spray_live_actors.append(actor)
 
     def _interactive_update_cursor(self, pose):
+        # Mouse-move events can arrive much faster than the renderer can
+        # rebuild spray geometry. Cap the complete cursor/deposition/render
+        # pipeline at 30 Hz; this also bounds recorded trajectory sampling.
+        now = time.monotonic()
+        previous = getattr(
+            self, "_interactive_spray_last_cursor_update_time", None
+        )
+        if previous is not None and now - previous < (1.0 / 30.0):
+            self._interactive_spray_latest_pose = pose
+            return
+        self._interactive_spray_last_cursor_update_time = now
+
         self._interactive_remove_live_actors()
         self._interactive_spray_latest_pose = pose
         nozzle = pose["nozzle_point_world"]
@@ -4414,8 +4426,8 @@ class ProductViewer(QWidget):
             local_pose["nozzle_point"].reshape(1, 3),
             local_pose["spray_direction"].reshape(1, 3),
             self._interactive_spray_paint_footprint_angle_deg,
-            rays_per_ring=16,
-            radial_rings=(0.33, 0.66, 1.0),
+            rays_per_ring=8,
+            radial_rings=(0.40, 0.75, 1.0),
             surface=self._interactive_spray_surface,
             locator=self._interactive_spray_locator,
         )
@@ -4523,7 +4535,7 @@ class ProductViewer(QWidget):
 
             contact_points_world = []
             contact_hit = []
-            edge_ray_count = 32
+            edge_ray_count = 12
             edge_ray_length = (
                 self._interactive_spray_standoff
                 / max(math.cos(half_angle), 1e-6)
