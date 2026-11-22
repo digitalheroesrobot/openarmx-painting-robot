@@ -2705,6 +2705,7 @@ class ProductViewer(QWidget):
         basis_v = np.cross(direction_local, basis_u)
         basis_v /= max(float(np.linalg.norm(basis_v)), 1e-12)
 
+        core_hit_segments = []
         segments_by_band = [[], [], []]
         ray_count = 24
         radial_fractions = (0.25, 0.50, 0.75, 1.0)
@@ -2740,6 +2741,7 @@ class ProductViewer(QWidget):
                 )
 
                 end_local = endpoint_local
+                hit_distance = None
                 if hit and intersections.GetNumberOfPoints() > 0:
                     nearest_distance = float("inf")
                     nearest_point = None
@@ -2754,8 +2756,21 @@ class ProductViewer(QWidget):
                             nearest_point = point
                     if nearest_point is not None:
                         end_local = nearest_point
+                        hit_distance = nearest_distance
 
                 end_distance = float(np.linalg.norm(end_local - nozzle_local))
+                if hit_distance is not None and hit_distance <= nominal_standoff:
+                    start_point_world = (
+                        self._interactive_spray_transform
+                        @ np.append(nozzle_local, 1.0)
+                    )[:3]
+                    end_point_world = (
+                        self._interactive_spray_transform
+                        @ np.append(end_local, 1.0)
+                    )[:3]
+                    core_hit_segments.append(
+                        (start_point_world, end_point_world)
+                    )
                 if end_distance <= 1e-6:
                     continue
 
@@ -2790,6 +2805,19 @@ class ProductViewer(QWidget):
                     segments_by_band[band_index].append(
                         (start_point_world, end_point_world)
                     )
+
+        if core_hit_segments:
+            core_polydata = self._build_line_polydata(core_hit_segments)
+            if core_polydata is not None:
+                actor = self.plotter.add_mesh(
+                    core_polydata,
+                    color="#FFE8A6",
+                    opacity=0.10,
+                    line_width=1.0,
+                    lighting=False,
+                    pickable=False,
+                )
+                self._interactive_spray_live_actors.append(actor)
 
         opacities = (0.075, 0.045, 0.020)
         for band_segments, opacity in zip(segments_by_band, opacities):
