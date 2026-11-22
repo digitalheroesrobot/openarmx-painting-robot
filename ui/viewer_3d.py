@@ -2504,6 +2504,27 @@ class ProductViewer(QWidget):
             volume_solids_percent=solids,
             number_of_coats=coats,
             travel_speed_mm_s=travel_speed_mm_s,
+            radial_alpha=float(
+                self._interactive_sprayer_profile.get("deposition_beta", 2.0)
+            ),
+            radial_beta=float(
+                self._interactive_sprayer_profile.get("deposition_beta", 2.0)
+            ),
+            core_deposition_fraction=float(
+                self._interactive_sprayer_profile.get(
+                    "core_deposition_fraction", 0.88
+                )
+            ),
+            overspray_tail_fraction=float(
+                self._interactive_sprayer_profile.get(
+                    "overspray_tail_fraction", 0.12
+                )
+            ),
+            overspray_tail_sigma_fraction=float(
+                self._interactive_sprayer_profile.get(
+                    "overspray_tail_sigma_fraction", 0.35
+                )
+            ),
         )
         deposited = np.asarray(result.get("deposited_volume_mm3", np.zeros(len(ids))), dtype=np.float64)
         if deposited.shape != (len(ids),):
@@ -2521,8 +2542,8 @@ class ProductViewer(QWidget):
             self.current_mesh,
             local_pose["nozzle_point"].reshape(1, 3),
             local_pose["spray_direction"].reshape(1, 3),
-            self._interactive_spray_cone_angle_deg,
-            rays_per_ring=16,
+            self._interactive_spray_paint_footprint_angle_deg,
+            rays_per_ring=24,
             radial_rings=(0.25, 0.50, 0.75, 1.0),
             surface=self._interactive_spray_surface,
             locator=self._interactive_spray_locator,
@@ -2548,7 +2569,10 @@ class ProductViewer(QWidget):
                     lighting=False, pickable=False,
                 )
                 self._interactive_spray_live_actors.append(actor)
-            if self._interactive_spray_recording:
+            if (
+                self._interactive_spray_recording
+                and not self._interactive_spray_gun_collision
+            ):
                 recorded_new_pose = self._interactive_append_record(
                     pose, local_pose
                 )
