@@ -2365,7 +2365,7 @@ class ProductViewer(QWidget):
             len(self.current_mesh.faces), dtype=np.float64
         )
         self._interactive_spray_surface_field = {
-            "schema": "STEP_BREP_UV_FILM_THICKNESS_FIELD_V2",
+            "schema": "STEP_BREP_UV_FILM_THICKNESS_FIELD_V3",
             "coordinate_frame": "ORIGINAL_STEP_FACE_UV",
             "field_representation": "CONTINUOUS_UV_TEXTURE_GRID",
             "interpolation_method": "CAD_SURFACE_METRIC_AWARE_GAUSSIAN",
@@ -3213,6 +3213,8 @@ class ProductViewer(QWidget):
                 face_points = []
                 face_normals = []
                 face_areas = []
+                accepted_rows = []
+                accepted_cols = []
                 bounds_uv = np.asarray(layout_record["uv_bounds"], dtype=np.float64)
                 du_step = (bounds_uv[0, 1] - bounds_uv[0, 0]) / max(resolution - 1, 1)
                 dv_step = (bounds_uv[1, 1] - bounds_uv[1, 0]) / max(resolution - 1, 1)
@@ -3245,6 +3247,8 @@ class ProductViewer(QWidget):
                     face_points.append(point)
                     face_normals.append(normal)
                     face_areas.append(sample_area * float(source_factor) ** 2)
+                    accepted_rows.append(int(valid_rows[len(accepted_rows)]))
+                    accepted_cols.append(int(valid_cols[len(accepted_cols)]))
 
                 if not face_points:
                     continue
@@ -3261,8 +3265,8 @@ class ProductViewer(QWidget):
                 direct_batches.append((point_world, normal_world, area_array))
                 direct_face_meta.append({
                     "face_id": face_id,
-                    "rows": valid_rows,
-                    "cols": valid_cols,
+                    "rows": np.asarray(accepted_rows, dtype=np.int64),
+                    "cols": np.asarray(accepted_cols, dtype=np.int64),
                     "uv": uv_values,
                     "layout": layout_record,
                     "sample_count": len(face_points),
