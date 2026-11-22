@@ -3855,6 +3855,38 @@ class ProductViewer(QWidget):
             if len(expanded):
                 selected = np.unique(np.concatenate((selected, expanded)))
 
+                # Rebuild every deposition input after expanding the selected
+                # triangle set. The previous implementation expanded only
+                # "selected" while leaving the point/normal/area arrays at
+                # their original ray-hit length. The cone kernel then returned
+                # a mismatched result which was discarded, so no paint was
+                # accumulated on STEP faces.
+                points_world_mm = (
+                    cache["points_local"][selected] @ rotation.T + translation
+                ) * source_to_mm
+                vertices_world_mm = (
+                    cache["vertices_local"][selected] @ rotation.T + translation
+                ) * source_to_mm
+                normals_world = cache["normals_local"][selected] @ rotation.T
+                normals_world /= np.maximum(
+                    np.linalg.norm(normals_world, axis=1)[:, None], 1e-12
+                )
+                areas_mm2 = cache["areas_source"][selected] * source_to_mm ** 2
+                valid_expanded = (
+                    np.isfinite(areas_mm2)
+                    & (areas_mm2 > 1e-12)
+                    & np.isfinite(points_world_mm).all(axis=1)
+                    & np.isfinite(vertices_world_mm).all(axis=(1, 2))
+                    & np.isfinite(normals_world).all(axis=1)
+                )
+                selected = selected[valid_expanded]
+                points_world_mm = points_world_mm[valid_expanded]
+                vertices_world_mm = vertices_world_mm[valid_expanded]
+                normals_world = normals_world[valid_expanded]
+                areas_mm2 = areas_mm2[valid_expanded]
+                if not len(selected):
+                    return
+
         result = calculate_cone_deposition_step(
             surface_points_mm=points_world_mm,
             sample_vertices_mm=vertices_world_mm,
