@@ -427,6 +427,10 @@ class ProductViewer(QWidget):
         self._interactive_spray_painted_actors = []
         self._interactive_spray_face_thickness_um = None
         self._interactive_spray_surface_field = None
+        self._interactive_spray_texture_actors = {}
+        self._interactive_spray_texture_layout = {}
+        self._interactive_spray_texture_objects = {}
+        self._interactive_spray_base_opacity = None
         self._interactive_spray_face_area_mm2 = None
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
@@ -2360,10 +2364,16 @@ class ProductViewer(QWidget):
             len(self.current_mesh.faces), dtype=np.float64
         )
         self._interactive_spray_surface_field = {
-            "schema": "STEP_BREP_UV_FILM_THICKNESS_FIELD_V1",
+            "schema": "STEP_BREP_UV_FILM_THICKNESS_FIELD_V2",
             "coordinate_frame": "ORIGINAL_STEP_FACE_UV",
+            "field_representation": "CONTINUOUS_UV_TEXTURE_GRID",
+            "texture_resolution": 256,
             "faces": {},
         }
+        self._interactive_spray_texture_actors = {}
+        self._interactive_spray_texture_layout = {}
+        self._interactive_spray_texture_objects = {}
+        self._interactive_spray_base_opacity = None
         self._interactive_spray_face_area_mm2 = None
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
@@ -2387,6 +2397,9 @@ class ProductViewer(QWidget):
                 "target_dry_film_thickness_um"
             ]
         self._render_product(reset_camera=False)
+        # STEP models render coating as per-Face UV textures. The original
+        # mesh actor remains available for cell picking and occlusion.
+        self._interactive_build_brep_texture_actors()
 
         self._interactive_spray_standoff = float(standoff)
         self._interactive_spray_cone_angle_deg = float(cone_angle_deg)
@@ -2449,6 +2462,169 @@ class ProductViewer(QWidget):
         )
         self.plotter.render()
 
+    def _interactive_build_brep_texture_actors(self):
+        """Create one UV-textured render surface per original STEP B-Rep Face.
+
+        The source mesh actor remains the authoritative picker/occlusion
+        geometry. Textured actors are non-pickable display surfaces only.
+        """
+        if self.current_mesh is None or self._pose_actor is None:
+            return False
+        try:
+            from core.step_loader import get_step_brep_context
+            from core.uv_coating_texture import (
+                DEFAULT_UV_TEXTURE_RESOLUTION,
+                face_uv_layout,
+                face_uv_triangles_to_texture_coordinates,
+            )
+            context = get_step_brep_context(self.current_mesh)
+            if context is None:
+                return False
+            face_ids = np.asarray(context["triangle_face_ids"], dtype=np.int64)
+            uv_triangles_all = np.asarray(context["triangle_uvs"], dtype=np.float64)
+            uv_valid = np.asarray(context["triangle_uv_valid"], dtype=bool)
+            if not np.any(uv_valid):
+                return False
+
+            resolution = int(DEFAULT_UV_TEXTURE_RESOLUTION)
+            diagonal = float(np.linalg.norm(
+                np.asarray(self.current_mesh.bounds[1])
+                - np.asarray(self.current_mesh.bounds[0])
+            ))
+            offset = max(diagonal * 1e-6, 1e-8)
+            built_triangle_count = 0
+
+            for face_id in sorted(int(value) for value in np.unique(face_ids[uv_valid])):
+                triangle_ids = np.flatnonzero((face_ids == face_id) & uv_valid)
+                if triangle_ids.size == 0:
+                    continue
+                uv_triangles = uv_triangles_all[triangle_ids]
+                face_record = context["face_records"][face_id - 1]
+                layout = face_uv_layout(face_record, uv_triangles)
+                texture_coordinates = face_uv_triangles_to_texture_coordinates(
+                    uv_triangles,
+                    layout["uv_bounds"],
+                    periodic_u=layout["periodic_u"],
+                    periodic_v=layout["periodic_v"],
+                )
+
+                source_triangles = np.asarray(
+                    self.current_mesh.faces[triangle_ids], dtype=np.int64
+                )
+                points = np.asarray(
+                    self.current_mesh.vertices[source_triangles], dtype=np.float64
+                ).reshape(-1, 3)
+                triangle_normals = np.asarray(
+                    self.current_mesh.face_normals[triangle_ids], dtype=np.float64
+                )
+                points += np.repeat(triangle_normals, 3, axis=0) * offset
+
+                packed_faces = np.empty((len(triangle_ids), 4), dtype=np.int64)
+                packed_faces[:, 0] = 3
+                packed_faces[:, 1:] = np.arange(
+                    len(triangle_ids) * 3, dtype=np.int64
+                ).reshape(-1, 3)
+                textured_mesh = pv.PolyData(points, packed_faces.reshape(-1))
+                textured_mesh.active_texture_coordinates = (
+                    texture_coordinates.reshape(-1, 2).astype(np.float32)
+                )
+
+                base_image = np.full(
+                    (resolution, resolution, 3), 168, dtype=np.uint8
+                )
+                texture = pv.Texture(
+                    base_image,
+                    interpolate=True,
+                    repeat=bool(layout["periodic_u"] or layout["periodic_v"]),
+                )
+                actor = self.plotter.add_mesh(
+                    textured_mesh,
+                    texture=texture,
+                    lighting=False,
+                    smooth_shading=False,
+                    pickable=False,
+                    name=f"interactive_brep_coating_face_{face_id}",
+                )
+                self._interactive_spray_texture_actors[face_id] = actor
+                self._interactive_spray_texture_layout[face_id] = {
+                    **layout,
+                    "resolution": resolution,
+                    "triangle_count": int(len(triangle_ids)),
+                    "triangle_ids": triangle_ids,
+                }
+                self._interactive_spray_texture_objects[face_id] = texture
+                built_triangle_count += int(len(triangle_ids))
+
+            # When every source triangle has exact Face UVs, the texture
+            # surfaces fully replace the base mesh visually. Keep that base
+            # actor pickable; vtkCellPicker still uses it for global cell IDs.
+            if built_triangle_count == len(self.current_mesh.faces):
+                self._interactive_spray_base_opacity = float(
+                    self._pose_actor.GetProperty().GetOpacity()
+                )
+                self._pose_actor.GetProperty().SetOpacity(0.001)
+            if self._interactive_spray_texture_actors:
+                self.plotter.render()
+                return True
+        except Exception as exc:
+            print(
+                "[B-REP UV TEXTURE WARNING] Falling back to mesh coating colors: "
+                f"{type(exc).__name__}: {exc}"
+            )
+        return False
+
+    def _interactive_refresh_brep_texture_images(self):
+        """Update only the Face textures whose continuous UV fields changed."""
+        if not self._interactive_spray_texture_actors:
+            return
+        faces = self._interactive_spray_surface_field.get("faces", {})
+        target = max(float(self._interactive_spray_paint_target_um), 1e-9)
+        for face_id, face_record in faces.items():
+            face_id = int(face_id)
+            actor = self._interactive_spray_texture_actors.get(face_id)
+            grid = face_record.get("thickness_grid_um")
+            if actor is None or grid is None:
+                continue
+            rgb = map_film_thickness_to_rgb(
+                np.asarray(grid, dtype=np.float64), target
+            )
+            # VTK texture image rows are bottom-up relative to UV v.
+            image = np.ascontiguousarray(np.flipud(rgb), dtype=np.uint8)
+            texture = pv.Texture(
+                image,
+                interpolate=True,
+                repeat=bool(
+                    face_record.get("periodic_u", False)
+                    or face_record.get("periodic_v", False)
+                ),
+            )
+            actor.SetTexture(texture)
+            self._interactive_spray_texture_objects[face_id] = texture
+        self._interactive_spray_paint_state_dirty = False
+
+    def _interactive_export_surface_field(self):
+        """Return a serialization-friendly copy of the per-Face UV thickness grids."""
+        source = self._interactive_spray_surface_field or {}
+        exported = {
+            key: value
+            for key, value in source.items()
+            if key != "faces"
+        }
+        exported["faces"] = {}
+        for face_id, record in source.get("faces", {}).items():
+            copied = {
+                key: value
+                for key, value in record.items()
+                if key != "thickness_grid_um"
+            }
+            grid = record.get("thickness_grid_um")
+            if grid is not None:
+                copied["thickness_grid_um"] = np.asarray(
+                    grid, dtype=np.float32
+                ).round(4).tolist()
+            exported["faces"][int(face_id)] = copied
+        return exported
+
     def _interactive_paint_rgb(self):
         """Build stable per-face RGB values from accumulated coating thickness."""
         if self.current_mesh is None:
@@ -2463,6 +2639,19 @@ class ProductViewer(QWidget):
         """Refresh the single persistent product actor after coating changes."""
         if self._pose_actor is None:
             return
+        if self._interactive_spray_texture_actors:
+            try:
+                self._interactive_refresh_brep_texture_images()
+                if render:
+                    self.plotter.render()
+                return
+            except Exception as exc:
+                print(
+                    "[B-REP UV TEXTURE UPDATE WARNING] "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                self._interactive_spray_paint_state_dirty = True
+                return
         rgb = self._interactive_paint_rgb()
         if rgb is None:
             return
@@ -2788,20 +2977,30 @@ class ProductViewer(QWidget):
         )
         self._interactive_spray_face_thickness_um[ids] += thickness_increment_um
 
-        # Keep the coating field in original CAD Face UV coordinates. The
-        # triangle-indexed array remains the fast rendering cache; this
-        # surface-domain record is the persistent, location-dependent source.
+        # Accumulate a continuous, per-Face UV thickness field. The existing
+        # triangle deposition values are spatially interpolated into the
+        # texture grid; triangle IDs remain only as diagnostic provenance.
         if brep_context is not None:
+            from core.uv_coating_texture import (
+                DEFAULT_UV_TEXTURE_RESOLUTION,
+                accumulate_face_uv_thickness,
+                face_uv_layout,
+            )
             if not isinstance(self._interactive_spray_surface_field, dict):
                 self._interactive_spray_surface_field = {
-                    "schema": "STEP_BREP_UV_FILM_THICKNESS_FIELD_V1",
+                    "schema": "STEP_BREP_UV_FILM_THICKNESS_FIELD_V2",
                     "coordinate_frame": "ORIGINAL_STEP_FACE_UV",
+                    "field_representation": "CONTINUOUS_UV_TEXTURE_GRID",
+                    "texture_resolution": DEFAULT_UV_TEXTURE_RESOLUTION,
                     "faces": {},
                 }
             triangle_face_ids = np.asarray(
                 brep_context["triangle_face_ids"], dtype=np.int64
             )
             face_samples = self._interactive_spray_surface_field["faces"]
+            uv_by_face = {}
+            increment_by_face = {}
+            provenance_by_face = {}
             for local_index, triangle_index in enumerate(ids):
                 triangle_index = int(triangle_index)
                 uv_mapping = get_step_triangle_surface_coordinates(
@@ -2809,10 +3008,14 @@ class ProductViewer(QWidget):
                     np.asarray([1.0 / 3.0] * 3, dtype=np.float64),
                 )
                 face_id = int(triangle_face_ids[triangle_index])
-                face_record = face_samples.setdefault(
-                    face_id, {"samples_by_triangle": {}}
+                uv_by_face.setdefault(face_id, []).append(
+                    np.asarray(uv_mapping["uv"], dtype=np.float64)
                 )
-                face_record["samples_by_triangle"][triangle_index] = {
+                increment_by_face.setdefault(face_id, []).append(
+                    float(thickness_increment_um[local_index])
+                )
+                provenance_by_face.setdefault(face_id, []).append({
+                    "triangle_id": triangle_index,
                     "uv": np.asarray(uv_mapping["uv"], dtype=float).tolist(),
                     "thickness_um": float(
                         self._interactive_spray_face_thickness_um[triangle_index]
@@ -2830,7 +3033,65 @@ class ProductViewer(QWidget):
                         and len(self.face_status_labels) == len(self.current_mesh.faces)
                         else None
                     ),
-                }
+                })
+
+            for face_id, uv_samples in uv_by_face.items():
+                texture_layout = self._interactive_spray_texture_layout.get(face_id)
+                if texture_layout is None:
+                    face_triangle_ids = np.flatnonzero(
+                        (triangle_face_ids == face_id)
+                        & np.asarray(brep_context["triangle_uv_valid"], dtype=bool)
+                    )
+                    layout = face_uv_layout(
+                        brep_context["face_records"][face_id - 1],
+                        np.asarray(brep_context["triangle_uvs"], dtype=float)[face_triangle_ids],
+                    )
+                    texture_layout = {
+                        **layout,
+                        "resolution": int(DEFAULT_UV_TEXTURE_RESOLUTION),
+                        "triangle_count": int(len(face_triangle_ids)),
+                    }
+                    self._interactive_spray_texture_layout[face_id] = texture_layout
+                face_record = face_samples.setdefault(face_id, {
+                    "uv_bounds": [
+                        list(map(float, interval))
+                        for interval in texture_layout["uv_bounds"]
+                    ],
+                    "surface_type": texture_layout["surface_type"],
+                    "periodic_u": bool(texture_layout["periodic_u"]),
+                    "periodic_v": bool(texture_layout["periodic_v"]),
+                    "texture_resolution": int(texture_layout["resolution"]),
+                    "thickness_grid_um": np.zeros(
+                        (
+                            int(texture_layout["resolution"]),
+                            int(texture_layout["resolution"]),
+                        ),
+                        dtype=np.float32,
+                    ),
+                    "samples_by_triangle": {},
+                })
+                sample_count = max(int(texture_layout["triangle_count"]), 1)
+                sigma_px = max(
+                    1.5,
+                    min(
+                        8.0,
+                        0.65 * int(texture_layout["resolution"])
+                        / math.sqrt(float(sample_count)),
+                    ),
+                )
+                accumulate_face_uv_thickness(
+                    face_record["thickness_grid_um"],
+                    np.asarray(uv_samples, dtype=np.float64),
+                    np.asarray(increment_by_face[face_id], dtype=np.float64),
+                    np.asarray(texture_layout["uv_bounds"], dtype=np.float64),
+                    sigma_px=sigma_px,
+                    periodic_u=bool(texture_layout["periodic_u"]),
+                    periodic_v=bool(texture_layout["periodic_v"]),
+                )
+                for provenance in provenance_by_face[face_id]:
+                    face_record["samples_by_triangle"][
+                        provenance["triangle_id"]
+                    ] = provenance
 
         self._interactive_spray_paint_state_dirty = True
 
@@ -3743,7 +4004,7 @@ class ProductViewer(QWidget):
             ),
             "route_length_product_units": route_length,
             "route_optimization": route_optimization,
-            "surface_film_thickness_field": self._interactive_spray_surface_field,
+            "surface_film_thickness_field": self._interactive_export_surface_field(),
             "face_thickness_um": (
                 self._interactive_spray_face_thickness_um.copy()
                 if self._interactive_spray_face_thickness_um is not None
