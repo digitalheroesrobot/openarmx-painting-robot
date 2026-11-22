@@ -2659,14 +2659,20 @@ class ProductViewer(QWidget):
         areas = np.asarray(self.current_mesh.area_faces, dtype=np.float64) * float(source_factor) ** 2
         local_faces = np.asarray(self.current_mesh.faces[ids], dtype=np.int64)
         vertices = np.asarray(self.current_mesh.vertices, dtype=np.float64)
-        centroids_local = np.mean(vertices[local_faces], axis=1)
+        triangles_local = vertices[local_faces]
+        centroids_local = np.mean(triangles_local, axis=1)
         transform = self._actor_matrix_array()
         centroids_world = centroids_local @ transform[:3, :3].T + transform[:3, 3]
+        triangles_world = (
+            triangles_local @ transform[:3, :3].T + transform[:3, 3]
+        )
+        triangles_world_mm = triangles_world * float(source_factor)
         normals_local = np.asarray(self.current_mesh.face_normals[ids], dtype=np.float64)
         normals_world = normals_local @ transform[:3, :3].T
         normals_world /= np.maximum(np.linalg.norm(normals_world, axis=1)[:, None], 1e-12)
         result = calculate_cone_deposition_step(
             surface_points_mm=centroids_world * float(source_factor),
+            sample_vertices_mm=triangles_world_mm,
             surface_normals=normals_world,
             sample_area_mm2=areas[ids],
             nozzle_position_mm=nozzle_world * float(source_factor),
