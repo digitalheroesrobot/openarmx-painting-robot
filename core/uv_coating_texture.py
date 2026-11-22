@@ -118,11 +118,18 @@ def surface_metric_to_pixel_covariance(
         raise ValueError("Surface metric is singular at this UV sample.")
 
     sigma_mm = factor * math.sqrt(area)
-    variances = np.clip(
-        (sigma_mm * sigma_mm) / eigenvalues,
-        min_sigma * min_sigma,
-        max_sigma * max_sigma,
-    )
+    # Clamp the overall footprint without independently clipping the
+    # principal axes. Per-axis clipping distorts the physical isotropy ratio
+    # (for example, a 10:1 UV scale ratio can become 7.5:1 at max_sigma_px).
+    variances = (sigma_mm * sigma_mm) / eigenvalues
+    largest = float(np.max(variances))
+    smallest = float(np.min(variances))
+    scale = 1.0
+    if largest > max_sigma * max_sigma:
+        scale = min(scale, (max_sigma * max_sigma) / largest)
+    if smallest * scale < min_sigma * min_sigma:
+        scale = max(scale, (min_sigma * min_sigma) / smallest)
+    variances = variances * scale
     covariance = eigenvectors @ np.diag(variances) @ eigenvectors.T
     return 0.5 * (covariance + covariance.T)
 
