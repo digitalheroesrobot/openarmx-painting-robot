@@ -27,8 +27,10 @@ from core.spray_coverage_optimizer import (
 from stages.trajectory_safety import aggregate_sample_safety_by_face
 
 from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
+from vtkmodules.vtkCommonMath import vtkMatrix4x4
 from vtkmodules.util.numpy_support import vtk_to_numpy
 from vtkmodules.vtkFiltersGeneral import vtkOBBTree
+from vtkmodules.vtkFiltersModeling import vtkCollisionDetectionFilter
 
 from PySide6.QtCore import QEvent, Qt, Signal, QTimer
 from PySide6.QtGui import QColor
@@ -403,6 +405,11 @@ class ProductViewer(QWidget):
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_last_speed_mm_s = 0.0
+        self._interactive_spray_start_timestamp = None
+        self._interactive_spray_paint_footprint_angle_deg = 0.0
+        self._interactive_spray_gun_actors = []
+        self._interactive_spray_gun_collision = False
+        self._interactive_spray_collision_filter = None
         self._interactive_spray_paint_target_um = 50.0
         self._interactive_spray_paint_state_dirty = False
         self._interactive_spray_live_actors = []
@@ -2185,6 +2192,10 @@ class ProductViewer(QWidget):
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_last_speed_mm_s = 0.0
+        self._interactive_spray_start_timestamp = None
+        self._interactive_spray_paint_footprint_angle_deg = float(cone_angle_deg)
+        self._interactive_spray_gun_collision = False
+        self._interactive_spray_collision_filter = None
         self._interactive_spray_paint_state_dirty = False
         self._interactive_coating_process = dict(coating_process or {})
         try:
@@ -2205,6 +2216,22 @@ class ProductViewer(QWidget):
         self._interactive_spray_cone_angle_deg = float(cone_angle_deg)
         self._interactive_spray_sampling_spacing = float(sampling_spacing)
         self._interactive_sprayer_profile = dict(sprayer_profile or {})
+        try:
+            tail_sigma_fraction = max(
+                float(self._interactive_sprayer_profile.get(
+                    "overspray_tail_sigma_fraction", 0.35
+                )),
+                0.05,
+            )
+        except (TypeError, ValueError):
+            tail_sigma_fraction = 0.35
+        overspray_extent_factor = 1.0 + 3.0 * tail_sigma_fraction
+        self._interactive_spray_paint_footprint_angle_deg = math.degrees(
+            2.0 * math.atan(
+                math.tan(math.radians(self._interactive_spray_cone_angle_deg * 0.5))
+                * overspray_extent_factor
+            )
+        )
         self._interactive_spray_transform = self._actor_matrix_array().copy()
         self._interactive_spray_surface = self._to_polydata(self.current_mesh).clean()
         self._interactive_spray_locator = vtkOBBTree()
@@ -2213,13 +2240,14 @@ class ProductViewer(QWidget):
         self._interactive_spray_latest_pose = None
         self._interactive_spray_records = []
         self._interactive_spray_stroke_id = -1
+        self._interactive_spray_start_timestamp = None
         self._interactive_spray_painted_actors = []
         self._interactive_spray_live_actors = []
         self._interactive_spray_active = True
-        # Record every valid surface-following mouse sample without requiring
-        # a mouse-button hold. Leaving the surface ends the current stroke.
-        self._interactive_spray_recording = True
-        self._interactive_spray_stroke_id = 0
+        # Cursor motion only previews the nozzle. Paint deposition and pose
+        # recording are gated by the left mouse button.
+        self._interactive_spray_recording = False
+        self._interactive_spray_stroke_id = -1
         self._interactive_last_record_time = 0.0
 
         interactor = self.plotter.iren.interactor
