@@ -142,7 +142,7 @@ def calculate_cone_deposition_step(
     overspray_tail_sigma_fraction: float = 0.35,
     sample_vertices_mm: np.ndarray | None = None,
 ) -> dict:
-    """Calculate one geometry-aware spray interval over face centroids.
+    """Calculate one geometry-aware spray interval by integrating over triangles.
 
     The nominal spray footprint uses a normalized double-Beta profile. A
     separate Gaussian far-field tail is added outside the nominal cone so
@@ -307,6 +307,18 @@ def calculate_cone_deposition_step(
 
     core_density, tail_density, facing, inside, outside, radius, footprint_area = evaluate_kernel(quadrature_points)
 
+    # Preserve centroid-based diagnostic coordinates for existing callers.
+    center_delta = points - nozzle[None, :]
+    center_axial = center_delta @ direction
+    center_radial = center_delta - center_axial[:, None] * direction[None, :]
+    center_radius = np.maximum(center_axial, 0.0) * math.tan(math.radians(cone * 0.5))
+    normalized_xy = np.column_stack((
+        (center_radial @ basis_x) / np.maximum(center_radius, 1e-12),
+        (center_radial @ basis_y) / np.maximum(center_radius, 1e-12),
+    ))
+    normalized_xy[~inside] = 2.0
+    sigma = np.maximum(radius * tail_sigma_fraction, 1e-6)
+
     # The core density integrates to one over the nominal disk. The tail
     # density integrates to one over the exterior region. Their configured
     # fractions therefore remain interpretable as core vs overspray paint.
@@ -331,9 +343,7 @@ def calculate_cone_deposition_step(
             "footprint_radius_mm": radius,
         }
 
-    # Integrate over the actual face area. The finite-range Beta core is
-    # expressed in normalized [-1,1]^2 coordinates, while the Gaussian tail
-    # is already a physical 1/mm² density. Keep those Jacobians separate.
+    # Integrate the area-averaged core and tail densities over each triangle.
     core_weight = core_fraction * core_density * areas
     tail_weight = tail_fraction * tail_density * areas
     weight = (core_weight + tail_weight) * facing
