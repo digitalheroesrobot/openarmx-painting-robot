@@ -2890,6 +2890,16 @@ class ProductViewer(QWidget):
         )
         brep_context = get_step_brep_context(self.current_mesh)
         if brep_context is not None:
+            self._interactive_apply_brep_uv_deposition(
+                ids=ids, pose=pose, nozzle_world=nozzle_world,
+                source_factor=float(source_factor), transform=transform,
+                dt=dt, travel_speed_mm_s=travel_speed_mm_s,
+                flow=flow, efficiency=efficiency, solids=solids,
+                coats=coats, brep_context=brep_context,
+            )
+            self._interactive_spray_paint_state_dirty = True
+            return
+        if brep_context is not None:
             uv_triangles = np.asarray(
                 brep_context["triangle_uvs"], dtype=np.float64
             )
@@ -3350,6 +3360,164 @@ class ProductViewer(QWidget):
                 )
 
         self._interactive_spray_paint_state_dirty = True
+
+    def _interactive_apply_brep_uv_deposition(
+        self, *, ids, pose, nozzle_world, source_factor, transform, dt,
+        travel_speed_mm_s, flow, efficiency, solids, coats, brep_context,
+    ):
+        """Deposit directly on selected B-Rep UV texels with persistent CAD sample caching."""
+        from core.step_loader import evaluate_step_face_surface
+        from core.uv_coating_texture import (
+            DEFAULT_UV_TEXTURE_RESOLUTION, face_uv_layout, rasterize_face_uv_grid,
+        )
+        face_ids = np.asarray(brep_context["triangle_face_ids"], dtype=np.int64)
+        triangle_uvs = np.asarray(brep_context["triangle_uvs"], dtype=np.float64)
+        uv_valid = np.asarray(brep_context["triangle_uv_valid"], dtype=bool)
+        selected = np.unique(np.asarray(ids, dtype=np.int64))
+        selected = selected[(selected >= 0) & (selected < len(face_ids))]
+        if not selected.size:
+            return
+
+        if not isinstance(self._interactive_spray_surface_field, dict):
+            self._interactive_spray_surface_field = {
+                "schema": "STEP_BREP_UV_FILM_THICKNESS_FIELD_V3",
+                "coordinate_frame": "ORIGINAL_STEP_FACE_UV",
+                "field_representation": "DIRECT_ORIGINAL_BREP_UV_TEXEL_FIELD",
+                "interpolation_method": "DIRECT_BREP_UV_TEXEL_DEPOSITION",
+                "texture_resolution": DEFAULT_UV_TEXTURE_RESOLUTION,
+                "faces": {},
+            }
+        fields = self._interactive_spray_surface_field["faces"]
+        cache = getattr(self, "_interactive_brep_uv_sample_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._interactive_brep_uv_sample_cache = cache
+
+        batches, metadata = [], []
+        for face_value in np.unique(face_ids[selected]):
+            face_id = int(face_value)
+            tri_ids = selected[(face_ids[selected] == face_id) & uv_valid[selected]]
+            if not len(tri_ids):
+                continue
+            layout = self._interactive_spray_texture_layout.get(face_id)
+            if layout is None:
+                all_ids = np.flatnonzero((face_ids == face_id) & uv_valid)
+                if not len(all_ids):
+                    continue
+                layout = {
+                    **face_uv_layout(
+                        brep_context["face_records"][face_id - 1], triangle_uvs[all_ids]
+                    ),
+                    "resolution": int(DEFAULT_UV_TEXTURE_RESOLUTION),
+                    "triangle_count": int(len(all_ids)),
+                }
+                self._interactive_spray_texture_layout[face_id] = layout
+
+            size = int(layout["resolution"])
+            bounds = np.asarray(layout["uv_bounds"], dtype=np.float64)
+            raster = rasterize_face_uv_grid(
+                triangle_uvs[tri_ids], bounds, size,
+                bool(layout["periodic_u"]), bool(layout["periodic_v"]),
+            )
+            mask = raster["valid_mask"]
+            key = (id(self.current_mesh), face_id, size)
+            item = cache.get(key)
+            if item is None:
+                shape = (size, size)
+                item = {
+                    "attempted": np.zeros(shape, dtype=bool),
+                    "valid": np.zeros(shape, dtype=bool),
+                    "points": np.zeros((*shape, 3), dtype=np.float64),
+                    "normals": np.zeros((*shape, 3), dtype=np.float64),
+                    "areas": np.zeros(shape, dtype=np.float64),
+                }
+                cache[key] = item
+
+            missing_r, missing_c = np.nonzero(mask & ~item["attempted"])
+            du_step = (bounds[0, 1] - bounds[0, 0]) / (size - 1)
+            dv_step = (bounds[1, 1] - bounds[1, 0]) / (size - 1)
+            for row, col in zip(missing_r, missing_c):
+                item["attempted"][row, col] = True
+                uv = raster["uv_grid"][row, col]
+                try:
+                    sample = evaluate_step_face_surface(
+                        self.current_mesh, face_id, float(uv[0]), float(uv[1])
+                    )
+                    p = np.asarray(sample["point_mm"], dtype=np.float64)
+                    n = np.asarray(sample["normal"], dtype=np.float64)
+                    du = np.asarray(sample["du_mm_per_u"], dtype=np.float64)
+                    dv = np.asarray(sample["dv_mm_per_v"], dtype=np.float64)
+                    jac = float(np.linalg.norm(np.cross(du, dv)))
+                    wu = 1.0 if layout["periodic_u"] or col not in (0, size - 1) else 0.5
+                    wv = 1.0 if layout["periodic_v"] or row not in (0, size - 1) else 0.5
+                    area = jac * du_step * dv_step * wu * wv * source_factor**2
+                    if not (np.isfinite(p).all() and np.isfinite(n).all()
+                            and math.isfinite(area) and area > 1e-12):
+                        continue
+                    item["points"][row, col] = p
+                    item["normals"][row, col] = n
+                    item["areas"][row, col] = area
+                    item["valid"][row, col] = True
+                except (RuntimeError, ValueError, FloatingPointError):
+                    continue
+
+            rows, cols = np.nonzero(mask & item["valid"])
+            if not len(rows):
+                continue
+            pts = item["points"][rows, cols]
+            nrm = item["normals"][rows, cols]
+            world_pts = (pts @ transform[:3, :3].T + transform[:3, 3]) * source_factor
+            world_nrm = nrm @ transform[:3, :3].T
+            world_nrm /= np.maximum(np.linalg.norm(world_nrm, axis=1)[:, None], 1e-12)
+            batches.append((world_pts, world_nrm, item["areas"][rows, cols]))
+            metadata.append((face_id, rows, cols, len(rows)))
+
+            fields.setdefault(face_id, {
+                "uv_bounds": [list(map(float, x)) for x in layout["uv_bounds"]],
+                "surface_type": layout["surface_type"],
+                "periodic_u": bool(layout["periodic_u"]),
+                "periodic_v": bool(layout["periodic_v"]),
+                "texture_resolution": size,
+                "interpolation_method": "DIRECT_BREP_UV_TEXEL_DEPOSITION",
+                "thickness_grid_um": np.zeros((size, size), dtype=np.float32),
+                "samples_by_triangle": {},
+            })
+
+        if not batches:
+            return
+        points = np.concatenate([x[0] for x in batches])
+        normals = np.concatenate([x[1] for x in batches])
+        areas = np.concatenate([x[2] for x in batches])
+        result = calculate_cone_deposition_step(
+            surface_points_mm=points, surface_normals=normals,
+            sample_area_mm2=areas,
+            nozzle_position_mm=nozzle_world * source_factor,
+            spray_direction=pose["spray_direction_world"],
+            cone_angle_deg=self._interactive_spray_cone_angle_deg,
+            duration_s=dt, fluid_flow_ml_min=flow,
+            transfer_efficiency_percent=efficiency,
+            volume_solids_percent=solids, number_of_coats=coats,
+            travel_speed_mm_s=travel_speed_mm_s,
+            radial_alpha=float(self._interactive_sprayer_profile.get("deposition_beta", 2.0)),
+            radial_beta=float(self._interactive_sprayer_profile.get("deposition_beta", 2.0)),
+            core_deposition_fraction=float(self._interactive_sprayer_profile.get("core_deposition_fraction", 0.88)),
+            overspray_tail_fraction=float(self._interactive_sprayer_profile.get("overspray_tail_fraction", 0.12)),
+            overspray_tail_sigma_fraction=float(self._interactive_sprayer_profile.get("overspray_tail_sigma_fraction", 0.35)),
+        )
+        deposited = np.asarray(result.get("deposited_volume_mm3", []), dtype=np.float64)
+        if deposited.shape != (len(areas),):
+            return
+        increments = deposited / np.maximum(areas, 1e-12) * 1000.0
+        offset = 0
+        for face_id, rows, cols, count in metadata:
+            grid = fields[face_id]["thickness_grid_um"]
+            grid[rows, cols] += increments[offset:offset + count].astype(np.float32)
+            fields[face_id]["direct_deposition_sample_count"] = int(count)
+            fields[face_id]["direct_deposition_volume_mm3"] = float(
+                np.sum(deposited[offset:offset + count])
+            )
+            offset += count
+            self._interactive_spray_dirty_face_ids.add(face_id)
 
     def _interactive_build_gun_visual(self, nozzle, spray_direction):
         """Build a lightweight sprayer envelope from the active profile."""
