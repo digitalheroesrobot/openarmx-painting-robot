@@ -131,8 +131,11 @@ def accumulate_face_uv_thickness(
             y_valid = (ys >= 0) & (ys < size)
         if not np.any(x_valid) or not np.any(y_valid):
             continue
-        dx = xs.astype(np.float64) - cx
-        dy = ys.astype(np.float64) - cy
+        # Measure distance in the unwrapped local offset coordinates.
+        # Wrapped pixel indices are used only for addressing the periodic grid;
+        # using them for distance would make the opposite seam look far away.
+        dx = offsets.astype(np.float64) + (x_center - cx)
+        dy = offsets.astype(np.float64) + (y_center - cy)
         wx = np.exp(-0.5 * (dx / sigma) ** 2)
         wy = np.exp(-0.5 * (dy / sigma) ** 2)
         kernel = np.outer(wy, wx)
