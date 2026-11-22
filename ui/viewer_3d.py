@@ -2545,6 +2545,10 @@ class ProductViewer(QWidget):
                     pickable=False,
                     name=f"interactive_brep_coating_face_{face_id}",
                 )
+                actor.SetOrigin(0.0, 0.0, 0.0)
+                actor.SetUserMatrix(
+                    self._vtk_matrix_from_numpy(self._actor_matrix_array())
+                )
                 self._interactive_spray_texture_actors[face_id] = actor
                 self._interactive_spray_texture_layout[face_id] = {
                     **layout,
