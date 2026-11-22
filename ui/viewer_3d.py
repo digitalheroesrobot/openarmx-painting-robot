@@ -2943,6 +2943,106 @@ class ProductViewer(QWidget):
         )
         self._interactive_spray_live_actors.append(actor)
 
+        # Trace the nominal cone's outer generators against the product.
+        # Their first-hit points form the visible contact boundary on the
+        # actual surface (rather than a flat circle floating at standoff).
+        contact_boundary_segments = []
+        if (
+            self._interactive_spray_locator is not None
+            and self._interactive_spray_surface is not None
+        ):
+            inverse = np.linalg.inv(self._interactive_spray_transform)
+            nozzle_local = (
+                inverse @ np.append(nozzle, 1.0)
+            )[:3]
+            axis_local = inverse[:3, :3] @ spray_axis
+            axis_local /= max(float(np.linalg.norm(axis_local)), 1e-12)
+            ref_local = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+            if abs(float(np.dot(ref_local, axis_local))) > 0.92:
+                ref_local = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+            edge_u = np.cross(axis_local, ref_local)
+            edge_u /= max(float(np.linalg.norm(edge_u)), 1e-12)
+            edge_v = np.cross(axis_local, edge_u)
+            edge_v /= max(float(np.linalg.norm(edge_v)), 1e-12)
+
+            contact_points_world = []
+            contact_hit = []
+            edge_ray_count = 96
+            edge_ray_length = (
+                self._interactive_spray_standoff
+                / max(math.cos(half_angle), 1e-6)
+            ) * 1.02
+            for ray_index in range(edge_ray_count):
+                phi = 2.0 * math.pi * ray_index / edge_ray_count
+                radial = math.cos(phi) * edge_u + math.sin(phi) * edge_v
+                edge_direction = (
+                    math.cos(half_angle) * axis_local
+                    + math.sin(half_angle) * radial
+                )
+                edge_direction /= max(
+                    float(np.linalg.norm(edge_direction)), 1e-12
+                )
+                endpoint = nozzle_local + edge_direction * edge_ray_length
+                intersections = vtkPoints()
+                intersected_cells = vtkIdList()
+                hit = self._interactive_spray_locator.IntersectWithLine(
+                    nozzle_local.tolist(),
+                    endpoint.tolist(),
+                    intersections,
+                    intersected_cells,
+                )
+                nearest_point = None
+                if hit and intersections.GetNumberOfPoints() > 0:
+                    nearest_distance = float("inf")
+                    for hit_index in range(intersections.GetNumberOfPoints()):
+                        candidate = np.asarray(
+                            intersections.GetPoint(hit_index),
+                            dtype=np.float64,
+                        )
+                        candidate_distance = float(
+                            np.linalg.norm(candidate - nozzle_local)
+                        )
+                        if candidate_distance < nearest_distance:
+                            nearest_distance = candidate_distance
+                            nearest_point = candidate
+                contact_hit.append(nearest_point is not None)
+                if nearest_point is None:
+                    contact_points_world.append(None)
+                else:
+                    contact_points_world.append(
+                        (
+                            self._interactive_spray_transform
+                            @ np.append(nearest_point, 1.0)
+                        )[:3]
+                    )
+
+            # Draw only adjacent hit pairs. Missing rays remain gaps instead
+            # of creating misleading chords across openings or silhouette gaps.
+            for ray_index in range(edge_ray_count):
+                next_index = (ray_index + 1) % edge_ray_count
+                if contact_hit[ray_index] and contact_hit[next_index]:
+                    contact_boundary_segments.append(
+                        (
+                            contact_points_world[ray_index],
+                            contact_points_world[next_index],
+                        )
+                    )
+
+        if contact_boundary_segments:
+            contact_boundary = self._build_line_polydata(
+                contact_boundary_segments
+            )
+            if contact_boundary is not None:
+                contact_actor = self.plotter.add_mesh(
+                    contact_boundary,
+                    color="#FFF4CC",
+                    opacity=0.62,
+                    line_width=2.0,
+                    lighting=False,
+                    pickable=False,
+                )
+                self._interactive_spray_live_actors.append(contact_actor)
+
         # Extend the spray visually with a weak, distance-decaying distribution.
         # Each ray stops at the first product surface; a ray with no hit fades
         # out at the configured distribution cutoff.
