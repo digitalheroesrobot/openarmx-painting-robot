@@ -238,3 +238,88 @@ def accumulate_face_uv_thickness(
     event_increment = weighted_mean * confidence
     grid[...] += event_increment.astype(grid.dtype, copy=False)
     return grid
+
+
+def rasterize_face_uv_grid(
+    uv_triangles,
+    uv_bounds,
+    resolution=DEFAULT_UV_TEXTURE_RESOLUTION,
+    periodic_u=False,
+    periodic_v=False,
+):
+    """Rasterize selected source-face UV triangles onto texel centers.
+
+    The returned mask is a conservative domain/visibility mask: only texels
+    covered by the supplied triangles are valid. Periodic seam-crossing
+    triangles are locally unwrapped and tested against neighboring periods.
+    Rows correspond to V and columns correspond to U.
+    """
+    triangles = np.asarray(uv_triangles, dtype=np.float64)
+    bounds = np.asarray(uv_bounds, dtype=np.float64)
+    size = int(resolution)
+    if triangles.ndim != 3 or triangles.shape[1:] != (3, 2):
+        raise ValueError("uv_triangles must have shape (N,3,2).")
+    if not np.isfinite(triangles).all():
+        raise ValueError("uv_triangles must be finite.")
+    if bounds.shape != (2, 2) or not np.isfinite(bounds).all():
+        raise ValueError("uv_bounds must be a finite (2,2) array.")
+    if size < 8 or np.any(bounds[:, 1] <= bounds[:, 0]):
+        raise ValueError("UV grid resolution and bounds are invalid.")
+
+    normalized = face_uv_triangles_to_texture_coordinates(
+        triangles, bounds, periodic_u=periodic_u, periodic_v=periodic_v
+    )
+    axis = np.linspace(0.0, 1.0, size, dtype=np.float64)
+    uu, vv = np.meshgrid(axis, axis)
+    points = np.column_stack((uu.ravel(), vv.ravel()))
+    mask = np.zeros(len(points), dtype=bool)
+    shifts_u = (-1.0, 0.0, 1.0) if periodic_u else (0.0,)
+    shifts_v = (-1.0, 0.0, 1.0) if periodic_v else (0.0,)
+
+    for triangle in normalized:
+        a, b, c = triangle
+        edge0 = b - a
+        edge1 = c - a
+        determinant = edge0[0] * edge1[1] - edge1[0] * edge0[1]
+        if abs(float(determinant)) <= 1e-14:
+            continue
+        min_xy = np.minimum(np.min(triangle, axis=0), 1.0)
+        max_xy = np.maximum(np.max(triangle, axis=0), 0.0)
+        # Restrict work to the texel bounding box, including seam copies.
+        for shift_u in shifts_u:
+            for shift_v in shifts_v:
+                shifted = triangle + np.asarray([shift_u, shift_v])
+                low = np.maximum(np.min(shifted, axis=0), 0.0)
+                high = np.minimum(np.max(shifted, axis=0), 1.0)
+                if np.any(high < low):
+                    continue
+                x0 = max(0, int(math.floor(low[0] * (size - 1))))
+                x1 = min(size - 1, int(math.ceil(high[0] * (size - 1))))
+                y0 = max(0, int(math.floor(low[1] * (size - 1))))
+                y1 = min(size - 1, int(math.ceil(high[1] * (size - 1))))
+                if x1 < x0 or y1 < y0:
+                    continue
+                local = points.reshape(size, size, 2)[y0:y1 + 1, x0:x1 + 1]
+                q = local - shifted[0]
+                e0 = shifted[1] - shifted[0]
+                e1 = shifted[2] - shifted[0]
+                det = e0[0] * e1[1] - e1[0] * e0[1]
+                alpha = (q[..., 0] * e1[1] - e1[0] * q[..., 1]) / det
+                beta = (e0[0] * q[..., 1] - q[..., 0] * e0[1]) / det
+                inside = (
+                    (alpha >= -1e-10) & (beta >= -1e-10)
+                    & (alpha + beta <= 1.0 + 1e-10)
+                )
+                view = mask.reshape(size, size)
+                view[y0:y1 + 1, x0:x1 + 1] |= inside
+
+    uv_u = bounds[0, 0] + axis * (bounds[0, 1] - bounds[0, 0])
+    uv_v = bounds[1, 0] + axis * (bounds[1, 1] - bounds[1, 0])
+    grid_u, grid_v = np.meshgrid(uv_u, uv_v)
+    return {
+        "valid_mask": mask.reshape(size, size),
+        "uv_grid": np.stack((grid_u, grid_v), axis=-1),
+        "resolution": size,
+        "valid_texel_count": int(np.count_nonzero(mask)),
+        "rasterization": "SELECTED_TRIANGLE_UV_DOMAIN_MASK",
+    }
