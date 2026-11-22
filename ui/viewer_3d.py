@@ -2280,11 +2280,17 @@ class ProductViewer(QWidget):
         color = QColor(self._trajectory_paint_color_hex or "#D95B43")
         paint = np.array([color.red(), color.green(), color.blue()], dtype=np.float64)
         target = max(float(self._interactive_spray_paint_target_um), 1e-9)
-        mix = np.clip(thickness / target, 0.0, 1.0)[:, None]
-        return np.asarray(
-            np.rint(base[None, :] * (1.0 - mix) + paint[None, :] * mix),
-            dtype=np.uint8,
-        )
+        ratio = np.maximum(thickness / target, 0.0)
+
+        # 0..1 target: neutral gray -> selected paint color.
+        below = np.clip(ratio, 0.0, 1.0)[:, None]
+        rgb = base[None, :] * (1.0 - below) + paint[None, :] * below
+
+        # 1..1.5 target: selected paint color -> red warning for over-build.
+        over = np.clip((ratio - 1.0) / 0.5, 0.0, 1.0)[:, None]
+        warning = np.asarray([235.0, 55.0, 45.0], dtype=np.float64)
+        rgb = rgb * (1.0 - over) + warning[None, :] * over
+        return np.asarray(np.rint(np.clip(rgb, 0.0, 255.0)), dtype=np.uint8)
 
     def _interactive_refresh_paint_visual(self, render=True):
         """Refresh the single persistent product actor after coating changes."""
