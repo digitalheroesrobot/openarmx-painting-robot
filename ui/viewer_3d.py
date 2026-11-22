@@ -2902,6 +2902,9 @@ class ProductViewer(QWidget):
         # Keep exactly one cone: the configured nominal spray cone.
         half_angle = math.radians(self._interactive_spray_cone_angle_deg) * 0.5
         nominal_radius = self._interactive_spray_standoff * math.tan(half_angle)
+        # Spray leaves the nozzle along spray_direction_world. PyVista's
+        # Cone axis points from its base toward its tip, so the cone tip must
+        # be on the product side of the nozzle.
         cone = pv.Cone(
             center=nozzle + direction * (self._interactive_spray_standoff * 0.5),
             direction=direction,
@@ -2924,6 +2927,26 @@ class ProductViewer(QWidget):
         # Each ray stops at the first product surface; a ray with no hit fades
         # out at the configured distribution cutoff.
         self._interactive_add_distribution_tail_visual(pose)
+
+        # Faint centerline direction vector: always points from the nozzle
+        # toward the painted surface / spray direction.
+        centerline_end = nozzle + direction * self._interactive_spray_standoff
+        centerline = pv.Arrow(
+            start=nozzle,
+            direction=direction,
+            scale=self._interactive_spray_standoff,
+            tip_length=0.10,
+            tip_radius=0.018,
+            shaft_radius=0.006,
+        )
+        centerline_actor = self.plotter.add_mesh(
+            centerline,
+            color="#FFF3C4",
+            opacity=0.32,
+            lighting=False,
+            pickable=False,
+        )
+        self._interactive_spray_live_actors.append(centerline_actor)
 
         # Faint nozzle-to-surface direction vector.
         arrow_length = max(self._interactive_spray_standoff * 0.92, 1e-6)
