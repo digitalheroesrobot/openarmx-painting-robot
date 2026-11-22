@@ -493,6 +493,8 @@ def evaluate_step_triangle_sample(
         "mesh_point_mm": mesh_point,
         "point_mm": exact["point_mm"],
         "normal": exact["normal"],
+        "du_mm_per_u": exact["du_mm_per_u"],
+        "dv_mm_per_v": exact["dv_mm_per_v"],
         "surface_type": exact["surface_type"],
         "mesh_to_brep_deviation_mm": deviation,
         "evaluation_method": exact["evaluation_method"],
