@@ -3850,6 +3850,59 @@ class ProductViewer(QWidget):
         tail_extension = max(3.0 * tail_sigma_mm, nominal_standoff * 0.25)
         maximum_axial_distance = nominal_standoff + tail_extension
 
+        # Render the atomized plume as a deterministic volumetric point cloud,
+        # not only as a handful of thin cone-generator lines. The low-cost
+        # golden-angle distribution avoids per-frame random-number generation
+        # and makes the spray visibly occupy the nozzle-to-surface volume.
+        reference = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        if abs(float(np.dot(reference, direction_world))) > 0.92:
+            reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        plume_u = np.cross(direction_world, reference)
+        plume_u /= max(float(np.linalg.norm(plume_u)), 1e-12)
+        plume_v = np.cross(direction_world, plume_u)
+        plume_v /= max(float(np.linalg.norm(plume_v)), 1e-12)
+        golden_angle = math.pi * (3.0 - math.sqrt(5.0))
+        axial_layers = np.linspace(0.08, 1.0, 14)
+        particles_per_layer = 28
+        particle_groups = [[], [], []]
+        for layer_index, axial_fraction in enumerate(axial_layers):
+            axial_distance = nominal_standoff * float(axial_fraction)
+            cone_radius = axial_distance * math.tan(half_angle)
+            tail_radius = tail_sigma_mm * min(
+                max((axial_distance - nominal_standoff) / max(tail_extension, 1e-9), 0.0),
+                1.0,
+            )
+            for particle_index in range(particles_per_layer):
+                radial_fraction = math.sqrt(
+                    (particle_index + 0.5) / particles_per_layer
+                )
+                phi = particle_index * golden_angle + layer_index * 0.37
+                radial = (
+                    math.cos(phi) * plume_u + math.sin(phi) * plume_v
+                )
+                radius = cone_radius * radial_fraction + tail_radius * radial_fraction
+                point = nozzle_world + (
+                    direction_world * axial_distance + radial * radius
+                )
+                group_index = min(2, int(3 * axial_fraction))
+                particle_groups[group_index].append(point)
+        for group, opacity, point_size in zip(
+            particle_groups, (0.15, 0.095, 0.055), (4.0, 3.5, 3.0)
+        ):
+            if not group:
+                continue
+            cloud = pv.PolyData(np.asarray(group, dtype=np.float64))
+            cloud_actor = self.plotter.add_mesh(
+                cloud,
+                color="#FFE8B8",
+                opacity=opacity,
+                point_size=point_size,
+                render_points_as_spheres=True,
+                lighting=False,
+                pickable=False,
+            )
+            self._interactive_spray_live_actors.append(cloud_actor)
+
         reference = np.array([0.0, 0.0, 1.0], dtype=np.float64)
         if abs(float(np.dot(reference, direction_local))) > 0.9:
             reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
