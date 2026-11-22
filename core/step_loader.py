@@ -415,7 +415,16 @@ def evaluate_step_face_surface(mesh, face_id: int, u: float, v: float) -> dict:
                 )
 
     ocp = _ocp_imports()
-    adaptor = ocp["BRepAdaptor_Surface"](context["faces"][face_id - 1], True)
+    # Reuse one Open CASCADE surface adaptor per source Face. Stage 3 may
+    # evaluate tens of thousands of points on the same CAD Face; rebuilding
+    # BRepAdaptor_Surface for every sample is unnecessarily expensive.
+    adaptor_cache = context.setdefault("_surface_adaptors", {})
+    adaptor = adaptor_cache.get(face_id)
+    if adaptor is None:
+        adaptor = ocp["BRepAdaptor_Surface"](
+            context["faces"][face_id - 1], True
+        )
+        adaptor_cache[face_id] = adaptor
     point = ocp["gp_Pnt"]()
     derivative_u = ocp["gp_Vec"]()
     derivative_v = ocp["gp_Vec"]()
