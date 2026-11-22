@@ -2781,11 +2781,20 @@ class ProductViewer(QWidget):
             )
 
         if self._interactive_hud_actor is not None:
-            self._interactive_hud_actor.SetInput(
+            hud_text = (
                 "SPRAY CURSOR | "
                 + ("HOLD LEFT MOUSE TO PAINT | " if not collision else "")
                 + status_text
             )
+            try:
+                # PyVista's CornerAnnotation exposes SetText(), while the
+                # underlying vtkCornerAnnotation uses SetText(index, text).
+                if hasattr(self._interactive_hud_actor, "SetText"):
+                    self._interactive_hud_actor.SetText(2, hud_text)
+                elif hasattr(self._interactive_hud_actor, "SetInput"):
+                    self._interactive_hud_actor.SetInput(hud_text)
+            except (AttributeError, TypeError):
+                pass
 
         marker = pv.Sphere(
             radius=max(self._interactive_spray_standoff * 0.018, 0.5),
