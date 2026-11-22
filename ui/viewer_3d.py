@@ -2634,14 +2634,11 @@ class ProductViewer(QWidget):
         if pose is None:
             self._interactive_remove_live_actors()
             self._interactive_spray_latest_pose = None
-            # A later re-entry starts a new stroke, preventing a false
-            # spray-on segment across a region with no valid surface hit.
             self._interactive_spray_recording = False
             self.plotter.render()
             return
-        if not self._interactive_spray_recording:
-            self._interactive_spray_stroke_id += 1
-            self._interactive_spray_recording = True
+        # Mouse motion is preview-only. Paint is enabled only while the
+        # left mouse button is held and collision protection reports clear.
         self._interactive_update_cursor(pose)
 
     def _on_interactive_spray_left_press(self, interactor, event):
@@ -2653,14 +2650,18 @@ class ProductViewer(QWidget):
             return
         self._interactive_spray_stroke_id += 1
         self._interactive_spray_recording = True
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_start_timestamp = None
         self._interactive_update_cursor(pose)
 
     def _on_interactive_spray_left_release(self, interactor, event):
         if not self._interactive_spray_active:
             return
-        if self._interactive_spray_latest_pose is not None:
-            self._interactive_append_record(self._interactive_spray_latest_pose)
         self._interactive_spray_recording = False
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_latest_pose = None
         self.plotter.render()
 
     def finish_interactive_spray_path(self):
