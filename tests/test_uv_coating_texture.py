@@ -76,3 +76,49 @@ def test_uv_deposition_accumulates_repeated_passes_and_wraps_cylinder_seam():
     )
     assert np.isclose(grid[32, 0], 2.0 * first[32, 0], rtol=1e-5)
     assert grid[32, -1] > 0.0
+
+
+def test_surface_metric_maps_physical_isotropic_blur_to_anisotropic_uv_pixels():
+    from core.uv_coating_texture import surface_metric_to_pixel_covariance
+
+    # The same UV distance represents 10x more physical distance along U.
+    metric = np.asarray([[100.0, 0.0], [0.0, 1.0]])
+    covariance = surface_metric_to_pixel_covariance(
+        metric,
+        uv_bounds=np.asarray([[0.0, 1.0], [0.0, 1.0]]),
+        resolution=101,
+        sample_area_mm2=0.5,
+        smoothing_factor=0.60,
+    )
+    sigma_u, sigma_v = np.sqrt(np.diag(covariance))
+    assert np.isclose(sigma_v / sigma_u, 10.0, rtol=1e-8)
+    assert np.all(np.linalg.eigvalsh(covariance) > 0.0)
+
+
+def test_surface_metric_rejects_singular_surface_parameterization():
+    import pytest
+    from core.uv_coating_texture import surface_metric_to_pixel_covariance
+
+    with pytest.raises(ValueError, match="singular"):
+        surface_metric_to_pixel_covariance(
+            np.asarray([[1.0, 0.0], [0.0, 0.0]]),
+            uv_bounds=np.asarray([[0.0, 1.0], [0.0, 1.0]]),
+            resolution=64,
+            sample_area_mm2=1.0,
+        )
+
+
+def test_metric_covariance_produces_physical_space_anisotropic_smoothing():
+    grid = np.zeros((128, 128), dtype=np.float32)
+    accumulate_face_uv_thickness(
+        grid,
+        sample_uv=np.asarray([[0.5, 0.5]]),
+        thickness_increment_um=np.asarray([20.0]),
+        uv_bounds=np.asarray([[0.0, 1.0], [0.0, 1.0]]),
+        sample_covariance_px=np.asarray([[[4.0, 0.0], [0.0, 100.0]]]),
+    )
+    center = 64
+    x_offset = float(grid[center, center + 4])
+    y_offset = float(grid[center + 4, center])
+    assert y_offset > x_offset
+    assert grid[center, center] > 19.0
