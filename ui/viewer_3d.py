@@ -411,6 +411,7 @@ class ProductViewer(QWidget):
         # Interactive spray-path input. Camera navigation is temporarily
         # suspended while the nozzle cursor is active in the viewport.
         self._interactive_spray_active = False
+        self._interactive_view_mode = "camera"
         self._interactive_spray_recording = False
         self._interactive_spray_standoff = 0.0
         self._interactive_spray_cone_angle_deg = 0.0
@@ -457,6 +458,9 @@ class ProductViewer(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
+        self.interaction_mode_panel = self._build_interaction_mode_controls()
+        layout.addWidget(self.interaction_mode_panel)
+
         # Keep Hook Control at the very top of the 3D viewer whenever it is visible.
         self.hole_control_panel = self._build_hole_controls()
         layout.addWidget(self.hole_control_panel)
@@ -470,6 +474,7 @@ class ProductViewer(QWidget):
 
         self.plotter.set_background("#07111D", top="#142B40")
 
+        self.interaction_mode_panel.hide()
         self.display_control_panel.hide()
         self.hole_control_panel.hide()
         self.pose_control_panel.hide()
@@ -813,6 +818,111 @@ class ProductViewer(QWidget):
     # =========================================================
     # STAGE 3 DISPLAY CHECKBOXES
     # =========================================================
+
+    def _build_interaction_mode_controls(self):
+        """Build explicit, mutually exclusive camera and spray input modes."""
+        panel = QFrame()
+        panel.setObjectName("ViewerInteractionModeControls")
+        panel.setStyleSheet("""
+            QFrame#ViewerInteractionModeControls {
+                background-color: #0D1822;
+                border: 1px solid #36566A;
+                border-radius: 5px;
+            }
+            QFrame#ViewerInteractionModeControls QLabel {
+                color: #C9D8E2;
+                font-weight: 700;
+            }
+            QFrame#ViewerInteractionModeControls QPushButton {
+                background-color: #183244;
+                color: #E2EDF4;
+                border: 1px solid #36566A;
+                border-radius: 4px;
+                padding: 5px 14px;
+                font-weight: 700;
+            }
+            QFrame#ViewerInteractionModeControls QPushButton:checked {
+                background-color: #087F8C;
+                border: 1px solid #53DCE6;
+                color: #FFFFFF;
+            }
+            QFrame#ViewerInteractionModeControls QPushButton:disabled {
+                color: #71818C;
+                background-color: #15232D;
+            }
+        """)
+        row = QHBoxLayout(panel)
+        row.setContentsMargins(8, 4, 8, 4)
+        row.setSpacing(8)
+
+        row.addWidget(QLabel("3D INPUT MODE"))
+
+        self.camera_mode_button = QPushButton("CAMERA")
+        self.camera_mode_button.setCheckable(True)
+        self.camera_mode_button.setChecked(True)
+        self.camera_mode_button.setToolTip(
+            "Enable camera orbit, pan and zoom. Painting is paused."
+        )
+        self.camera_mode_button.clicked.connect(
+            lambda checked=False: self._set_interactive_view_mode("camera")
+        )
+        row.addWidget(self.camera_mode_button)
+
+        self.spray_mode_button = QPushButton("SPRAY")
+        self.spray_mode_button.setCheckable(True)
+        self.spray_mode_button.setChecked(False)
+        self.spray_mode_button.setEnabled(False)
+        self.spray_mode_button.setToolTip(
+            "Enable spray cursor preview. Hold the left mouse button to paint."
+        )
+        self.spray_mode_button.clicked.connect(
+            lambda checked=False: self._set_interactive_view_mode("spray")
+        )
+        row.addWidget(self.spray_mode_button)
+
+        self.interaction_mode_status = QLabel("CAMERA CONTROL")
+        self.interaction_mode_status.setStyleSheet(
+            "color: #69C8D5; font-size: 9px; padding-left: 8px;"
+        )
+        row.addWidget(self.interaction_mode_status)
+        row.addStretch(1)
+        return panel
+
+    def _set_interactive_view_mode(self, mode):
+        """Switch viewport input ownership without changing recorded paint data."""
+        mode = str(mode).strip().lower()
+        if mode not in ("camera", "spray"):
+            raise ValueError("Viewer interaction mode must be 'camera' or 'spray'.")
+        if mode == "spray" and not self._interactive_spray_active:
+            return False
+
+        if mode == "camera":
+            # Switching away from spray immediately ends the current stroke.
+            # Existing coating and recorded poses are intentionally retained.
+            self._interactive_spray_recording = False
+            self._interactive_spray_last_deposition_timestamp = None
+            self._interactive_spray_previous_nozzle_world = None
+            self._interactive_spray_last_speed_mm_s = 0.0
+            self._interactive_spray_latest_pose = None
+
+        self._interactive_view_mode = mode
+        interactor = self.plotter.iren.interactor
+        style = interactor.GetInteractorStyle()
+        if style is not None and self._interactive_spray_active:
+            if mode == "camera":
+                style.SetEnabled(1 if self._interactive_saved_style_enabled else 0)
+            else:
+                style.SetEnabled(0)
+
+        self.camera_mode_button.setChecked(mode == "camera")
+        self.spray_mode_button.setChecked(mode == "spray")
+        self.spray_mode_button.setEnabled(bool(self._interactive_spray_active))
+        self.interaction_mode_status.setText(
+            "CAMERA CONTROL" if mode == "camera"
+            else "SPRAY PREVIEW · HOLD LEFT TO PAINT"
+        )
+        self.plotter.render()
+        return True
 
     def _build_trajectory_controls(self):
         panel = QFrame()
@@ -2286,7 +2396,9 @@ class ProductViewer(QWidget):
         style = interactor.GetInteractorStyle()
         if style is not None:
             self._interactive_saved_style_enabled = bool(style.GetEnabled())
-            style.SetEnabled(0)
+        self.interaction_mode_panel.show()
+        self.spray_mode_button.setEnabled(True)
+        self._set_interactive_view_mode("spray")
 
         self._interactive_hud_actor = self.plotter.add_text(
             (
@@ -3196,7 +3308,10 @@ class ProductViewer(QWidget):
         return True
 
     def _on_interactive_spray_mouse_move(self, interactor, event):
-        if not self._interactive_spray_active:
+        if (
+            not self._interactive_spray_active
+            or self._interactive_view_mode != "spray"
+        ):
             return
 
         # VTK release notifications can be missed by some Qt/VTK window
@@ -3225,7 +3340,10 @@ class ProductViewer(QWidget):
         self._interactive_update_cursor(pose)
 
     def _on_interactive_spray_left_press(self, interactor, event):
-        if not self._interactive_spray_active:
+        if (
+            not self._interactive_spray_active
+            or self._interactive_view_mode != "spray"
+        ):
             return
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y)
@@ -3250,7 +3368,10 @@ class ProductViewer(QWidget):
 
     def _on_interactive_spray_leave(self, interactor, event):
         # Never keep spraying after the pointer leaves the 3D viewport.
-        if not self._interactive_spray_active:
+        if (
+            not self._interactive_spray_active
+            or self._interactive_view_mode != "spray"
+        ):
             return
         self._interactive_spray_recording = False
         self._interactive_spray_last_deposition_timestamp = None
@@ -3263,12 +3384,21 @@ class ProductViewer(QWidget):
             return None
         self._interactive_spray_recording = False
         self._interactive_spray_active = False
+        self._interactive_view_mode = "camera"
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_remove_live_actors()
 
         interactor = self.plotter.iren.interactor
         style = interactor.GetInteractorStyle()
         if style is not None:
             style.SetEnabled(1 if self._interactive_saved_style_enabled else 0)
+        self.interaction_mode_panel.hide()
+        self.camera_mode_button.setChecked(True)
+        self.spray_mode_button.setChecked(False)
+        self.spray_mode_button.setEnabled(False)
+        self.interaction_mode_status.setText("CAMERA CONTROL")
 
         if self._interactive_hud_actor is not None:
             try:
