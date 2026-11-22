@@ -137,14 +137,24 @@ def calculate_cone_deposition_step(
     travel_speed_mm_s: float = 0.0,
     radial_alpha: float = 2.0,
     radial_beta: float = 2.0,
+    core_deposition_fraction: float = 0.88,
+    overspray_tail_fraction: float = 0.12,
+    overspray_tail_sigma_fraction: float = 0.35,
 ) -> dict:
     """Calculate one geometry-aware spray interval over face centroids.
 
-    Distance controls footprint size, cone angle controls the footprint
-    radius, incidence controls local deposition, and duration (therefore
-    travel speed for a moving gun) controls deposited volume.  The result is
-    an engineering prediction; measured nozzle-profile calibration is still
-    required for production-grade film thickness.
+    The nominal spray footprint uses a normalized double-Beta profile. A
+    separate Gaussian far-field tail is added outside the nominal cone so
+    weak overspray can reach surfaces beyond the nominal footprint. This
+    reflects the literature distinction between finite-range Beta models and
+    infinite-range Gaussian/Cauchy models: real spray clouds can have a small
+    non-zero deposition outside the nominal cone.
+
+    Distance controls both the nominal footprint and overspray scale, cone
+    angle controls the nominal footprint, incidence controls local
+    deposition, and duration/travel speed controls deposited volume. The
+    distribution fractions are engineering defaults until measured spray
+    pattern data are supplied for the actual nozzle.
     """
     points = np.asarray(surface_points_mm, dtype=np.float64)
     normals = np.asarray(surface_normals, dtype=np.float64)
@@ -173,6 +183,29 @@ def calculate_cone_deposition_step(
         raise ValueError("travel_speed_mm_s must be finite and non-negative.")
     if not math.isfinite(flow) or flow < 0.0:
         raise ValueError("fluid_flow_ml_min must be finite and non-negative.")
+
+    core_fraction = float(core_deposition_fraction)
+    tail_fraction = float(overspray_tail_fraction)
+    tail_sigma_fraction = float(overspray_tail_sigma_fraction)
+    if (
+        not all(math.isfinite(v) for v in (
+            core_fraction, tail_fraction, tail_sigma_fraction
+        ))
+        or core_fraction < 0.0
+        or tail_fraction < 0.0
+        or tail_sigma_fraction <= 0.0
+    ):
+        raise ValueError(
+            "Deposition distribution parameters must be finite; fractions "
+            "must be non-negative and tail sigma must be positive."
+        )
+    fraction_total = core_fraction + tail_fraction
+    if fraction_total <= 0.0:
+        raise ValueError(
+            "core_deposition_fraction + overspray_tail_fraction must be positive."
+        )
+    core_fraction /= fraction_total
+    tail_fraction /= fraction_total
 
     nlen = np.linalg.norm(normals, axis=1)
     if np.any(nlen <= 1e-12):
@@ -213,10 +246,42 @@ def calculate_cone_deposition_step(
     # lower film thickness.
     footprint_area = math.pi * np.maximum(radius, 1e-9) ** 2
 
-    density = double_beta_spatial_density(
+    core_density = double_beta_spatial_density(
         normalized_xy, radial_alpha, radial_beta, radial_alpha, radial_beta
     )
-    density[~inside] = 0.0
+    core_density[~inside] = 0.0
+
+    # Infinite-range overspray tail. It starts at the nominal footprint edge
+    # and decays radially with a Gaussian law. The conditional normalization
+    # below makes the tail carry exactly its configured mass fraction outside
+    # the nominal radius in the ideal planar integral.
+    sigma = np.maximum(
+        radius * tail_sigma_fraction,
+        1e-6,
+    )
+    radial_sq = np.maximum(radial_distance * radial_distance, 0.0)
+    tail_density = np.zeros(len(points), dtype=np.float64)
+    outside = (axial > 1e-9) & (radial_distance > radius)
+    if np.any(outside):
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            edge_survival = np.exp(
+                -0.5 * (radius[outside] / sigma[outside]) ** 2
+            )
+            gaussian_norm = (
+                2.0 * math.pi * sigma[outside] ** 2
+                * np.maximum(edge_survival, 1e-300)
+            )
+            tail_density[outside] = (
+                np.exp(-0.5 * radial_sq[outside] / sigma[outside] ** 2)
+                / np.maximum(gaussian_norm, 1e-300)
+            )
+        tail_density[~np.isfinite(tail_density)] = 0.0
+
+    # The core density integrates to one over the nominal disk. The tail
+    # density integrates to one over the exterior region. Their configured
+    # fractions therefore remain interpretable as core vs overspray paint.
+    density = core_fraction * core_density + tail_fraction * tail_density
+
     input_dry = (
         flow * dt / 60.0 * 1000.0
         * (float(transfer_efficiency_percent) / 100.0)
@@ -260,10 +325,17 @@ def calculate_cone_deposition_step(
         "total_deposited_volume_mm3": float(np.sum(deposited)),
         "input_dry_volume_mm3": float(input_dry),
         "inside_cone": inside,
+        "overspray_outside_cone": outside,
         "facing_cosine": facing,
         "travel_speed_mm_s": speed,
         "footprint_radius_mm": radius,
+        "overspray_sigma_mm": sigma,
         "normalized_xy": normalized_xy,
+        "distribution_model": "BETA_CORE_PLUS_INFINITE_GAUSSIAN_OVERSPRAY_TAIL",
+        "core_deposition_fraction": float(core_fraction),
+        "overspray_tail_fraction": float(tail_fraction),
+        "overspray_tail_sigma_fraction": float(tail_sigma_fraction),
+        "calibration_status": "ENGINEERING_DEFAULT_UNCALIBRATED",
     }
 
 def simulate_double_beta_deposition(*, sample_normalized_xy_by_path: np.ndarray, sample_area_mm2: np.ndarray, sample_facing_cosine_by_path: np.ndarray, sample_face_ids: np.ndarray, trajectory_time_s: np.ndarray, spray_on_mask: np.ndarray, hit_sample_indices_by_path: Iterable[np.ndarray], fluid_flow_ml_min: float, transfer_efficiency_percent: float, volume_solids_percent: float, footprint_width_mm: float, footprint_thickness_mm: float, number_of_coats: int = 1, alpha_x: float = 2.0, beta_x: float = 2.0, alpha_y: float = 2.0, beta_y: float = 2.0) -> dict:
