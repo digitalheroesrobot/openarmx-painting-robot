@@ -2583,7 +2583,7 @@ class ProductViewer(QWidget):
         if not parts:
             return [], pv.PolyData()
 
-        gun_polydata = parts[0].merge(parts[1:], merge_points=True)
+        gun_polydata = pv.merge(parts, merge_points=True)
         actors = []
         for part in parts:
             actor = self.plotter.add_mesh(
@@ -2621,6 +2621,9 @@ class ProductViewer(QWidget):
                 )
             except (TypeError, ValueError):
                 clearance_mm = 2.0
+            clearance_source_units = clearance_mm / max(
+                float(self._get_source_mm_factor() or 1.0), 1e-12
+            )
 
             collision = vtkCollisionDetectionFilter()
             collision.SetInputData(0, self._interactive_spray_surface)
@@ -2631,8 +2634,8 @@ class ProductViewer(QWidget):
             )
             collision.SetMatrix(1, self._interactive_matrix4x4(np.eye(4)))
             collision.SetCollisionModeToFirstContact()
-            collision.SetBoxTolerance(max(clearance_mm, 0.1))
-            collision.SetCellTolerance(max(clearance_mm, 0.1))
+            collision.SetBoxTolerance(max(clearance_source_units, 1e-4))
+            collision.SetCellTolerance(max(clearance_source_units, 1e-4))
             collision.Update()
             self._interactive_spray_collision_filter = collision
             return bool(collision.GetNumberOfContacts() > 0)
