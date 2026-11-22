@@ -2382,14 +2382,63 @@ class ProductViewer(QWidget):
             "timestamp": time.monotonic(),
         }
 
+    @staticmethod
+    def _interactive_pose_quaternion_from_direction(direction_product):
+        """Return a stable XYZW quaternion for the nozzle tool frame."""
+        z_axis = -np.asarray(direction_product, dtype=np.float64)
+        z_norm = float(np.linalg.norm(z_axis))
+        if z_norm <= 1e-12:
+            raise ValueError("Cannot build nozzle orientation from a zero direction.")
+        z_axis /= z_norm
+        reference = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        if abs(float(np.dot(reference, z_axis))) > 0.92:
+            reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        x_axis = np.cross(reference, z_axis)
+        x_axis /= max(float(np.linalg.norm(x_axis)), 1e-12)
+        y_axis = np.cross(z_axis, x_axis)
+        rotation = np.column_stack((x_axis, y_axis, z_axis))
+        trace = float(np.trace(rotation))
+        if trace > 0.0:
+            s = math.sqrt(trace + 1.0) * 2.0
+            qw = 0.25 * s
+            qx = (rotation[2, 1] - rotation[1, 2]) / s
+            qy = (rotation[0, 2] - rotation[2, 0]) / s
+            qz = (rotation[1, 0] - rotation[0, 1]) / s
+        elif rotation[0, 0] > rotation[1, 1] and rotation[0, 0] > rotation[2, 2]:
+            s = math.sqrt(1.0 + rotation[0, 0] - rotation[1, 1] - rotation[2, 2]) * 2.0
+            qw = (rotation[2, 1] - rotation[1, 2]) / s
+            qx = 0.25 * s
+            qy = (rotation[0, 1] + rotation[1, 0]) / s
+            qz = (rotation[0, 2] + rotation[2, 0]) / s
+        elif rotation[1, 1] > rotation[2, 2]:
+            s = math.sqrt(1.0 + rotation[1, 1] - rotation[0, 0] - rotation[2, 2]) * 2.0
+            qw = (rotation[0, 2] - rotation[2, 0]) / s
+            qx = (rotation[0, 1] + rotation[1, 0]) / s
+            qy = 0.25 * s
+            qz = (rotation[1, 2] + rotation[2, 1]) / s
+        else:
+            s = math.sqrt(1.0 + rotation[2, 2] - rotation[0, 0] - rotation[1, 1]) * 2.0
+            qw = (rotation[1, 0] - rotation[0, 1]) / s
+            qx = (rotation[0, 2] + rotation[2, 0]) / s
+            qy = (rotation[1, 2] + rotation[2, 1]) / s
+            qz = 0.25 * s
+        quaternion = np.asarray([qx, qy, qz, qw], dtype=np.float64)
+        quaternion /= max(float(np.linalg.norm(quaternion)), 1e-12)
+        return quaternion
+
     def _interactive_pose_to_product_frame(self, pose):
         inverse = np.linalg.inv(self._interactive_spray_transform)
         point_h = np.append(pose["nozzle_point_world"], 1.0)
         surface_h = np.append(pose["surface_point_world"], 1.0)
+        direction_product = inverse[:3, :3] @ pose["spray_direction_world"]
+        direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
         return {
             "nozzle_point": (inverse @ point_h)[:3],
             "surface_point": (inverse @ surface_h)[:3],
-            "spray_direction": inverse[:3, :3] @ pose["spray_direction_world"],
+            "spray_direction": direction_product,
+            "quaternion_xyzw": self._interactive_pose_quaternion_from_direction(
+                direction_product
+            ),
         }
 
     def _interactive_apply_paint_deposition(self, patch, pose):
@@ -2554,6 +2603,12 @@ class ProductViewer(QWidget):
             minimum_step = max(self._interactive_spray_sampling_spacing, 1e-3)
             if distance < minimum_step and angle < 2.0:
                 return False
+        if self._interactive_spray_start_timestamp is None:
+            self._interactive_spray_start_timestamp = float(pose["timestamp"])
+        relative_time = max(
+            0.0,
+            float(pose["timestamp"]) - float(self._interactive_spray_start_timestamp),
+        )
         record = {
             "nozzle_point_world": pose["nozzle_point_world"].copy(),
             "surface_point_world": pose["surface_point_world"].copy(),
@@ -2562,7 +2617,9 @@ class ProductViewer(QWidget):
             "nozzle_point_product": local_pose["nozzle_point"].copy(),
             "surface_point_product": local_pose["surface_point"].copy(),
             "spray_direction_product": local_pose["spray_direction"].copy(),
+            "quaternion_product_xyzw": local_pose["quaternion_xyzw"].copy(),
             "timestamp": float(pose["timestamp"]),
+            "t_product_s": relative_time,
             "face_index": int(pose["cell_id"]),
             "stroke_id": int(self._interactive_spray_stroke_id),
         }
@@ -2675,7 +2732,7 @@ class ProductViewer(QWidget):
             ), axis=1).sum())
 
         result = {
-            "schema": "INTERACTIVE_SURFACE_FOLLOWING_SPRAY_PATH_V1",
+            "schema": "INTERACTIVE_SURFACE_FOLLOWING_SPRAY_PATH_V2",
             "coordinate_frame": "PRODUCT_CAD_AND_WORLD",
             "standoff_source_units": self._interactive_spray_standoff,
             "cone_angle_deg": self._interactive_spray_cone_angle_deg,
@@ -2703,6 +2760,17 @@ class ProductViewer(QWidget):
             "timestamps_monotonic_s": np.asarray(
                 [item["timestamp"] for item in records], dtype=float
             ),
+            "spray_poses_product": np.asarray(
+                [
+                    [
+                        item["t_product_s"],
+                        *item["nozzle_point_product"].tolist(),
+                        *item["quaternion_product_xyzw"].tolist(),
+                    ]
+                    for item in records
+                ],
+                dtype=float,
+            ).reshape(-1, 8),
             "face_indices": np.asarray(
                 [item["face_index"] for item in records], dtype=np.int64
             ),
