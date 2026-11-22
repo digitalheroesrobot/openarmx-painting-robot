@@ -4205,8 +4205,8 @@ class ProductViewer(QWidget):
         plume_v = np.cross(direction_world, plume_u)
         plume_v /= max(float(np.linalg.norm(plume_v)), 1e-12)
         golden_angle = math.pi * (3.0 - math.sqrt(5.0))
-        axial_layers = np.linspace(0.08, 1.0, 14)
-        particles_per_layer = 28
+        axial_layers = np.linspace(0.08, 1.0, 8)
+        particles_per_layer = 16
         particle_groups = [[], [], []]
         for layer_index, axial_fraction in enumerate(axial_layers):
             axial_distance = nominal_standoff * float(axial_fraction)
@@ -4414,8 +4414,8 @@ class ProductViewer(QWidget):
             local_pose["nozzle_point"].reshape(1, 3),
             local_pose["spray_direction"].reshape(1, 3),
             self._interactive_spray_paint_footprint_angle_deg,
-            rays_per_ring=24,
-            radial_rings=(0.25, 0.50, 0.75, 1.0),
+            rays_per_ring=16,
+            radial_rings=(0.33, 0.66, 1.0),
             surface=self._interactive_spray_surface,
             locator=self._interactive_spray_locator,
         )
@@ -4523,7 +4523,7 @@ class ProductViewer(QWidget):
 
             contact_points_world = []
             contact_hit = []
-            edge_ray_count = 96
+            edge_ray_count = 32
             edge_ray_length = (
                 self._interactive_spray_standoff
                 / max(math.cos(half_angle), 1e-6)
