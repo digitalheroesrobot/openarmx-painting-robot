@@ -2658,6 +2658,19 @@ class ProductViewer(QWidget):
     def _interactive_update_cursor(self, pose):
         self._interactive_remove_live_actors()
         self._interactive_spray_latest_pose = pose
+        nozzle = pose["nozzle_point_world"]
+        direction = pose["spray_direction_world"]
+
+        # Evaluate the complete sprayer envelope before allowing this mouse
+        # sample to record or deposit paint.
+        gun_actors, gun_polydata = self._interactive_build_gun_visual(
+            nozzle, direction
+        )
+        self._interactive_spray_gun_actors = gun_actors
+        self._interactive_spray_live_actors.extend(gun_actors)
+        collision = self._interactive_check_gun_collision(gun_polydata)
+        self._interactive_spray_gun_collision = collision
+
         local_pose = self._interactive_pose_to_product_frame(pose)
         footprints = _build_spray_footprint_overlay(
             self.current_mesh,
@@ -2759,14 +2772,6 @@ class ProductViewer(QWidget):
         )
         self._interactive_spray_live_actors.append(actor)
 
-        gun_actors, gun_polydata = self._interactive_build_gun_visual(
-            nozzle, direction
-        )
-        self._interactive_spray_gun_actors = gun_actors
-        self._interactive_spray_live_actors.extend(gun_actors)
-
-        collision = self._interactive_check_gun_collision(gun_polydata)
-        self._interactive_spray_gun_collision = collision
         if collision:
             status_text = "COLLISION - SPRAY BLOCKED"
         else:
