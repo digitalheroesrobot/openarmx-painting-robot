@@ -252,16 +252,38 @@ PATCH_COLORS = [
 
 MAX_DIRECTION_ARROWS = 300
 
-# The renderer and the on-screen legend share this exact relative-thickness scale.
-FILM_THICKNESS_COLOR_STOPS = (0.0, 0.5, 0.8, 1.0, 1.5)
+# Discrete target-relative coating bands shared by interactive painting,
+# trajectory playback, and the on-screen legend.
+FILM_THICKNESS_COLOR_THRESHOLDS = (0.25, 0.50, 0.75, 1.00)
 FILM_THICKNESS_COLOR_RGB = (
-    (35, 57, 78),       # 0.0x: no deposited film (dark blue)
-    (0, 145, 210),      # 0.5x: half target (cyan)
-    (0, 190, 125),      # 0.8x: near target (green)
-    (255, 205, 45),     # 1.0x: target reached (yellow)
-    (235, 55, 45),      # 1.5x+: excessive film (red)
+    (168, 168, 168),    # <25%: unpainted / trace coating (neutral grey)
+    (45, 105, 220),     # 25-<50%: blue
+    (0, 190, 230),      # 50-<75%: cyan
+    (0, 190, 110),      # 75-<100%: green
+    (255, 205, 45),     # exactly 100%: target reached (yellow)
+    (235, 55, 45),      # >100%: excessive film (red)
 )
-FILM_THICKNESS_COLOR_HEX = ("#23394E", "#0091D2", "#00BE7D", "#FFCD2D", "#EB372D")
+FILM_THICKNESS_COLOR_HEX = (
+    "#A8A8A8", "#2D69DC", "#00BEE6", "#00BE6E", "#FFCD2D", "#EB372D"
+)
+
+
+def map_film_thickness_to_rgb(thickness_um, target_um):
+    """Map dry-film thickness to discrete 25/50/75/100% target color bands."""
+    values = np.asarray(thickness_um, dtype=np.float64)
+    target = float(target_um)
+    if not math.isfinite(target) or target <= 0.0:
+        raise ValueError("target_um must be finite and positive.")
+    if not np.all(np.isfinite(values)):
+        raise ValueError("thickness_um must contain only finite values.")
+    ratio = np.maximum(values / target, 0.0)
+    thresholds = np.asarray(FILM_THICKNESS_COLOR_THRESHOLDS, dtype=np.float64)
+    palette = np.asarray(FILM_THICKNESS_COLOR_RGB, dtype=np.uint8)
+    band_ids = np.searchsorted(thresholds, ratio, side="right")
+    # Keep exactly 100% in the target-reached (yellow) band; only values
+    # strictly above target are classified as excessive (red).
+    band_ids = np.where(ratio == 1.0, 4, band_ids)
+    return palette[band_ids]
 
 
 class ProductViewer(QWidget):
@@ -1171,8 +1193,8 @@ class ProductViewer(QWidget):
             "color: #D7E3EA; font-size: 9px; padding-left: 4px;"
         )
         self.trajectory_thickness_legend_label.setToolTip(
-            "The continuous 3D color gradient uses these same five reference "
-            "stops. Values are relative to the configured target dry-film thickness."
+            "The 3D surface uses discrete bands at 25%, 50%, 75%, and 100% "
+            "of the configured target dry-film thickness; red indicates over-target."
         )
         self._update_film_thickness_legend(
             DEFAULT_COATING_PROCESS["target_dry_film_thickness_um"]
@@ -2285,21 +2307,8 @@ class ProductViewer(QWidget):
         thickness = self._interactive_spray_face_thickness_um
         if thickness is None or len(thickness) != len(self.current_mesh.faces):
             return None
-        base = np.array([168.0, 168.0, 168.0], dtype=np.float64)
-        color = QColor(self._trajectory_paint_color_hex or "#D95B43")
-        paint = np.array([color.red(), color.green(), color.blue()], dtype=np.float64)
         target = max(float(self._interactive_spray_paint_target_um), 1e-9)
-        ratio = np.maximum(thickness / target, 0.0)
-
-        # 0..1 target: neutral gray -> selected paint color.
-        below = np.clip(ratio, 0.0, 1.0)[:, None]
-        rgb = base[None, :] * (1.0 - below) + paint[None, :] * below
-
-        # 1..1.5 target: selected paint color -> red warning for over-build.
-        over = np.clip((ratio - 1.0) / 0.5, 0.0, 1.0)[:, None]
-        warning = np.asarray([235.0, 55.0, 45.0], dtype=np.float64)
-        rgb = rgb * (1.0 - over) + warning[None, :] * over
-        return np.asarray(np.rint(np.clip(rgb, 0.0, 255.0)), dtype=np.uint8)
+        return map_film_thickness_to_rgb(thickness, target)
 
     def _interactive_refresh_paint_visual(self, render=True):
         """Refresh the single persistent product actor after coating changes."""
@@ -4772,23 +4781,23 @@ class ProductViewer(QWidget):
             return
 
         labels = (
-            "NO FILM",
-            "50% OF TARGET",
-            "80% OF TARGET",
-            "TARGET REACHED",
-            "150%+ — EXCESS FILM",
+            ("<25%", 0.0, "UNPAINTED / TRACE"),
+            ("25%", 0.25, "25–<50%"),
+            ("50%", 0.50, "50–<75%"),
+            ("75%", 0.75, "75–<100%"),
+            ("100%", 1.00, "TARGET REACHED"),
+            (">100%", 1.01, "OVER TARGET"),
         )
         entries = []
-        for ratio, color_hex, meaning in zip(
-            FILM_THICKNESS_COLOR_STOPS,
+        for color_hex, (threshold_label, ratio, meaning) in zip(
             FILM_THICKNESS_COLOR_HEX,
             labels,
         ):
             thickness = target * ratio
-            value = f"{thickness:.1f} µm"
+            value = f"{thickness:.1f} µm" if ratio > 0.0 else "0 µm"
             swatch = (
                 f'<span style="color:{color_hex}; font-size:15px;">■</span> '
-                f'<span style="color:#E5EDF2;">{value}</span> '
+                f'<span style="color:#E5EDF2;">{threshold_label} ({value})</span> '
                 f'<span style="color:#AFC2CB;">{meaning}</span>'
             )
             entries.append(swatch)
@@ -4818,17 +4827,9 @@ class ProductViewer(QWidget):
         display_ids = cache["target_display_indices"]
         valid = display_ids >= 0
         face_values = cache["deposition_face_thickness_um"][cache["target_face_ids"]]
-        ratios = np.clip(face_values / target, 0.0, 1.5)
-        stops = np.asarray(FILM_THICKNESS_COLOR_STOPS, dtype=np.float64)
-        palette = np.asarray(FILM_THICKNESS_COLOR_RGB, dtype=np.float64)
         self._update_film_thickness_legend(target)
-        mapped = np.column_stack([
-            np.interp(ratios, stops, palette[:, channel])
-            for channel in range(3)
-        ])
-        base[display_ids[valid]] = np.clip(
-            np.rint(mapped[valid]), 0, 255
-        ).astype(np.uint8)
+        mapped = map_film_thickness_to_rgb(face_values, target)
+        base[display_ids[valid]] = mapped[valid]
         self._set_trajectory_surface_rgb(base)
         # Include every Stage 2 target face, including zero-film faces.
         # Statistics are weighted by physical triangle area, not face count.
@@ -4852,8 +4853,8 @@ class ProductViewer(QWidget):
             "Predicted dry-film thickness from the time-integrated Double-Beta "
             "spray model. The 90–110% in-band percentage is area-weighted; "
             "under-band and over-band areas are reported separately. Color scale: "
-            "dark blue=0, cyan=0.5× target, green=0.8×, yellow=1.0×, red=1.5× "
-            "or above. Only visible samples "
+            "grey=<25%, blue=25%, cyan=50%, green=75%, yellow=100%, "
+            "red=>100%. Colors are discrete target-relative bands. Only visible samples "
             "inside the spray footprint receive deposition. The model is not "
             "calibrated; valve ON/OFF delays, evaporation, atomization and "
             "measured coupon validation are not included. "
