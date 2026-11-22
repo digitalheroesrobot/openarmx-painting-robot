@@ -2260,7 +2260,7 @@ class ProductViewer(QWidget):
             (
                 f"SPRAY CURSOR ACTIVE  |  STANDOFF {self._interactive_spray_standoff:.3f} "
                 f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
-                "MOVE OVER PRODUCT: AUTO RECORD  |  FINISH IN RIGHT PANEL"
+                "MOVE: PREVIEW  |  HOLD LEFT MOUSE: PAINT  |  FINISH IN RIGHT PANEL"
             ),
             position="upper_left",
             font_size=10,
