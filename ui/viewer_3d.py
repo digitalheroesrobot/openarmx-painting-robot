@@ -7172,6 +7172,9 @@ class ProductViewer(QWidget):
                 self._update_trajectory_playback_visuals(self._playback_index)
                 self.plotter.render()
 
+        if getattr(self, "_interactive_spray_display_mode", "thickness") == "paint_color":
+            self._interactive_refresh_paint_visual(render=True)
+
     def _on_trajectory_playback_slider_changed(self, value):
         if self.display_mode != "trajectory" or self.trajectory_data is None:
             return
