@@ -35,6 +35,7 @@ from vtkmodules.vtkFiltersModeling import vtkCollisionDetectionFilter
 from PySide6.QtCore import QEvent, Qt, Signal, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QApplication,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -3197,6 +3198,20 @@ class ProductViewer(QWidget):
     def _on_interactive_spray_mouse_move(self, interactor, event):
         if not self._interactive_spray_active:
             return
+
+        # VTK release notifications can be missed by some Qt/VTK window
+        # integrations. Poll Qt's authoritative global button state on every
+        # motion event as a fail-safe: paint is allowed only while LEFT is
+        # physically held, never merely because a press event happened once.
+        if (
+            self._interactive_spray_recording
+            and not bool(QApplication.mouseButtons() & Qt.MouseButton.LeftButton)
+        ):
+            self._interactive_spray_recording = False
+            self._interactive_spray_last_deposition_timestamp = None
+            self._interactive_spray_previous_nozzle_world = None
+            self._interactive_spray_last_speed_mm_s = 0.0
+
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y)
         if pose is None:
@@ -3229,6 +3244,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_recording = False
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_spray_latest_pose = None
         self.plotter.render()
 
