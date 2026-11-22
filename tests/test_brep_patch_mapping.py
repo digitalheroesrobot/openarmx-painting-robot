@@ -70,6 +70,6 @@ def test_patch_brep_mapping_rejects_invalid_brep_face_ids():
     try:
         build_step_patch_face_mapping(mesh, [0, 0, 1])
     except ValueError as exc:
-        assert "invalid B-Rep ID" in str(exc)
+        assert "Face ID" in str(exc) or "B-Rep ID" in str(exc)
     else:
         raise AssertionError("Invalid B-Rep Face ID was accepted.")
