@@ -35,6 +35,12 @@ DEFAULT_SPRAYER_PROFILE = {
     "nozzle_length_mm": 25.0,
     "gun_body_length_mm": 220.0,
     "gun_body_diameter_mm": 45.0,
+    "gun_collision_clearance_mm": 2.0,
+    "deposition_model": "beta_gaussian_overspray",
+    "deposition_beta": 2.0,
+    "core_deposition_fraction": 0.88,
+    "overspray_tail_fraction": 0.12,
+    "overspray_tail_sigma_fraction": 0.35,
     "tcp_to_nozzle_tip_mm": 0.0,
     "standoff_mm": 180.0,
     "spray_cone_angle_deg": 45.0,
@@ -476,6 +482,11 @@ class SprayerSettingsDialog(QDialog):
             ("nozzle_length_mm", "Nozzle length (mm)", 0.0, 300.0, 1),
             ("gun_body_length_mm", "Gun body length (mm)", 0.0, 600.0, 1),
             ("gun_body_diameter_mm", "Gun body diameter (mm)", 0.0, 200.0, 1),
+            ("gun_collision_clearance_mm", "Gun collision clearance (mm)", 0.0, 20.0, 1),
+            ("deposition_beta", "Core Beta shape", 0.5, 20.0, 2),
+            ("core_deposition_fraction", "Core deposition fraction (%)", 0.0, 100.0, 1),
+            ("overspray_tail_fraction", "Overspray tail fraction (%)", 0.0, 100.0, 1),
+            ("overspray_tail_sigma_fraction", "Overspray tail sigma / R", 0.05, 2.0, 2),
             ("tcp_to_nozzle_tip_mm", "TCP to nozzle tip (mm)", 0.0, 500.0, 1),
             ("travel_speed_mm_s", "Base gun travel speed (mm/s)", 1.0, 2000.0, 1),
             ("min_travel_speed_mm_s", "Minimum curved/corner speed (mm/s)", 1.0, 2000.0, 1),
@@ -551,6 +562,29 @@ class SprayerSettingsDialog(QDialog):
                 spin.setToolTip(
                     "Acceleration limit used to smooth speed changes along each "
                     "spray segment; this is not a robot controller limit."
+                )
+            elif key == "gun_collision_clearance_mm":
+                spin.setToolTip(
+                    "Conservative clearance added to the sprayer collision envelope. "
+                    "Use a measured value from the actual gun/tool geometry."
+                )
+            elif key == "deposition_beta":
+                spin.setToolTip(
+                    "Beta profile shape for the nominal spray footprint. "
+                    "Higher values concentrate deposition toward the center."
+                )
+            elif key == "core_deposition_fraction":
+                spin.setToolTip(
+                    "Fraction of deposited paint assigned to the nominal Beta core."
+                )
+            elif key == "overspray_tail_fraction":
+                spin.setToolTip(
+                    "Fraction assigned to the weak infinite-range overspray tail."
+                )
+            elif key == "overspray_tail_sigma_fraction":
+                spin.setToolTip(
+                    "Gaussian overspray-tail width as a fraction of the nominal "
+                    "spray radius. This controls how far the weak tail extends."
                 )
             elif key == "spray_cone_angle_deg":
                 spin.setToolTip(
@@ -720,11 +754,16 @@ class SprayerSettingsDialog(QDialog):
             2.0 * standoff_mm
             * math.tan(math.radians(full_angle_deg * 0.5))
         )
+        core_fraction = float(self.fields["core_deposition_fraction"].value())
+        tail_fraction = float(self.fields["overspray_tail_fraction"].value())
+        tail_sigma = float(self.fields["overspray_tail_sigma_fraction"].value())
         self.pattern_description.setText(
-            "Round cone only: circular footprint on the target surface. "
-            f"Calculated diameter: {footprint_diameter_mm:.1f} mm "
-            f"(working distance {standoff_mm:.1f} mm, full included angle "
-            f"{full_angle_deg:.1f}°). The angle is read from this saved profile."
+            "Nominal round cone + weak infinite-range Gaussian overspray tail. "
+            f"Core width: {footprint_diameter_mm:.1f} mm | "
+            f"core/tail: {core_fraction:.1f}/{tail_fraction:.1f}% | "
+            f"tail sigma/R: {tail_sigma:.2f} | "
+            f"working distance {standoff_mm:.1f} mm | "
+            f"full angle {full_angle_deg:.1f}°."
         )
 
     def _collect_profile(self):
