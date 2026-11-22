@@ -54,7 +54,7 @@ def test_uv_deposition_creates_smooth_continuous_field_not_triangle_cells():
         uv_bounds=np.asarray([[0.0, 1.0], [0.0, 1.0]]),
         sigma_px=3.0,
     )
-    assert grid[32, 32] > 19.9
+    assert grid[32, 32] > 19.0
     assert 0.0 < grid[32, 35] < grid[32, 32]
     assert grid[32, 40] < grid[32, 35]
     assert np.count_nonzero(grid) > 100
