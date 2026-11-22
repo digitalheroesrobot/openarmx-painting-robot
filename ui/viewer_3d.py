@@ -461,6 +461,12 @@ class ProductViewer(QWidget):
         self._interactive_spray_right_release_observer_id = interactor.AddObserver(
             "RightButtonReleaseEvent", self._on_interactive_spray_right_release, 3.0
         )
+        self._interactive_spray_wheel_forward_observer_id = interactor.AddObserver(
+            "MouseWheelForwardEvent", self._on_interactive_spray_wheel, 3.0
+        )
+        self._interactive_spray_wheel_backward_observer_id = interactor.AddObserver(
+            "MouseWheelBackwardEvent", self._on_interactive_spray_wheel, 3.0
+        )
         self._interactive_spray_leave_observer_id = interactor.AddObserver(
             "LeaveEvent", self._on_interactive_spray_leave, 3.0
         )
@@ -3351,6 +3357,19 @@ class ProductViewer(QWidget):
     def _on_interactive_spray_right_release(self, interactor, event):
         self._interactive_spray_camera_dragging = False
         self._interactive_spray_camera_last_position = None
+
+    def _on_interactive_spray_wheel(self, interactor, event):
+        """Keep wheel zoom available while the camera style is replaced."""
+        if (
+            not self._interactive_spray_active
+            or self._interactive_view_mode != "spray"
+        ):
+            return
+        event_name = str(event)
+        factor = 1.1 if "Forward" in event_name else (1.0 / 1.1)
+        self.plotter.camera.Zoom(factor)
+        self.plotter.reset_camera_clipping_range()
+        self.plotter.render()
 
     def _rotate_camera_from_spray_drag(self, interactor):
         current = tuple(int(value) for value in interactor.GetEventPosition())
