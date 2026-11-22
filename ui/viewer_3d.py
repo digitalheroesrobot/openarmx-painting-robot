@@ -430,6 +430,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_texture_actors = {}
         self._interactive_spray_texture_layout = {}
         self._interactive_spray_texture_objects = {}
+        self._interactive_spray_dirty_face_ids = set()
         self._interactive_spray_base_opacity = None
         self._interactive_spray_face_area_mm2 = None
         self._interactive_spray_last_deposition_timestamp = None
@@ -2373,6 +2374,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_texture_actors = {}
         self._interactive_spray_texture_layout = {}
         self._interactive_spray_texture_objects = {}
+        self._interactive_spray_dirty_face_ids = set()
         self._interactive_spray_base_opacity = None
         self._interactive_spray_face_area_mm2 = None
         self._interactive_spray_last_deposition_timestamp = None
@@ -2583,7 +2585,13 @@ class ProductViewer(QWidget):
             return
         faces = self._interactive_spray_surface_field.get("faces", {})
         target = max(float(self._interactive_spray_paint_target_um), 1e-9)
-        for face_id, face_record in faces.items():
+        dirty_ids = set(self._interactive_spray_dirty_face_ids)
+        if not dirty_ids:
+            dirty_ids = {int(value) for value in faces}
+        for face_id in sorted(dirty_ids):
+            face_record = faces.get(face_id, faces.get(str(face_id)))
+            if face_record is None:
+                continue
             face_id = int(face_id)
             actor = self._interactive_spray_texture_actors.get(face_id)
             grid = face_record.get("thickness_grid_um")
@@ -2604,6 +2612,7 @@ class ProductViewer(QWidget):
             )
             actor.SetTexture(texture)
             self._interactive_spray_texture_objects[face_id] = texture
+        self._interactive_spray_dirty_face_ids.clear()
         self._interactive_spray_paint_state_dirty = False
 
     def _interactive_export_surface_field(self):
@@ -3098,6 +3107,7 @@ class ProductViewer(QWidget):
                     face_record["samples_by_triangle"][
                         provenance["triangle_id"]
                     ] = provenance
+                self._interactive_spray_dirty_face_ids.add(int(face_id))
 
         self._interactive_spray_paint_state_dirty = True
 
