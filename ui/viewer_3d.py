@@ -3007,6 +3007,8 @@ class ProductViewer(QWidget):
             provenance_by_face = {}
             for local_index, triangle_index in enumerate(ids):
                 triangle_index = int(triangle_index)
+                if not bool(brep_context["triangle_uv_valid"][triangle_index]):
+                    continue
                 uv_mapping = get_step_triangle_surface_coordinates(
                     self.current_mesh, triangle_index,
                     np.asarray([1.0 / 3.0] * 3, dtype=np.float64),
