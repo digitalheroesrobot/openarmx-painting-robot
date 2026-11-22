@@ -65,7 +65,7 @@ def test_shorter_interval_for_higher_travel_speed_deposits_less_paint():
 def test_back_facing_surface_receives_no_deposition():
     result = calculate_cone_deposition_step(
         surface_points_mm=np.array([[100.0, 0.0, 0.0]]),
-        surface_normals=np.array([[-1.0, 0.0, 0.0]]),
+        surface_normals=np.array([[1.0, 0.0, 0.0]]),
         sample_area_mm2=np.array([100.0]),
         nozzle_position_mm=np.array([0.0, 0.0, 0.0]),
         spray_direction=np.array([1.0, 0.0, 0.0]),
