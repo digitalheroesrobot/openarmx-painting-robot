@@ -420,6 +420,15 @@ class ProductViewer(QWidget):
         self._interactive_mouse_move_observer_id = interactor.AddObserver(
             "MouseMoveEvent", self._on_interactive_spray_mouse_move, 2.0
         )
+        self._interactive_spray_press_observer_id = interactor.AddObserver(
+            "LeftButtonPressEvent", self._on_interactive_spray_left_press, 3.0
+        )
+        self._interactive_spray_release_observer_id = interactor.AddObserver(
+            "LeftButtonReleaseEvent", self._on_interactive_spray_left_release, 3.0
+        )
+        self._interactive_spray_leave_observer_id = interactor.AddObserver(
+            "LeaveEvent", self._on_interactive_spray_leave, 3.0
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -2655,6 +2664,150 @@ class ProductViewer(QWidget):
             self._interactive_spray_collision_filter = None
             return True
 
+    def _interactive_add_distribution_tail_visual(self, pose):
+        """Draw one nominal cone plus a faint, distance-decaying overspray tail."""
+        if self._interactive_spray_surface is None or self._interactive_spray_locator is None:
+            return
+
+        nozzle_world = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
+        direction_world = np.asarray(pose["spray_direction_world"], dtype=np.float64)
+        direction_world /= max(float(np.linalg.norm(direction_world)), 1e-12)
+
+        inverse = np.linalg.inv(self._interactive_spray_transform)
+        nozzle_local = (inverse @ np.append(nozzle_world, 1.0))[:3]
+        direction_local = inverse[:3, :3] @ direction_world
+        direction_local /= max(float(np.linalg.norm(direction_local)), 1e-12)
+
+        half_angle = math.radians(self._interactive_spray_cone_angle_deg) * 0.5
+        nominal_standoff = float(self._interactive_spray_standoff)
+        nominal_radius = nominal_standoff * math.tan(half_angle)
+
+        try:
+            sigma_fraction = max(
+                float(self._interactive_sprayer_profile.get(
+                    "overspray_tail_sigma_fraction", 0.35
+                )),
+                0.05,
+            )
+        except (TypeError, ValueError):
+            sigma_fraction = 0.35
+
+        # Three-sigma is the visual cutoff for the weak infinite-range tail.
+        tail_sigma_mm = max(nominal_radius * sigma_fraction, 1e-6)
+        tail_extension = max(3.0 * tail_sigma_mm, nominal_standoff * 0.25)
+        maximum_axial_distance = nominal_standoff + tail_extension
+
+        reference = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        if abs(float(np.dot(reference, direction_local))) > 0.9:
+            reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        basis_u = np.cross(direction_local, reference)
+        basis_u /= max(float(np.linalg.norm(basis_u)), 1e-12)
+        basis_v = np.cross(direction_local, basis_u)
+        basis_v /= max(float(np.linalg.norm(basis_v)), 1e-12)
+
+        segments_by_band = [[], [], []]
+        ray_count = 24
+        radial_fractions = (0.25, 0.50, 0.75, 1.0)
+        band_boundaries = (
+            nominal_standoff,
+            nominal_standoff + tail_extension / 3.0,
+            nominal_standoff + 2.0 * tail_extension / 3.0,
+            maximum_axial_distance,
+        )
+
+        for radial_fraction in radial_fractions:
+            theta = half_angle * radial_fraction
+            for ray_index in range(ray_count):
+                phi = 2.0 * math.pi * ray_index / ray_count
+                radial = math.cos(phi) * basis_u + math.sin(phi) * basis_v
+                ray_local = (
+                    math.cos(theta) * direction_local
+                    + math.sin(theta) * radial
+                )
+                ray_local /= max(float(np.linalg.norm(ray_local)), 1e-12)
+
+                ray_max_length = maximum_axial_distance / max(
+                    abs(float(np.dot(ray_local, direction_local))), 0.25
+                )
+                endpoint_local = nozzle_local + ray_local * ray_max_length
+                intersections = vtkPoints()
+                intersected_cells = vtkIdList()
+                hit = self._interactive_spray_locator.IntersectWithLine(
+                    nozzle_local.tolist(),
+                    endpoint_local.tolist(),
+                    intersections,
+                    intersected_cells,
+                )
+
+                end_local = endpoint_local
+                if hit and intersections.GetNumberOfPoints() > 0:
+                    nearest_distance = float("inf")
+                    nearest_point = None
+                    for hit_index in range(intersections.GetNumberOfPoints()):
+                        point = np.asarray(
+                            intersections.GetPoint(hit_index),
+                            dtype=np.float64,
+                        )
+                        distance = float(np.linalg.norm(point - nozzle_local))
+                        if distance < nearest_distance:
+                            nearest_distance = distance
+                            nearest_point = point
+                    if nearest_point is not None:
+                        end_local = nearest_point
+
+                end_distance = float(np.linalg.norm(end_local - nozzle_local))
+                if end_distance <= 1e-6:
+                    continue
+
+                for band_index in range(3):
+                    band_start = band_boundaries[band_index]
+                    band_end = band_boundaries[band_index + 1]
+                    start_fraction = min(
+                        max(band_start / max(end_distance, 1e-9), 0.0),
+                        1.0,
+                    )
+                    end_fraction = min(
+                        max(band_end / max(end_distance, 1e-9), 0.0),
+                        1.0,
+                    )
+                    if end_fraction <= start_fraction + 1e-6:
+                        continue
+
+                    start_point_local = nozzle_local + (
+                        end_local - nozzle_local
+                    ) * start_fraction
+                    end_point_local = nozzle_local + (
+                        end_local - nozzle_local
+                    ) * end_fraction
+                    start_point_world = (
+                        self._interactive_spray_transform
+                        @ np.append(start_point_local, 1.0)
+                    )[:3]
+                    end_point_world = (
+                        self._interactive_spray_transform
+                        @ np.append(end_point_local, 1.0)
+                    )[:3]
+                    segments_by_band[band_index].append(
+                        (start_point_world, end_point_world)
+                    )
+
+        opacities = (0.075, 0.045, 0.020)
+        for band_segments, opacity in zip(segments_by_band, opacities):
+            if not band_segments:
+                continue
+            polydata = self._build_line_polydata(band_segments)
+            if polydata is None:
+                continue
+            actor = self.plotter.add_mesh(
+                polydata,
+                color="#FFD180",
+                opacity=float(opacity),
+                line_width=1.0,
+                lighting=False,
+                pickable=False,
+            )
+            self._interactive_spray_live_actors.append(actor)
+
     def _interactive_update_cursor(self, pose):
         self._interactive_remove_live_actors()
         self._interactive_spray_latest_pose = pose
@@ -2717,43 +2870,32 @@ class ProductViewer(QWidget):
         nozzle = pose["nozzle_point_world"]
         hit = pose["surface_point_world"]
         direction = pose["spray_direction_world"]
-        half_angle = math.radians(self._interactive_spray_cone_angle_deg) * 0.5
-        radius = self._interactive_spray_standoff * math.tan(half_angle)
-        extended_half_angle = math.radians(
-            self._interactive_spray_paint_footprint_angle_deg
-        ) * 0.5
-        extended_radius = self._interactive_spray_standoff * math.tan(
-            extended_half_angle
-        )
 
+        # Keep exactly one cone: the configured nominal spray cone.
+        half_angle = math.radians(self._interactive_spray_cone_angle_deg) * 0.5
+        nominal_radius = self._interactive_spray_standoff * math.tan(half_angle)
         cone = pv.Cone(
-            center=((nozzle + hit) * 0.5),
-            direction=-direction,
+            center=nozzle + direction * (self._interactive_spray_standoff * 0.5),
+            direction=direction,
             height=self._interactive_spray_standoff,
-            radius=max(radius, 1e-6),
-            resolution=32,
+            radius=max(nominal_radius, 1e-6),
+            resolution=48,
         )
         actor = self.plotter.add_mesh(
-            cone, color="#FFE082", opacity=0.10,
-            style="wireframe", line_width=1.0,
-            lighting=False, pickable=False,
+            cone,
+            color="#FFE082",
+            opacity=0.16,
+            style="wireframe",
+            line_width=1.25,
+            lighting=False,
+            pickable=False,
         )
         self._interactive_spray_live_actors.append(actor)
 
-        if extended_radius > radius * 1.001:
-            overspray_cone = pv.Cone(
-                center=((nozzle + hit) * 0.5),
-                direction=-direction,
-                height=self._interactive_spray_standoff,
-                radius=max(extended_radius, radius + 1e-6),
-                resolution=32,
-            )
-            actor = self.plotter.add_mesh(
-                overspray_cone, color="#FFB74D", opacity=0.035,
-                style="wireframe", line_width=1.0,
-                lighting=False, pickable=False,
-            )
-            self._interactive_spray_live_actors.append(actor)
+        # Extend the spray visually with a weak, distance-decaying distribution.
+        # Each ray stops at the first product surface; a ray with no hit fades
+        # out at the configured distribution cutoff.
+        self._interactive_add_distribution_tail_visual(pose)
 
         # Faint nozzle-to-surface direction vector.
         arrow_length = max(self._interactive_spray_standoff * 0.92, 1e-6)
@@ -2895,6 +3037,15 @@ class ProductViewer(QWidget):
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_latest_pose = None
         self.plotter.render()
+
+    def _on_interactive_spray_leave(self, interactor, event):
+        # Never keep spraying after the pointer leaves the 3D viewport.
+        if not self._interactive_spray_active:
+            return
+        self._interactive_spray_recording = False
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_latest_pose = None
 
     def finish_interactive_spray_path(self):
         """Finish input and return the recorded path without changing Stage 3 data."""
