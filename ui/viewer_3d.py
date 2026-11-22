@@ -3058,7 +3058,7 @@ class ProductViewer(QWidget):
                 )
                 provenance_by_face.setdefault(face_id, []).append({
                     "triangle_id": triangle_index,
-                    "uv": np.asarray(uv_mapping["uv"], dtype=float).tolist(),
+                    "uv": np.asarray(sample_uv, dtype=float).tolist(),
                     "thickness_um": float(
                         self._interactive_spray_face_thickness_um[triangle_index]
                     ),
