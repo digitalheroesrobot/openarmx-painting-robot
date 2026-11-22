@@ -77,3 +77,18 @@ def test_back_facing_surface_receives_no_deposition():
     )
 
     assert float(result["deposited_volume_mm3"][0]) == 0.0
+
+
+def test_overspray_tail_does_not_extend_behind_nozzle():
+    result = _run(
+        0.0,
+        [
+            [-100.0, 0.0, 0.0],
+            [-100.0, 60.0, 0.0],
+        ],
+    )
+
+    assert not bool(result["inside_cone"][0])
+    assert not bool(result["overspray_outside_cone"][0])
+    assert float(result["deposited_volume_mm3"][0]) == 0.0
+    assert float(result["deposited_volume_mm3"][1]) == 0.0
