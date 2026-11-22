@@ -271,21 +271,48 @@ FILM_THICKNESS_COLOR_HEX = (
 
 
 def map_film_thickness_to_rgb(thickness_um, target_um):
-    """Map dry-film thickness to discrete 25/50/75/100% target color bands."""
+    """Map film thickness continuously so even the first spray pass is visible.
+
+    The previous 25%-wide discrete bands made every deposit below 12.5 um
+    look exactly like an unpainted surface for a 50 um target. A continuous
+    ramp now exposes early wetting and gradual coat build-up without changing
+    the underlying physical thickness field.
+    """
     values = np.asarray(thickness_um, dtype=np.float64)
     target = float(target_um)
     if not math.isfinite(target) or target <= 0.0:
         raise ValueError("target_um must be finite and positive.")
     if not np.all(np.isfinite(values)):
         raise ValueError("thickness_um must contain only finite values.")
+
     ratio = np.maximum(values / target, 0.0)
-    thresholds = np.asarray(FILM_THICKNESS_COLOR_THRESHOLDS, dtype=np.float64)
-    palette = np.asarray(FILM_THICKNESS_COLOR_RGB, dtype=np.uint8)
-    band_ids = np.searchsorted(thresholds, ratio, side="right")
-    # Exactly 100% is target reached (yellow); every value above target
-    # belongs to the excessive-film (red) band.
-    band_ids = np.where(ratio > 1.0, 5, band_ids)
-    return palette[band_ids]
+    # Dense low-thickness knots are intentional: the first few micrometres
+    # must be visible rather than hidden in a large unpainted color band.
+    knots = np.asarray(
+        [0.0, 0.005, 0.02, 0.05, 0.25, 0.50, 0.75, 1.0, 1.5],
+        dtype=np.float64,
+    )
+    palette = np.asarray(
+        [
+            [168, 168, 168],  # untouched CAD surface
+            [145, 155, 170],  # trace wetting
+            [105, 130, 175],  # thin initial coat
+            [45, 105, 220],   # visible blue coat
+            [0, 190, 230],
+            [0, 190, 110],
+            [125, 205, 55],
+            [255, 205, 45],
+            [235, 55, 45],
+        ],
+        dtype=np.float64,
+    )
+    flat = np.clip(ratio.reshape(-1), knots[0], knots[-1])
+    channels = [
+        np.interp(flat, knots, palette[:, channel])
+        for channel in range(3)
+    ]
+    rgb = np.stack(channels, axis=1).reshape(values.shape + (3,))
+    return np.clip(np.rint(rgb), 0, 255).astype(np.uint8)
 
 
 class ProductViewer(QWidget):
@@ -2532,6 +2559,23 @@ class ProductViewer(QWidget):
                     texture_coordinates.reshape(-1, 2).astype(np.float32)
                 )
 
+                # Reuse the original mesh's vertex normals on the UV render
+                # surface. Vertices are duplicated per triangle for Face-local
+                # UV seams, but matching point normals keep the CAD surface
+                # visually smooth across tessellation boundaries.
+                source_vertex_normals = np.asarray(
+                    self.current_mesh.vertex_normals, dtype=np.float64
+                )
+                if (
+                    source_vertex_normals.shape
+                    == (len(self.current_mesh.vertices), 3)
+                    and np.isfinite(source_vertex_normals).all()
+                ):
+                    point_normals = source_vertex_normals[source_triangles].reshape(-1, 3)
+                    normal_lengths = np.linalg.norm(point_normals, axis=1)
+                    point_normals /= np.maximum(normal_lengths[:, None], 1e-12)
+                    textured_mesh.point_data["Normals"] = point_normals.astype(np.float32)
+
                 base_image = np.full(
                     (resolution, resolution, 3), 168, dtype=np.uint8
                 )
@@ -2543,11 +2587,16 @@ class ProductViewer(QWidget):
                 actor = self.plotter.add_mesh(
                     textured_mesh,
                     texture=texture,
-                    lighting=False,
+                    lighting=True,
                     smooth_shading=False,
+                    ambient=0.22,
+                    diffuse=0.78,
+                    specular=0.28,
+                    specular_power=28.0,
                     pickable=False,
                     name=f"interactive_brep_coating_face_{face_id}",
                 )
+                actor.GetProperty().SetInterpolationToPhong()
                 actor.SetOrigin(0.0, 0.0, 0.0)
                 actor.SetUserMatrix(
                     self._vtk_matrix_from_numpy(self._actor_matrix_array())
@@ -2598,9 +2647,24 @@ class ProductViewer(QWidget):
             grid = face_record.get("thickness_grid_um")
             if actor is None or grid is None:
                 continue
-            rgb = map_film_thickness_to_rgb(
-                np.asarray(grid, dtype=np.float64), target
+            thickness_values = np.asarray(grid, dtype=np.float64)
+            rgb = map_film_thickness_to_rgb(thickness_values, target)
+
+            # A face becomes progressively glossier as its deposited film
+            # builds. The UV texture carries the spatial color/thickness
+            # pattern; the material response adds the wet-coating highlight.
+            positive = thickness_values[thickness_values > 1e-6]
+            wetness = (
+                float(np.clip(np.percentile(positive, 90) / target, 0.0, 1.0))
+                if positive.size else 0.0
             )
+            prop = actor.GetProperty()
+            prop.SetInterpolationToPhong()
+            prop.SetAmbient(0.18 + 0.08 * wetness)
+            prop.SetDiffuse(0.82 - 0.08 * wetness)
+            prop.SetSpecular(0.18 + 0.62 * wetness)
+            prop.SetSpecularPower(18.0 + 42.0 * wetness)
+
             # VTK texture image rows are bottom-up relative to UV v.
             image = np.ascontiguousarray(np.flipud(rgb), dtype=np.uint8)
             texture = pv.Texture(
@@ -2612,6 +2676,7 @@ class ProductViewer(QWidget):
                 ),
             )
             actor.SetTexture(texture)
+            actor.GetMapper().Modified()
             self._interactive_spray_texture_objects[face_id] = texture
         self._interactive_spray_dirty_face_ids.clear()
         self._interactive_spray_paint_state_dirty = False
