@@ -4864,7 +4864,16 @@ def generate_spray_trajectory(
         "segments": ordered["segments"],
         "surface_boundary_splits": ordered.get("surface_boundary_splits", {}),
         "step_surface_refinement": ordered.get("step_surface_refinement", {
-            "status": "NOT_APPLICABLE", "normal_source": "DISPLAY_MESH"
+            "status": (
+                "EXACT_BREP_SURFACE_SAMPLING"
+                if sampling_result.get("surface_geometry_source") == "ORIGINAL_STEP_BREP_SURFACE"
+                else "NOT_APPLICABLE"
+            ),
+            "normal_source": (
+                "ORIGINAL_STEP_BREP_SURFACE"
+                if sampling_result.get("surface_geometry_source") == "ORIGINAL_STEP_BREP_SURFACE"
+                else "DISPLAY_MESH"
+            ),
         }),
         "surface_geometry_source": sampling_result.get(
             "surface_geometry_source", "DISPLAY_MESH_TRIANGLES"
@@ -4995,6 +5004,17 @@ def _build_saved_report(
         "path_metrics": trajectory["path_metrics"],
         "inter_segment_travel_plan": trajectory.get("inter_segment_travel_plan", {}),
         "surface_boundary_splits": trajectory.get("surface_boundary_splits", {}),
+        "surface_geometry": {
+            "geometry_source": trajectory.get(
+                "surface_geometry_source", "DISPLAY_MESH_TRIANGLES"
+            ),
+            "patch_brep_face_mapping": trajectory.get(
+                "patch_brep_face_mapping"
+            ),
+            "mapping_scope": (
+                "MANY_TO_MANY; Stage 2 statuses remain per source triangle"
+            ),
+        },
         "segments": trajectory["segments"],
         "path_statistics": trajectory.get("path_statistics", {}),
         "trajectory_validation": trajectory.get("trajectory_validation", {}),
@@ -5066,7 +5086,11 @@ def _build_saved_report(
             "Coating thickness is not calculated.",
             "No actual spray-gun CAD or calibrated TCP offset is applied.",
             "The nozzle roll axis is a provisional geometric reference, not a manufacturer-defined tool frame.",
-            "Surface samples and normals currently come from STL triangles, not exact STEP B-Rep face geometry.",
+            (
+                "Surface sample positions and normals are evaluated on original STEP B-Rep Faces; triangle indices are retained only as source mapping metadata."
+                if trajectory.get("surface_geometry_source") == "ORIGINAL_STEP_BREP_SURFACE"
+                else "Surface samples and normals come from display-mesh triangles because STL inputs do not contain original CAD surfaces."
+            ),
             "Open or non-watertight mesh normals may have uncertain outward direction and require review.",
             "The product CAD-to-World rigid transform is recorded and world-coordinate arrays are exported.",
             "The initial generator uses global PCA-projected serpentine sweeps over all sampled paintable surfaces; local mesh normals guide nozzle orientation, and only 3D spatial gaps split segments.",
