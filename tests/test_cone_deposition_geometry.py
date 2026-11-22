@@ -7,7 +7,7 @@ def _run(nozzle_x, points, dt=0.1, speed=100.0):
     points = np.asarray(points, dtype=float)
     return calculate_cone_deposition_step(
         surface_points_mm=points,
-        surface_normals=np.tile([1.0, 0.0, 0.0], (len(points), 1)),
+        surface_normals=np.tile([-1.0, 0.0, 0.0], (len(points), 1)),
         sample_area_mm2=np.full(len(points), 100.0),
         nozzle_position_mm=np.array([nozzle_x, 0.0, 0.0]),
         spray_direction=np.array([1.0, 0.0, 0.0]),
