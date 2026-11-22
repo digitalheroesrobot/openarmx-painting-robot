@@ -1287,7 +1287,7 @@ class MainWindow(QMainWindow):
         self.interactive_spray_path_button.setObjectName("SecondaryButton")
         self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
         self.interactive_spray_path_button.setToolTip(
-            "Finish the automatically recorded interactive spray path and optimize its stroke route."
+            "Finish the interactive spray path and optimize its recorded stroke route. Hold the left mouse button to paint."
         )
         self.interactive_spray_path_button.clicked.connect(
             self._finish_interactive_spray_path
@@ -1298,7 +1298,7 @@ class MainWindow(QMainWindow):
         self.interactive_paint_color_button = QPushButton("PAINT COLOR")
         self.interactive_paint_color_button.setObjectName("SecondaryButton")
         self.interactive_paint_color_button.setToolTip(
-            "Choose the paint color used by interactive spray-footprint previews."
+            "Choose the paint color used by the interactive coating-thickness visualization."
         )
         self.interactive_paint_color_button.clicked.connect(
             self._choose_interactive_paint_color
