@@ -145,10 +145,14 @@ def accumulate_face_uv_thickness(
         numerator[np.ix_(yy, xx)] += valid_kernel * float(increment)
         denominator[np.ix_(yy, xx)] += valid_kernel
 
-    event_increment = np.divide(
+    weighted_mean = np.divide(
         numerator, denominator,
         out=np.zeros_like(numerator),
         where=denominator > 1e-12,
     )
+    # Preserve the Gaussian footprint of isolated samples while preventing
+    # dense tessellation samples from multiplying the same physical interval.
+    confidence = np.minimum(denominator, 1.0)
+    event_increment = weighted_mean * confidence
     grid[...] += event_increment.astype(grid.dtype, copy=False)
     return grid
