@@ -122,3 +122,22 @@ def test_metric_covariance_produces_physical_space_anisotropic_smoothing():
     y_offset = float(grid[center + 4, center])
     assert y_offset > x_offset
     assert grid[center, center] > 19.0
+
+
+def test_uv_blur_width_scales_with_local_surface_sample_area():
+    from core.uv_coating_texture import surface_metric_to_pixel_covariance
+
+    metric = np.eye(2, dtype=np.float64)
+    common = {
+        "surface_metric_mm2_per_uv": metric,
+        "uv_bounds": np.asarray([[0.0, 1.0], [0.0, 1.0]]),
+        "resolution": 128,
+        "smoothing_factor": 0.60,
+    }
+    small = surface_metric_to_pixel_covariance(
+        **common, sample_area_mm2=0.01
+    )
+    large = surface_metric_to_pixel_covariance(
+        **common, sample_area_mm2=0.04
+    )
+    assert np.allclose(large, 4.0 * small, rtol=1e-8, atol=1e-10)
