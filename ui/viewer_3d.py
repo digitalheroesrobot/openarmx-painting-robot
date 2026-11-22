@@ -2467,6 +2467,13 @@ class ProductViewer(QWidget):
 
     def _interactive_apply_paint_deposition(self, patch, pose):
         """Accumulate geometry-aware deposition for one sampled spray interval."""
+        # Defense in depth: collision must block the deposition calculation,
+        # not merely suppress path recording in the cursor event handler.
+        if self._interactive_spray_gun_collision:
+            self._interactive_spray_last_deposition_timestamp = None
+            self._interactive_spray_previous_nozzle_world = None
+            self._interactive_spray_last_speed_mm_s = 0.0
+            return
         if self.current_mesh is None:
             return
         ids = patch.cell_data.get("InteractiveOriginalCellId")
@@ -2860,6 +2867,13 @@ class ProductViewer(QWidget):
         self._interactive_spray_live_actors.extend(gun_actors)
         collision = self._interactive_check_gun_collision(gun_polydata)
         self._interactive_spray_gun_collision = collision
+        if collision:
+            # Do not carry elapsed spray time or the previous nozzle position
+            # across a collision. Otherwise the first clear frame could apply
+            # a delayed deposition interval that spans the blocked movement.
+            self._interactive_spray_last_deposition_timestamp = None
+            self._interactive_spray_previous_nozzle_world = None
+            self._interactive_spray_last_speed_mm_s = 0.0
 
         local_pose = self._interactive_pose_to_product_frame(pose)
         footprints = _build_spray_footprint_overlay(
