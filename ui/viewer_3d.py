@@ -446,6 +446,14 @@ class ProductViewer(QWidget):
         self._interactive_spray_transform = np.eye(4, dtype=float)
         self._interactive_spray_latest_pose = None
         self._interactive_spray_records = []
+        self._interactive_spray_display_mode = "thickness"
+        self._interactive_recorded_replay_index = 0
+        self._interactive_recorded_replay_actor = None
+        self._interactive_recorded_replay_timer = QTimer(self)
+        self._interactive_recorded_replay_timer.setInterval(40)
+        self._interactive_recorded_replay_timer.timeout.connect(
+            self._advance_interactive_recorded_replay
+        )
         self._interactive_spray_stroke_id = -1
         self._interactive_spray_surface = None
         self._interactive_spray_locator = None
@@ -510,6 +518,8 @@ class ProductViewer(QWidget):
 
         self.interaction_mode_panel = self._build_interaction_mode_controls()
         layout.addWidget(self.interaction_mode_panel)
+        self.interactive_recorded_path_panel = self._build_interactive_recorded_path_controls()
+        layout.addWidget(self.interactive_recorded_path_panel)
 
         # Keep Hook Control at the very top of the 3D viewer whenever it is visible.
         self.hole_control_panel = self._build_hole_controls()
@@ -935,8 +945,215 @@ class ProductViewer(QWidget):
             "color: #69C8D5; font-size: 9px; padding-left: 8px;"
         )
         row.addWidget(self.interaction_mode_status)
+        self.interactive_paint_color_view_button = QPushButton("ACTUAL PAINT COLOR")
+        self.interactive_paint_color_view_button.setCheckable(True)
+        self.interactive_paint_color_view_button.setToolTip(
+            "Toggle between the predicted film-thickness color map and the selected real paint color."
+        )
+        self.interactive_paint_color_view_button.toggled.connect(
+            self._on_interactive_paint_display_mode_changed
+        )
+        row.addWidget(self.interactive_paint_color_view_button)
         row.addStretch(1)
         return panel
+
+    def _build_interactive_recorded_path_controls(self):
+        """Build persistent controls for optimizing and replaying recorded spray paths."""
+        panel = QFrame()
+        panel.setObjectName("InteractiveRecordedPathControls")
+        panel.setStyleSheet("""
+            QFrame#InteractiveRecordedPathControls {
+                background: #10212C; border: 1px solid #36566A; border-radius: 5px;
+            }
+            QFrame#InteractiveRecordedPathControls QLabel {
+                color: #C9D8E2; font-weight: 700;
+            }
+            QFrame#InteractiveRecordedPathControls QPushButton {
+                background: #183244; color: #E2EDF4; border: 1px solid #36566A;
+                border-radius: 4px; padding: 5px 10px; font-weight: 700;
+            }
+            QFrame#InteractiveRecordedPathControls QPushButton:disabled {
+                color: #71818C; background: #15232D;
+            }
+        """)
+        row = QHBoxLayout(panel)
+        row.setContentsMargins(8, 4, 8, 4)
+        row.setSpacing(7)
+        row.addWidget(QLabel("RECORDED SPRAY PATH"))
+        self.recorded_path_optimize_button = QPushButton("OPTIMIZE PATH")
+        self.recorded_path_optimize_button.clicked.connect(
+            self._optimize_interactive_recorded_path
+        )
+        row.addWidget(self.recorded_path_optimize_button)
+        self.recorded_path_replay_button = QPushButton("▶ REPLAY")
+        self.recorded_path_replay_button.clicked.connect(
+            self._start_interactive_recorded_replay
+        )
+        row.addWidget(self.recorded_path_replay_button)
+        self.recorded_path_stop_button = QPushButton("STOP")
+        self.recorded_path_stop_button.setEnabled(False)
+        self.recorded_path_stop_button.clicked.connect(
+            self._stop_interactive_recorded_replay
+        )
+        row.addWidget(self.recorded_path_stop_button)
+        self.recorded_path_status_label = QLabel("No recorded path")
+        row.addWidget(self.recorded_path_status_label, 1)
+        self.recorded_path_color_view_button = QPushButton("VIEW: FILM")
+        self.recorded_path_color_view_button.setCheckable(True)
+        self.recorded_path_color_view_button.toggled.connect(
+            self._on_interactive_paint_display_mode_changed
+        )
+        self.recorded_path_color_view_button.setToolTip(
+            "Switch the product surface between film-thickness visualization and actual paint color."
+        )
+        row.addWidget(self.recorded_path_color_view_button)
+        panel.hide()
+        return panel
+
+    def _on_interactive_paint_display_mode_changed(self, show_paint_color):
+        self._interactive_spray_display_mode = (
+            "paint_color" if show_paint_color else "thickness"
+        )
+        for button in (
+            getattr(self, "interactive_paint_color_view_button", None),
+            getattr(self, "recorded_path_color_view_button", None),
+        ):
+            if button is not None:
+                button.blockSignals(True)
+                button.setChecked(bool(show_paint_color))
+                button.setText(
+                    "VIEW: PAINT COLOR" if button is self.recorded_path_color_view_button
+                    else "ACTUAL PAINT COLOR"
+                )
+                button.blockSignals(False)
+        self._interactive_refresh_paint_visual(render=True)
+
+    def _interactive_selected_paint_rgb(self):
+        color = str(getattr(self, "_trajectory_paint_color_hex", None) or "#D95B43")
+        color = color.lstrip("#")
+        try:
+            return np.asarray([int(color[i:i + 2], 16) for i in (0, 2, 4)], dtype=np.float64)
+        except (ValueError, TypeError):
+            return np.asarray([217.0, 91.0, 67.0], dtype=np.float64)
+
+    def _optimize_interactive_recorded_path(self):
+        """Reorder complete recorded strokes while preserving each stroke's samples."""
+        records = list(self._interactive_spray_records)
+        if len(records) < 2:
+            self.recorded_path_status_label.setText("Need at least two recorded poses")
+            return False
+        source_ids = np.asarray([item["stroke_id"] for item in records], dtype=np.int64)
+        stroke_ids = np.unique(source_ids)
+        if len(stroke_ids) > 1:
+            from stages.spray_stroke_route_optimizer import optimize_stroke_order
+            candidate = {
+                "nozzle_points": np.asarray([item["nozzle_point_product"] for item in records], dtype=float),
+                "spray_directions": np.asarray([item["spray_direction_product"] for item in records], dtype=float),
+                "segment_ids": source_ids,
+            }
+            optimized = optimize_stroke_order(
+                candidate,
+                orientation_weight_coordinate_units_per_rad=0.0,
+                max_2opt_passes=1 if len(stroke_ids) <= 30 else 0,
+            )
+            ordered = []
+            for stroke in optimized["route_optimization"]["strokes"]:
+                indices = np.flatnonzero(source_ids == stroke["source_segment_id"])
+                if stroke["reversed"]:
+                    indices = indices[::-1]
+                ordered.extend(records[int(index)] for index in indices)
+            records = ordered
+            self._interactive_spray_records = list(records)
+            route_info = optimized["route_optimization"]
+            self.recorded_path_status_label.setText(
+                f"Optimized {len(stroke_ids)} strokes · "
+                f"{route_info.get('optimized_route_length', route_info.get('route_length', 0.0)):.1f} units"
+            )
+        else:
+            self.recorded_path_status_label.setText(
+                f"Single stroke · {len(records)} poses · order retained"
+            )
+        self._refresh_interactive_recorded_path_actor()
+        return True
+
+    def _refresh_interactive_recorded_path_actor(self):
+        if self._interactive_spray_path_actor is not None:
+            try:
+                self.plotter.remove_actor(self._interactive_spray_path_actor, render=False)
+            except Exception:
+                pass
+        records = self._interactive_spray_records
+        if len(records) < 2:
+            self._interactive_spray_path_actor = None
+            return
+        points = np.asarray([item["nozzle_point_world"] for item in records], dtype=float)
+        path = pv.PolyData(points)
+        path.lines = np.asarray([len(points), *range(len(points))], dtype=np.int64)
+        self._interactive_spray_path_actor = self.plotter.add_mesh(
+            path, color="#00E5FF", line_width=3.0, lighting=False, pickable=False
+        )
+        self.plotter.render()
+
+    def _start_interactive_recorded_replay(self):
+        records = self._interactive_spray_records
+        if len(records) < 2:
+            self.recorded_path_status_label.setText("No replayable recorded path")
+            return
+        self._interactive_recorded_replay_timer.stop()
+        if self._interactive_recorded_replay_actor is not None:
+            try:
+                self.plotter.remove_actor(self._interactive_recorded_replay_actor, render=False)
+            except Exception:
+                pass
+        self._interactive_recorded_replay_index = 0
+        radius = max(float(self._interactive_spray_standoff) * 0.025, 0.5)
+        marker = pv.Sphere(radius=radius, center=(0.0, 0.0, 0.0), theta_resolution=16, phi_resolution=12)
+        self._interactive_recorded_replay_actor = self.plotter.add_mesh(
+            marker, color="#00E676", smooth_shading=True, pickable=False
+        )
+        first = np.asarray(records[0]["nozzle_point_world"], dtype=float)
+        self._interactive_recorded_replay_actor.SetPosition(*first.tolist())
+        self.recorded_path_replay_button.setEnabled(False)
+        self.recorded_path_stop_button.setEnabled(True)
+        self.recorded_path_status_label.setText(f"Replaying 1 / {len(records)}")
+        self._interactive_recorded_replay_timer.start()
+        self.plotter.render()
+
+    def _advance_interactive_recorded_replay(self):
+        records = self._interactive_spray_records
+        if not records or self._interactive_recorded_replay_actor is None:
+            self._stop_interactive_recorded_replay()
+            return
+        self._interactive_recorded_replay_index += 1
+        if self._interactive_recorded_replay_index >= len(records):
+            self._stop_interactive_recorded_replay(completed=True)
+            return
+        point = np.asarray(
+            records[self._interactive_recorded_replay_index]["nozzle_point_world"], dtype=float
+        )
+        self._interactive_recorded_replay_actor.SetPosition(*point.tolist())
+        self.recorded_path_status_label.setText(
+            f"Replaying {self._interactive_recorded_replay_index + 1} / {len(records)}"
+        )
+        self.plotter.render()
+
+    def _stop_interactive_recorded_replay(self, completed=False):
+        self._interactive_recorded_replay_timer.stop()
+        self.recorded_path_replay_button.setEnabled(bool(self._interactive_spray_records))
+        self.recorded_path_stop_button.setEnabled(False)
+        if completed:
+            self.recorded_path_status_label.setText(
+                f"Replay complete · {len(self._interactive_spray_records)} poses"
+            )
+        elif self._interactive_spray_records:
+            self.recorded_path_status_label.setText("Replay stopped")
+        if self._interactive_recorded_replay_actor is not None:
+            try:
+                self.plotter.remove_actor(self._interactive_recorded_replay_actor, render=False)
+            except Exception:
+                pass
+            self._interactive_recorded_replay_actor = None
+        self.plotter.render()
 
     def _set_interactive_view_mode(self, mode):
         """Switch viewport input ownership without changing recorded paint data."""
@@ -2648,7 +2865,17 @@ class ProductViewer(QWidget):
             if actor is None or grid is None:
                 continue
             thickness_values = np.asarray(grid, dtype=np.float64)
-            rgb = map_film_thickness_to_rgb(thickness_values, target)
+            if self._interactive_spray_display_mode == "paint_color":
+                paint_rgb = self._interactive_selected_paint_rgb()
+                coverage = np.clip(
+                    thickness_values / max(target * 0.02, 0.25), 0.0, 1.0
+                )
+                rgb = np.rint(
+                    168.0 * (1.0 - coverage[..., None])
+                    + paint_rgb[None, None, :] * coverage[..., None]
+                ).astype(np.uint8)
+            else:
+                rgb = map_film_thickness_to_rgb(thickness_values, target)
 
             # A face becomes progressively glossier as its deposited film
             # builds. The UV texture carries the spatial color/thickness
@@ -2712,6 +2939,16 @@ class ProductViewer(QWidget):
         if thickness is None or len(thickness) != len(self.current_mesh.faces):
             return None
         target = max(float(self._interactive_spray_paint_target_um), 1e-9)
+        if self._interactive_spray_display_mode == "paint_color":
+            paint_rgb = self._interactive_selected_paint_rgb()
+            coverage = np.clip(
+                np.asarray(thickness, dtype=np.float64) / max(target * 0.02, 0.25),
+                0.0, 1.0,
+            )
+            return np.rint(
+                168.0 * (1.0 - coverage[:, None])
+                + paint_rgb[None, :] * coverage[:, None]
+            ).astype(np.uint8)
         return map_film_thickness_to_rgb(thickness, target)
 
     def _interactive_refresh_paint_visual(self, render=True):
@@ -3211,7 +3448,7 @@ class ProductViewer(QWidget):
                                 uv_bounds_array,
                                 int(texture_layout["resolution"]),
                                 sample_area,
-                                smoothing_factor=0.60,
+                                smoothing_factor=1.05,
                             )
                         )
                     except ValueError:
@@ -3569,6 +3806,43 @@ class ProductViewer(QWidget):
             areas_mm2 = areas_mm2[valid_area]
         if not len(selected):
             return
+
+        # Expand sparse ray-hit triangles to the complete visible portion of
+        # every CAD Face actually touched by the footprint. This is critical
+        # for narrow faces: a handful of preview rays must not create isolated
+        # painted dots on otherwise uncoated Face regions.
+        hit_face_ids = np.unique(cache["face_ids"][selected])
+        candidate_ids = np.flatnonzero(
+            np.isin(cache["face_ids"], hit_face_ids) & cache["uv_valid"]
+        )
+        if len(candidate_ids):
+            candidate_points_mm = (
+                cache["points_local"][candidate_ids] @ rotation.T + translation
+            ) * source_to_mm
+            candidate_normals = cache["normals_local"][candidate_ids] @ rotation.T
+            candidate_normals /= np.maximum(
+                np.linalg.norm(candidate_normals, axis=1)[:, None], 1e-12
+            )
+            nozzle_mm = np.asarray(nozzle_world, dtype=np.float64) * source_to_mm
+            spray_direction = np.asarray(pose["spray_direction_world"], dtype=np.float64)
+            spray_direction /= max(float(np.linalg.norm(spray_direction)), 1e-12)
+            delta = candidate_points_mm - nozzle_mm[None, :]
+            axial = delta @ spray_direction
+            radial_squared = np.maximum(
+                np.einsum("ij,ij->i", delta, delta) - axial * axial, 0.0
+            )
+            cone_radius = np.maximum(axial, 0.0) * math.tan(
+                math.radians(self._interactive_spray_cone_angle_deg * 0.5)
+            )
+            facing = candidate_normals @ (-spray_direction)
+            inside = (
+                (axial > 1e-6)
+                & (radial_squared <= (cone_radius * 1.08) ** 2)
+                & (facing > 0.02)
+            )
+            expanded = candidate_ids[inside]
+            if len(expanded):
+                selected = np.unique(np.concatenate((selected, expanded)))
 
         result = calculate_cone_deposition_step(
             surface_points_mm=points_world_mm,
@@ -4605,6 +4879,7 @@ class ProductViewer(QWidget):
                     ordered_indices.extend(indices.tolist())
                 records = [records[index] for index in ordered_indices]
 
+            self._interactive_spray_records = list(records)
             points = np.asarray([item["nozzle_point_world"] for item in records])
             path = pv.PolyData(points)
             path.lines = np.asarray([len(points), *range(len(points))], dtype=np.int64)
@@ -4672,6 +4947,13 @@ class ProductViewer(QWidget):
             ),
             "product_transform_4x4": self._interactive_spray_transform.copy(),
         }
+        if len(records) >= 2:
+            self.interactive_recorded_path_panel.show()
+            self.recorded_path_replay_button.setEnabled(True)
+            self.recorded_path_status_label.setText(
+                f"{len(records)} poses · {len(np.unique([r['stroke_id'] for r in records]))} strokes"
+            )
+            self._refresh_interactive_recorded_path_actor()
         self.plotter.add_text(
             f"INTERACTIVE SPRAY PATH COMPLETE  |  {len(records)} RECORDED POSES",
             position="upper_left", font_size=10, color="#00E676",
