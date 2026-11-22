@@ -1308,3 +1308,79 @@ END-ISO-10303-21;
 
 if __name__ == "__main__":
     run_step_loader_tests()
+
+
+def build_step_patch_face_mapping(
+    mesh,
+    patch_labels: np.ndarray | list,
+    face_status_labels: np.ndarray | list | None = None,
+) -> dict:
+    """Build a lossless many-to-many mapping between Stage 1 patches and STEP Faces.
+
+    All arrays are aligned to the original display-triangle order. Statuses are
+    retained per (Patch ID, B-Rep Face ID) pair; no status is collapsed onto a
+    whole CAD Face when a CAD Face spans multiple Stage 1 patches.
+    """
+    context = get_step_brep_context(mesh)
+    if context is None:
+        raise ValueError("Mesh does not contain a live STEP B-Rep context.")
+
+    triangle_face_ids = np.asarray(
+        context["triangle_face_ids"], dtype=np.int64
+    )
+    patches = np.asarray(patch_labels, dtype=np.int64)
+    if patches.shape != (len(mesh.faces),):
+        raise ValueError("patch_labels must contain one ID per mesh triangle.")
+    if triangle_face_ids.shape != (len(mesh.faces),):
+        raise ValueError("STEP triangle Face IDs do not match mesh triangles.")
+    if np.any(triangle_face_ids < 1) or np.any(
+        triangle_face_ids > len(context["faces"])
+    ):
+        raise ValueError("STEP triangle Face IDs contain an invalid B-Rep ID.")
+
+    statuses = None
+    if face_status_labels is not None:
+        statuses = np.asarray(face_status_labels, dtype=np.int64)
+        if statuses.shape != (len(mesh.faces),):
+            raise ValueError("face_status_labels must contain one status per triangle.")
+
+    pairs, pair_counts = np.unique(
+        np.column_stack((patches, triangle_face_ids)),
+        axis=0,
+        return_counts=True,
+    )
+    patch_to_faces: dict[int, list[int]] = {}
+    face_to_patches: dict[int, list[int]] = {}
+    pair_records = []
+    for (patch_id, face_id), triangle_count in zip(pairs, pair_counts):
+        patch_id = int(patch_id)
+        face_id = int(face_id)
+        patch_to_faces.setdefault(patch_id, []).append(face_id)
+        face_to_patches.setdefault(face_id, []).append(patch_id)
+        record = {
+            "patch_id": patch_id,
+            "brep_face_id": face_id,
+            "triangle_count": int(triangle_count),
+        }
+        if statuses is not None:
+            mask = (patches == patch_id) & (triangle_face_ids == face_id)
+            values, counts = np.unique(statuses[mask], return_counts=True)
+            record["status_triangle_counts"] = {
+                int(value): int(count)
+                for value, count in zip(values, counts)
+            }
+        pair_records.append(record)
+
+    return {
+        "schema": "PATCH_BREP_FACE_MAPPING_V1",
+        "mapping_type": "MANY_TO_MANY",
+        "triangle_count": int(len(mesh.faces)),
+        "patch_to_brep_face_ids": {
+            key: sorted(value) for key, value in patch_to_faces.items()
+        },
+        "brep_face_to_patch_ids": {
+            key: sorted(value) for key, value in face_to_patches.items()
+        },
+        "pairs": pair_records,
+        "status_scope": "PER_TRIANGLE_AND_PATCH_FACE_PAIR",
+    }
