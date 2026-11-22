@@ -312,7 +312,11 @@ def calculate_cone_deposition_step(
     tail_weight = tail_fraction * tail_density * areas
     weight = core_weight + tail_weight
     weight *= np.clip(facing, 0.0, 1.0)
-    weight[~inside] = 0.0
+    # Keep the Gaussian overspray tail outside the nominal cone. Only points
+    # behind the nozzle are excluded; outside-cone points may still receive
+    # a small non-zero tail deposition.
+    forward = axial > 1e-9
+    weight[~forward] = 0.0
     total = float(np.sum(weight))
     if total <= 1e-12:
         return {
