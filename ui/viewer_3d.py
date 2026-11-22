@@ -442,6 +442,8 @@ class ProductViewer(QWidget):
         self._interactive_saved_style_enabled = True
         self._interactive_saved_style = None
         self._interactive_spray_input_style = None
+        self._interactive_spray_camera_dragging = False
+        self._interactive_spray_camera_last_position = None
         self._interactive_hud_actor = None
         self._interactive_last_record_time = 0.0
         self._interactive_mouse_move_observer_id = interactor.AddObserver(
@@ -452,6 +454,12 @@ class ProductViewer(QWidget):
         )
         self._interactive_spray_release_observer_id = interactor.AddObserver(
             "LeftButtonReleaseEvent", self._on_interactive_spray_left_release, 3.0
+        )
+        self._interactive_spray_right_press_observer_id = interactor.AddObserver(
+            "RightButtonPressEvent", self._on_interactive_spray_right_press, 3.0
+        )
+        self._interactive_spray_right_release_observer_id = interactor.AddObserver(
+            "RightButtonReleaseEvent", self._on_interactive_spray_right_release, 3.0
         )
         self._interactive_spray_leave_observer_id = interactor.AddObserver(
             "LeaveEvent", self._on_interactive_spray_leave, 3.0
@@ -864,7 +872,7 @@ class ProductViewer(QWidget):
         self.camera_mode_button.setCheckable(True)
         self.camera_mode_button.setChecked(True)
         self.camera_mode_button.setToolTip(
-            "Enable camera orbit, pan and zoom. Painting is paused."
+            "Switch to camera-only navigation. In SPRAY mode, right-drag orbits the camera."
         )
         self.camera_mode_button.clicked.connect(
             lambda checked=False: self._set_interactive_view_mode("camera")
@@ -876,7 +884,7 @@ class ProductViewer(QWidget):
         self.spray_mode_button.setChecked(False)
         self.spray_mode_button.setEnabled(False)
         self.spray_mode_button.setToolTip(
-            "Enable spray cursor preview. Hold the left mouse button to paint."
+            "Move: preview | Hold left: paint | Hold right and drag: orbit | Wheel: zoom"
         )
         self.spray_mode_button.clicked.connect(
             lambda checked=False: self._set_interactive_view_mode("spray")
@@ -3323,12 +3331,61 @@ class ProductViewer(QWidget):
         self._interactive_spray_records.append(record)
         return True
 
+    def _on_interactive_spray_right_press(self, interactor, event):
+        """Start camera orbit without leaving SPRAY mode."""
+        if (
+            not self._interactive_spray_active
+            or self._interactive_view_mode != "spray"
+        ):
+            return
+        self._interactive_spray_camera_dragging = True
+        self._interactive_spray_camera_last_position = tuple(
+            int(value) for value in interactor.GetEventPosition()
+        )
+        # A camera gesture must not deposit coating or bridge two paint samples.
+        self._interactive_spray_recording = False
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_last_speed_mm_s = 0.0
+
+    def _on_interactive_spray_right_release(self, interactor, event):
+        self._interactive_spray_camera_dragging = False
+        self._interactive_spray_camera_last_position = None
+
+    def _rotate_camera_from_spray_drag(self, interactor):
+        current = tuple(int(value) for value in interactor.GetEventPosition())
+        previous = self._interactive_spray_camera_last_position
+        self._interactive_spray_camera_last_position = current
+        if previous is None:
+            return
+        dx = current[0] - previous[0]
+        dy = current[1] - previous[1]
+        if dx == 0 and dy == 0:
+            return
+
+        camera = self.plotter.camera
+        sensitivity = 0.5  # degrees per screen pixel
+        camera.Azimuth(-float(dx) * sensitivity)
+        camera.Elevation(float(dy) * sensitivity)
+        camera.OrthogonalizeViewUp()
+        self.plotter.reset_camera_clipping_range()
+        self.plotter.render()
+
     def _on_interactive_spray_mouse_move(self, interactor, event):
         if (
             not self._interactive_spray_active
             or self._interactive_view_mode != "spray"
         ):
             return
+
+        # Right-drag exclusively controls the camera; do not pick or paint.
+        if self._interactive_spray_camera_dragging:
+            if not bool(QApplication.mouseButtons() & Qt.MouseButton.RightButton):
+                self._interactive_spray_camera_dragging = False
+                self._interactive_spray_camera_last_position = None
+            else:
+                self._rotate_camera_from_spray_drag(interactor)
+                return
 
         # VTK release notifications can be missed by some Qt/VTK window
         # integrations. Poll Qt's authoritative global button state on every
@@ -3361,6 +3418,8 @@ class ProductViewer(QWidget):
             or self._interactive_view_mode != "spray"
         ):
             return
+        if self._interactive_spray_camera_dragging:
+            return
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y)
         if pose is None:
@@ -3390,6 +3449,8 @@ class ProductViewer(QWidget):
         ):
             return
         self._interactive_spray_recording = False
+        self._interactive_spray_camera_dragging = False
+        self._interactive_spray_camera_last_position = None
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_latest_pose = None
@@ -3399,6 +3460,8 @@ class ProductViewer(QWidget):
         if not self._interactive_spray_active:
             return None
         self._interactive_spray_recording = False
+        self._interactive_spray_camera_dragging = False
+        self._interactive_spray_camera_last_position = None
         self._interactive_spray_active = False
         self._interactive_view_mode = "camera"
         self._interactive_spray_last_deposition_timestamp = None
