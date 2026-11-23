@@ -572,13 +572,6 @@ class SprayerSettingsDialog(QDialog):
                     "This controls pass spacing; it is not point spacing "
                     "along an individual pass."
                 )
-            elif key == "sampling_spacing_mm":
-                spin.setToolTip(
-                    "Fallback spacing used only if a valid spray footprint cannot "
-                    "be calculated. With the round-cone profile, effective point "
-                    "spacing in both surface directions is derived from footprint "
-                    "diameter and overlap; the displayed value is shown in the preview."
-                )
             spin.valueChanged.connect(self._refresh_preview)
             self.fields[key] = spin
             form.addRow(label, spin)
