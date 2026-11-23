@@ -4303,14 +4303,12 @@ def generate_spray_trajectory(
     )
 
     if path_spray_width_mm > 0.0 and path_track_spacing_mm > 0.0:
-        # For a circular footprint, use the overlap-derived pitch in both
-        # surface-lattice dimensions. A half-diameter cap is a conservative
-        # geometric sampling interval. The legacy user spacing is retained
-        # only as a fallback when no physical footprint can be calculated.
-        coverage_spacing_mm = min(
-            path_track_spacing_mm,
-            0.5 * path_spray_width_mm,
-        )
+        # Match the validated backup behavior: use the footprint width at the
+        # configured working distance, reduced by the requested overlap, as
+        # both the lateral track pitch and the longitudinal spray-point pitch.
+        # Do not impose an extra 50%-of-width cap; that would silently change
+        # the operator's selected overlap.
+        coverage_spacing_mm = path_track_spacing_mm
         coverage_spacing_basis = "SPRAY_FOOTPRINT_AND_OVERLAP"
     else:
         # A zero cone angle has no defined footprint. Retain the user spacing,
@@ -4443,11 +4441,12 @@ def generate_spray_trajectory(
         effective_lane_spacing_mm, source_unit
     )
     sweep_config = SweepPlanningConfig(
-        # Lateral pass pitch comes from spray footprint and overlap. Samples
-        # along each generated lane follow the robot's distance per control
-        # cycle, based on base travel speed / control frequency.
+        # Use the same working-distance / spray-angle / overlap-derived pitch
+        # along and across the spray path, matching the backup trajectory logic.
+        # Robot control-cycle spacing remains available separately as motion
+        # metadata; it must not override the physical spray-point interval.
         lane_spacing=path_track_spacing_units,
-        sample_spacing=robot_waypoint_spacing_coordinate_units,
+        sample_spacing=spacing_coordinate_units,
         max_gap_factor=2.75,
         tangent_blend=0.35,
     )
@@ -4907,6 +4906,8 @@ def generate_spray_trajectory(
             "nearest_neighbor_fallback_patch_ids": ordered.get("nearest_neighbor_fallback_patch_ids", []),
             "lane_spacing_mm": effective_lane_spacing_mm,
             "surface_sample_spacing_mm": coverage_spacing_mm,
+            "trajectory_sample_spacing_mm": coverage_spacing_mm,
+            "trajectory_sample_spacing_basis": coverage_spacing_basis,
             "robot_waypoint_spacing_mm": robot_waypoint_spacing_mm,
             "robot_waypoint_spacing_coordinate_units": robot_waypoint_spacing_coordinate_units,
             "robot_waypoint_sampling_basis": (
