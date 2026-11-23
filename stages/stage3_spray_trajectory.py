@@ -297,13 +297,13 @@ def _calculate_spray_footprint(
     profile = sprayer_profile if isinstance(sprayer_profile, dict) else {}
     angle = _safe_float(profile.get("spray_cone_angle_deg"))
     if angle is None:
-        angle = 0.0
-    if not 0.0 <= angle <= 150.0:
-        raise ValueError("Circular spray angle must be between 0 and 150 degrees.")
+        raise ValueError("Sprayer profile must define spray_cone_angle_deg.")
+    if not 0.0 < angle <= 150.0:
+        raise ValueError("Circular spray angle must be greater than 0 and at most 150 degrees.")
 
     overlap = _safe_float(profile.get("overlap_percent"))
     if overlap is None:
-        overlap = 0.0
+        raise ValueError("Sprayer profile must define overlap_percent.")
     if not 0.0 <= overlap < 100.0:
         raise ValueError("Track overlap must be in the range [0, 100).")
 
@@ -4052,10 +4052,6 @@ def generate_spray_trajectory(
         source_unit,
     )
 
-    configured_sampling_spacing_coordinate_units = _mm_to_coordinate_units(
-        sampling_spacing_mm,
-        source_unit,
-    )
     # The active sprayer profile defines the nominal footprint. Surface
     # sampling is then driven by footprint diameter and overlap, not by an
     # arbitrary fixed point interval alone.
@@ -4072,19 +4068,13 @@ def generate_spray_trajectory(
         spray_footprint["nominal_track_spacing_mm"]
     )
 
-    if path_spray_width_mm > 0.0 and path_track_spacing_mm > 0.0:
-        # Match the validated backup behavior: use the footprint width at the
-        # configured working distance, reduced by the requested overlap, as
-        # both the lateral track pitch and the longitudinal spray-point pitch.
-        # Do not impose an extra 50%-of-width cap; that would silently change
-        # the operator's selected overlap.
-        coverage_spacing_mm = path_track_spacing_mm
-        coverage_spacing_basis = "SPRAY_FOOTPRINT_AND_OVERLAP"
-    else:
-        # A zero cone angle has no defined footprint. Retain the user spacing,
-        # but explicitly mark physical coverage spacing as unavailable.
-        coverage_spacing_mm = float(sampling_spacing_mm)
-        coverage_spacing_basis = "INTERNAL_FALLBACK_NO_PHYSICAL_FOOTPRINT"
+    # There is no arbitrary point-spacing fallback. Both the surface sampling
+    # interval and lane pitch come exclusively from the active circular
+    # footprint and requested overlap.
+    if not math.isfinite(path_track_spacing_mm) or path_track_spacing_mm <= 0.0:
+        raise ValueError("Circular spray footprint produced an invalid point spacing.")
+    coverage_spacing_mm = path_track_spacing_mm
+    coverage_spacing_basis = "SPRAY_FOOTPRINT_AND_OVERLAP"
 
     spacing_coordinate_units = _mm_to_coordinate_units(
         coverage_spacing_mm,
@@ -4202,11 +4192,7 @@ def generate_spray_trajectory(
     # A zero/unspecified cone angle cannot define a footprint lane spacing.
     # In that case, use the configured point spacing as a geometric fallback
     # and report that coverage spacing is not physically established.
-    effective_lane_spacing_mm = (
-        path_track_spacing_mm
-        if path_track_spacing_mm > 0.0
-        else sampling_spacing_mm
-    )
+    effective_lane_spacing_mm = path_track_spacing_mm
     path_track_spacing_units = _mm_to_coordinate_units(
         effective_lane_spacing_mm, source_unit
     )
@@ -4558,7 +4544,7 @@ def generate_spray_trajectory(
     return {
         "parameters": {
             "standoff_mm": standoff_mm,
-            "sampling_spacing_mm": sampling_spacing_mm,
+            "sampling_spacing_mm": coverage_spacing_mm,
             "effective_coverage_sampling_spacing_mm": coverage_spacing_mm,
             "coverage_spacing_basis": coverage_spacing_basis,
             "spray_angle_deg": spray_angle_deg,
@@ -4659,12 +4645,9 @@ def generate_spray_trajectory(
         "sampling": {
             "coordinate_unit": source_unit,
             "sampling_spacing_mm": coverage_spacing_mm,
-            "configured_sampling_spacing_mm": sampling_spacing_mm,
-            "configured_sampling_spacing_role": "FALLBACK_ONLY_WHEN_FOOTPRINT_UNAVAILABLE",
             "coverage_spacing_mm": coverage_spacing_mm,
             "coverage_spacing_basis": coverage_spacing_basis,
             "sampling_spacing_coordinate_units": spacing_coordinate_units,
-            "configured_sampling_spacing_coordinate_units": configured_sampling_spacing_coordinate_units,
             "candidate_face_count": sampling_result["candidate_face_count"],
             "sample_count": int(len(ordered["surface_points"])),
             "source_sample_count_before_footprint_optimization": int(
