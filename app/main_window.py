@@ -370,8 +370,17 @@ class MainWindow(QMainWindow):
             self.robot_settings_config_path, self.coating_process
         )
         # Keep legacy process consumers compatible while Robot Settings owns
-        # the authoritative robot motion values.
-        self.coating_process.update(self.robot_settings)
+        # the authoritative robot motion values. Do not copy the robot profile
+        # name or input status into the coating-process profile.
+        for key in (
+            "base_travel_speed_mm_s",
+            "robot_control_frequency_hz",
+            "min_travel_speed_mm_s",
+            "max_travel_acceleration_mm_s2",
+            "max_linear_speed_mm_s",
+            "max_angular_speed_deg_s",
+        ):
+            self.coating_process[key] = self.robot_settings[key]
 
         self.result_manager = ResultManager(self.project_root)
 
@@ -2523,7 +2532,15 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted or dialog.selected_settings is None:
             return
         self.robot_settings = dict(dialog.selected_settings)
-        self.coating_process.update(self.robot_settings)
+        for key in (
+            "base_travel_speed_mm_s",
+            "robot_control_frequency_hz",
+            "min_travel_speed_mm_s",
+            "max_travel_acceleration_mm_s2",
+            "max_linear_speed_mm_s",
+            "max_angular_speed_deg_s",
+        ):
+            self.coating_process[key] = self.robot_settings[key]
         motion_keys = (
             "base_travel_speed_mm_s",
             "robot_control_frequency_hz",
@@ -2579,6 +2596,8 @@ class MainWindow(QMainWindow):
             "robot_control_frequency_hz",
             "min_travel_speed_mm_s",
             "max_travel_acceleration_mm_s2",
+            "max_linear_speed_mm_s",
+            "max_angular_speed_deg_s",
         )
         generated_process = (
             self.current_stage3_parameters.get("coating_process", {})
@@ -2635,6 +2654,8 @@ class MainWindow(QMainWindow):
                     "robot_control_frequency_hz",
                     "min_travel_speed_mm_s",
                     "max_travel_acceleration_mm_s2",
+                    "max_linear_speed_mm_s",
+                    "max_angular_speed_deg_s",
                 )
                 if any(
                     value.get(motion_key) != previous[key].get(motion_key)
