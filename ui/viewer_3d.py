@@ -492,8 +492,6 @@ class ProductViewer(QWidget):
 
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
-        self._interactive_camera_pan_dragging = False
-        self._interactive_camera_pan_last_position = None
         self._interactive_spray_angle_x_deg = 0.0
         self._interactive_spray_angle_y_deg = 0.0
         self._interactive_spray_angle_anchor_pose = None
@@ -519,12 +517,6 @@ class ProductViewer(QWidget):
         )
         self._interactive_spray_middle_release_observer_id = interactor.AddObserver(
             "MiddleButtonReleaseEvent", self._on_interactive_spray_middle_release, 3.0
-        )
-        self._interactive_camera_pan_press_observer_id = interactor.AddObserver(
-            "RightButtonPressEvent", self._on_interactive_camera_pan_press, 3.0
-        )
-        self._interactive_camera_pan_release_observer_id = interactor.AddObserver(
-            "RightButtonReleaseEvent", self._on_interactive_camera_pan_release, 3.0
         )
         self._interactive_spray_wheel_forward_observer_id = interactor.AddObserver(
             "MouseWheelForwardEvent", self._on_interactive_spray_wheel, 3.0
@@ -959,6 +951,15 @@ class ProductViewer(QWidget):
             "color: #69C8D5; font-size: 9px; padding-left: 8px;"
         )
         row.addWidget(self.interaction_mode_status)
+
+        self.return_to_paint_button = QPushButton("PAINT MODE")
+        self.return_to_paint_button.setToolTip(
+            "Return to spray preview after VTK switches to camera navigation."
+        )
+        self.return_to_paint_button.clicked.connect(
+            self._return_to_interactive_spray_mode
+        )
+        row.addWidget(self.return_to_paint_button)
 
         self.spray_perpendicular_status = QLabel("SURFACE ANGLE: --")
         self.spray_perpendicular_status.setMinimumWidth(178)
@@ -2738,7 +2739,7 @@ class ProductViewer(QWidget):
             (
                 f"SPRAY CURSOR ACTIVE  |  WORK DIST {self._interactive_spray_standoff * (self._get_source_mm_factor() or 1.0):.1f} mm "
                 f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
-                "MOVE: PREVIEW  |  LEFT: PAINT  |  MIDDLE: ANGLE  |  RIGHT: CAMERA ORBIT"
+                "MOVE: PREVIEW  |  LEFT: PAINT  |  MIDDLE: ANGLE  |  PAINT MODE: RESTORE INPUT"
             ),
             position="upper_left",
             font_size=10,
@@ -5051,104 +5052,6 @@ class ProductViewer(QWidget):
         pose["timestamp"] = time.monotonic()
         self._interactive_update_cursor(pose)
 
-    def _on_interactive_camera_pan_press(self, interactor, event):
-        """Start a camera-only pan; the product transform is never modified."""
-        if not self._interactive_spray_active:
-            return
-        self._interactive_camera_pan_dragging = True
-        self._interactive_camera_pan_last_position = tuple(
-            int(value) for value in interactor.GetEventPosition()
-        )
-
-    def _on_interactive_camera_pan_release(self, interactor, event):
-        self._interactive_camera_pan_dragging = False
-        self._interactive_camera_pan_last_position = None
-
-    def _orbit_camera_from_right_drag(self, interactor):
-        """Rotate the camera freely with a virtual trackball (3 rotational DOF)."""
-        if not self._interactive_camera_pan_dragging:
-            return
-
-        current = tuple(int(value) for value in interactor.GetEventPosition())
-        previous = self._interactive_camera_pan_last_position
-        self._interactive_camera_pan_last_position = current
-        if previous is None or current == previous:
-            return
-
-        viewport_width, viewport_height = self.plotter.render_window.GetSize()
-        viewport_width = max(int(viewport_width), 1)
-        viewport_height = max(int(viewport_height), 1)
-        trackball_radius = 0.5 * float(min(viewport_width, viewport_height))
-
-        def trackball_vector(point):
-            # VTK event coordinates use a bottom-left origin.
-            x = (float(point[0]) - 0.5 * viewport_width) / trackball_radius
-            y = (float(point[1]) - 0.5 * viewport_height) / trackball_radius
-            radius_sq = x * x + y * y
-            if radius_sq <= 0.5:
-                z = math.sqrt(max(1.0 - radius_sq, 0.0))
-            else:
-                z = 0.5 / math.sqrt(radius_sq)
-            vector = np.array([x, y, z], dtype=np.float64)
-            return vector / max(float(np.linalg.norm(vector)), 1e-12)
-
-        previous_trackball = trackball_vector(previous)
-        current_trackball = trackball_vector(current)
-        camera = self.plotter.camera
-        position = np.asarray(camera.GetPosition(), dtype=np.float64)
-        focal_point = np.asarray(camera.GetFocalPoint(), dtype=np.float64)
-        view_up = np.asarray(camera.GetViewUp(), dtype=np.float64)
-        offset = position - focal_point
-        if float(np.linalg.norm(offset)) <= 1e-12:
-            return
-
-        view_direction = -offset / np.linalg.norm(offset)
-        view_up /= max(float(np.linalg.norm(view_up)), 1e-12)
-        view_right = np.cross(view_direction, view_up)
-        right_length = float(np.linalg.norm(view_right))
-        if right_length <= 1e-12:
-            return
-        view_right /= right_length
-        view_up = np.cross(view_right, view_direction)
-        view_up /= max(float(np.linalg.norm(view_up)), 1e-12)
-
-        # Convert the trackball rotation axis from camera coordinates to world.
-        axis_camera = np.cross(previous_trackball, current_trackball)
-        axis_length = float(np.linalg.norm(axis_camera))
-        if axis_length <= 1e-12:
-            return
-        axis_camera /= axis_length
-        axis_world = (
-            axis_camera[0] * view_right
-            + axis_camera[1] * view_up
-            + axis_camera[2] * view_direction
-        )
-        axis_world /= max(float(np.linalg.norm(axis_world)), 1e-12)
-
-        cosine = float(np.clip(np.dot(previous_trackball, current_trackball), -1.0, 1.0))
-        # Direct-manipulation convention: the viewed model follows the drag direction.
-        angle = -math.acos(cosine)
-        if abs(angle) <= 1e-10:
-            return
-
-        # Rodrigues rotation updates only the camera around its focal point.
-        offset = (
-            offset * math.cos(angle)
-            + np.cross(axis_world, offset) * math.sin(angle)
-            + axis_world * float(np.dot(axis_world, offset)) * (1.0 - math.cos(angle))
-        )
-        view_up = (
-            view_up * math.cos(angle)
-            + np.cross(axis_world, view_up) * math.sin(angle)
-            + axis_world * float(np.dot(axis_world, view_up)) * (1.0 - math.cos(angle))
-        )
-
-        camera.SetPosition(*(focal_point + offset).tolist())
-        camera.SetFocalPoint(*focal_point.tolist())
-        camera.SetViewUp(*view_up.tolist())
-        camera.OrthogonalizeViewUp()
-        self.plotter.render()
-
     def _on_interactive_spray_wheel(self, interactor, event):
         """Adjust spray working distance instead of zooming during SPRAY mode.
 
@@ -5197,16 +5100,6 @@ class ProductViewer(QWidget):
     def _on_interactive_spray_mouse_move(self, interactor, event):
         if not self._interactive_spray_active:
             return
-
-        # Right-drag translates the camera only. The product and spray pose
-        # remain unchanged; camera orientation is preserved during the pan.
-        if self._interactive_camera_pan_dragging:
-            if not bool(QApplication.mouseButtons() & Qt.MouseButton.RightButton):
-                self._interactive_camera_pan_dragging = False
-                self._interactive_camera_pan_last_position = None
-            else:
-                self._orbit_camera_from_right_drag(interactor)
-                return
 
         # Middle-drag exclusively controls spray direction.
         if self._interactive_spray_angle_dragging:
@@ -5272,6 +5165,44 @@ class ProductViewer(QWidget):
         self._interactive_begin_spray_stroke()
         self._interactive_update_cursor(pose)
 
+    def _return_to_interactive_spray_mode(self):
+        """Restore spray input after VTK has switched to camera navigation."""
+        if not self._interactive_spray_active:
+            return False
+
+        interactor = self.plotter.iren.interactor
+        if self._interactive_spray_input_style is None:
+            self._interactive_spray_input_style = vtkInteractorStyleUser()
+
+        # Reinstall the dedicated input style without ending the spray session.
+        interactor.SetInteractorStyle(self._interactive_spray_input_style)
+        self._interactive_spray_input_style.SetEnabled(1)
+
+        # Return to the standard spray orientation. Keep coating and records.
+        self._interactive_spray_recording = False
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_last_speed_mm_s = 0.0
+        self._interactive_spray_angle_dragging = False
+        self._interactive_spray_angle_last_position = None
+        self._interactive_spray_angle_x_deg = 0.0
+        self._interactive_spray_angle_y_deg = 0.0
+        self._interactive_spray_angle_anchor_pose = None
+        self._interactive_spray_locked_direction_world = None
+
+        self.interaction_mode_status.setText(
+            "SPRAY PREVIEW · HOLD LEFT TO PAINT"
+        )
+        x, y = interactor.GetEventPosition()
+        pose = self._interactive_pick_surface_pose(x, y)
+        if pose is not None:
+            self._interactive_update_cursor(pose)
+        else:
+            self._interactive_spray_latest_pose = None
+            self._interactive_update_surface_angle_indicator(None)
+            self.plotter.render()
+        return True
+
     def _on_interactive_spray_left_double_click(self, interactor, event):
         """Keep a viewport double-click in spray mode and restore preview pose."""
         if not self._interactive_spray_active:
@@ -5335,8 +5266,6 @@ class ProductViewer(QWidget):
 
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
-        self._interactive_camera_pan_dragging = False
-        self._interactive_camera_pan_last_position = None
         self._interactive_spray_angle_x_deg = 0.0
         self._interactive_spray_angle_y_deg = 0.0
         self._interactive_spray_angle_anchor_pose = None
@@ -5353,9 +5282,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_recording = False
 
         self._interactive_spray_active = False
-
-        self._interactive_camera_pan_dragging = False
-        self._interactive_camera_pan_last_position = None
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_last_speed_mm_s = 0.0
