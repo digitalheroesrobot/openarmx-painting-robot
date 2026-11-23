@@ -1428,7 +1428,7 @@ class ProductViewer(QWidget):
                         tip_length=0.30,
                         tip_radius=0.10,
                         shaft_radius=0.035,
-                        resolution=12,
+                        tip_resolution=12,
                     ),
                 )
                 actor = self.plotter.add_mesh(
