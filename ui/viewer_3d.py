@@ -944,6 +944,23 @@ class ProductViewer(QWidget):
         )
         row.addWidget(self.spray_mode_button)
 
+        self.working_distance_label = QLabel("WORK DIST")
+        self.working_distance_spin = QDoubleSpinBox()
+        self.working_distance_spin.setRange(10.0, 500.0)
+        self.working_distance_spin.setSingleStep(5.0)
+        self.working_distance_spin.setValue(120.0)
+        self.working_distance_spin.setSuffix(" mm")
+        self.working_distance_spin.setEnabled(False)
+        self.working_distance_spin.setToolTip(
+            "Spray tip-to-surface working distance. The spray pattern and "
+            "deposition are recomputed from this distance."
+        )
+        self.working_distance_spin.valueChanged.connect(
+            self._on_interactive_working_distance_changed
+        )
+        row.addWidget(self.working_distance_label)
+        row.addWidget(self.working_distance_spin)
+
         self.cavity_mode_button = QPushButton("CAVITY NOZZLE")
         self.cavity_mode_button.setCheckable(True)
         self.cavity_mode_button.setChecked(False)
@@ -2762,11 +2779,17 @@ class ProductViewer(QWidget):
         self.interaction_mode_panel.show()
         self.spray_mode_button.setEnabled(True)
         self.cavity_mode_button.setEnabled(True)
+        self.working_distance_spin.setEnabled(True)
+        factor = self._get_source_mm_factor()
+        if factor is not None:
+            self.working_distance_spin.blockSignals(True)
+            self.working_distance_spin.setValue(float(standoff) * float(factor))
+            self.working_distance_spin.blockSignals(False)
         self._set_interactive_view_mode("spray")
 
         self._interactive_hud_actor = self.plotter.add_text(
             (
-                f"SPRAY CURSOR ACTIVE  |  STANDOFF {self._interactive_spray_standoff:.3f} "
+                f"SPRAY CURSOR ACTIVE  |  WORK DIST {self._interactive_spray_standoff * (self._get_source_mm_factor() or 1.0):.1f} mm "
                 f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
                 "MOVE: PREVIEW  |  HOLD LEFT MOUSE: PAINT  |  FINISH IN RIGHT PANEL"
             ),
@@ -3086,6 +3109,37 @@ class ProductViewer(QWidget):
             pose = self._interactive_pick_surface_pose(x, y)
             if pose is not None:
                 self._interactive_update_cursor(pose)
+
+    def _on_interactive_working_distance_changed(self, value_mm):
+        """Change the spray tip-to-surface working distance live."""
+        if not self._interactive_spray_active:
+            return
+        factor = self._get_source_mm_factor()
+        if factor is None or not np.isfinite(value_mm):
+            return
+        distance_source = float(value_mm) / float(factor)
+        if distance_source <= 0.0:
+            return
+
+        self._interactive_spray_standoff = distance_source
+        pose = self._interactive_spray_latest_pose
+        if pose is None:
+            return
+
+        surface_point = np.asarray(pose["surface_point_world"], dtype=np.float64)
+        normal = np.asarray(pose["surface_normal_world"], dtype=np.float64)
+        normal /= max(float(np.linalg.norm(normal)), 1e-12)
+
+        insertion_source = 0.0
+        if self._interactive_spray_cavity_mode:
+            insertion_source = float(self.cavity_depth_spin.value()) / float(factor)
+
+        updated = dict(pose)
+        updated["nozzle_point_world"] = surface_point + normal * (
+            distance_source + insertion_source
+        )
+        updated["timestamp"] = time.monotonic()
+        self._interactive_update_cursor(updated)
 
     def _on_interactive_cavity_controls_changed(self, _value=None):
         """Update the current cavity nozzle pose without another surface pick."""
@@ -5163,6 +5217,7 @@ class ProductViewer(QWidget):
         self.spray_mode_button.setEnabled(False)
         self.cavity_mode_button.setChecked(False)
         self.cavity_mode_button.setEnabled(False)
+        self.working_distance_spin.setEnabled(False)
         for widget in (
             self.cavity_depth_spin,
             self.cavity_tilt_x_spin,
