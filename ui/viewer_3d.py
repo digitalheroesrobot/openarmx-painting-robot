@@ -1668,7 +1668,7 @@ class ProductViewer(QWidget):
                 ) * mm_factor for i in range(1, len(records))
             ])),
             "spray_distance_mm": 0.0,
-            "connector_distance_mm": 0.0,
+            
         }
         self._interactive_spray_route_optimization = {
             "algorithm": "IMPORTED_TIME_PARAMETERIZED_CSV",
@@ -1740,7 +1740,7 @@ class ProductViewer(QWidget):
     def _build_interactive_route_metrics(self, records):
         """Time spray strokes only; MoveIt2 owns inter-stroke transfer planning."""
         if not records:
-            return {"spray_distance_mm": 0.0, "connector_distance_mm": 0.0,
+            return {"spray_distance_mm": 0.0, 
                     "total_route_distance_mm": 0.0, "estimated_duration_s": 0.0,
                     "recorded_replay_duration_s": 0.0, "timeline": [],
                     "safety_status": "NO_ROUTE"}
@@ -1783,7 +1783,7 @@ class ProductViewer(QWidget):
                              "start_record": first, "end_record": second,
                              "spray_on": True, "kind": "SPRAY_ON_ROBOT_SPEED"})
             elapsed += duration
-        return {"spray_distance_mm": float(spray_distance), "connector_distance_mm": 0.0,
+        return {"spray_distance_mm": float(spray_distance), 
                 "total_route_distance_mm": float(spray_distance),
                 "estimated_duration_s": float(elapsed), "recorded_replay_duration_s": float(elapsed),
                 "painting_speed_mm_s": speed, "timeline": timeline,
@@ -1831,7 +1831,7 @@ class ProductViewer(QWidget):
         self.recorded_path_status_label.setText(
             f"{stroke_count} SPRAY STROKES · ORDER PRESERVED · MOVEIT2 GENERATES TRANSFERS"
         )
-        self._interactive_route_optimization_metrics = {"stroke_count": stroke_count, "safe_connector_count": 0}
+        self._interactive_route_optimization_metrics = {"stroke_count": stroke_count}
         self._refresh_interactive_recorded_path_actor()
         self.route_readiness_changed.emit(bool(ready))
         return bool(ready)
@@ -7646,10 +7646,7 @@ class ProductViewer(QWidget):
                 )
                 if route_timing:
                     mm_factor = float(self._get_source_mm_factor() or 1.0)
-                    route_length = (
-                        float(route_timing["spray_distance_mm"])
-                        + float(route_timing["connector_distance_mm"])
-                    ) / mm_factor
+                    route_length = float(route_timing["spray_distance_mm"]) / mm_factor
             self._refresh_interactive_recorded_path_actor()
 
         result = {
@@ -7702,7 +7699,6 @@ class ProductViewer(QWidget):
             "spray_length_mm": (
                 float(route_timing["spray_distance_mm"]) if route_timing else 0.0
             ),
-            "travel_length_mm": 0.0,
             "total_route_distance_mm": (
                 float(route_timing["total_route_distance_mm"]) if route_timing else 0.0
             ),
