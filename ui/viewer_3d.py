@@ -497,6 +497,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_angle_x_deg = 0.0
         self._interactive_spray_angle_y_deg = 0.0
         self._interactive_spray_angle_anchor_pose = None
+        self._interactive_spray_locked_direction_world = None
         self._interactive_hud_actor = None
         self._interactive_last_record_time = 0.0
         self._interactive_mouse_move_observer_id = interactor.AddObserver(
@@ -4927,6 +4928,45 @@ class ProductViewer(QWidget):
         self._interactive_spray_angle_last_position = None
         self._interactive_spray_angle_anchor_pose = None
 
+        # Lock the adjusted direction after the gesture. Subsequent cursor
+        # picks may move the surface target, but must not replace this axis
+        # with the normal of whichever face happens to be under the pointer.
+        latest = self._interactive_spray_latest_pose
+        if latest is not None:
+            direction = np.asarray(
+                latest["spray_direction_world"], dtype=np.float64
+            ).copy()
+            length = float(np.linalg.norm(direction))
+            if np.isfinite(length) and length > 1e-12:
+                self._interactive_spray_locked_direction_world = direction / length
+
+    def _interactive_apply_locked_spray_direction(self, pose):
+        """Keep the chosen spray axis while moving the target over new faces."""
+        locked = self._interactive_spray_locked_direction_world
+        if pose is None or locked is None:
+            return pose
+        direction = np.asarray(locked, dtype=np.float64).copy()
+        length = float(np.linalg.norm(direction))
+        if not np.isfinite(length) or length <= 1e-12:
+            return pose
+        direction /= length
+
+        updated = {
+            key: (value.copy() if isinstance(value, np.ndarray) else value)
+            for key, value in pose.items()
+        }
+        surface_point = np.asarray(
+            updated["surface_point_world"], dtype=np.float64
+        )
+        # Keep the picked surface point on the cone centerline at the current
+        # working distance, without changing the locked spray orientation.
+        updated["spray_direction_world"] = direction
+        updated["nozzle_point_world"] = (
+            surface_point - direction * float(self._interactive_spray_standoff)
+        )
+        updated["timestamp"] = time.monotonic()
+        return updated
+
     def _rotate_spray_axis_from_middle_drag(self, interactor):
         current = tuple(int(value) for value in interactor.GetEventPosition())
         previous = self._interactive_spray_angle_last_position
@@ -5097,8 +5137,10 @@ class ProductViewer(QWidget):
             self._interactive_spray_recording = False
             self.plotter.render()
             return
-        # Mouse motion is preview-only. Paint is enabled only while the
-        # left mouse button is held and collision protection reports clear.
+        pose = self._interactive_apply_locked_spray_direction(pose)
+        # Mouse motion moves the surface target. After angle adjustment, the
+        # locked spray direction is retained even when the pointer crosses
+        # onto a differently oriented CAD face.
         self._interactive_update_cursor(pose)
 
     def _interactive_begin_spray_stroke(self):
@@ -5124,6 +5166,7 @@ class ProductViewer(QWidget):
         pose = self._interactive_pick_surface_pose(x, y)
         if pose is None:
             return
+        pose = self._interactive_apply_locked_spray_direction(pose)
         self._interactive_begin_spray_stroke()
         self._interactive_update_cursor(pose)
 
@@ -5140,6 +5183,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_angle_x_deg = 0.0
         self._interactive_spray_angle_y_deg = 0.0
         self._interactive_spray_angle_anchor_pose = None
+        self._interactive_spray_locked_direction_world = None
         self._interactive_spray_latest_pose = None
         x, y = interactor.GetEventPosition()
         standard_pose = self._interactive_pick_surface_pose(x, y)
@@ -5163,6 +5207,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_angle_x_deg = 0.0
         self._interactive_spray_angle_y_deg = 0.0
         self._interactive_spray_angle_anchor_pose = None
+        self._interactive_spray_locked_direction_world = None
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_latest_pose = None
