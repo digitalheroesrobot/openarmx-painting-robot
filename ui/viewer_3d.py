@@ -1950,7 +1950,7 @@ class ProductViewer(QWidget):
                 self._interactive_spray_gun_collision = (
                     self._interactive_check_gun_collision(gun_polydata)
                 )
-                self._interactive_add_replay_cone_visual(display_pose)
+                self._interactive_add_replay_cone_visual(pose)
                 self._interactive_replay_deposition_step(
                     pose, float(sample_duration)
                 )
