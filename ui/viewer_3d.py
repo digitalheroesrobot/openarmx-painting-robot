@@ -490,8 +490,7 @@ class ProductViewer(QWidget):
         self._interactive_saved_style_enabled = True
         self._interactive_saved_style = None
         self._interactive_spray_input_style = None
-        self._interactive_spray_camera_dragging = False
-        self._interactive_spray_camera_last_position = None
+
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
         self._interactive_spray_angle_x_deg = 0.0
@@ -508,12 +507,6 @@ class ProductViewer(QWidget):
         )
         self._interactive_spray_release_observer_id = interactor.AddObserver(
             "LeftButtonReleaseEvent", self._on_interactive_spray_left_release, 3.0
-        )
-        self._interactive_spray_right_press_observer_id = interactor.AddObserver(
-            "RightButtonPressEvent", self._on_interactive_spray_right_press, 3.0
-        )
-        self._interactive_spray_right_release_observer_id = interactor.AddObserver(
-            "RightButtonReleaseEvent", self._on_interactive_spray_right_release, 3.0
         )
         self._interactive_spray_middle_press_observer_id = interactor.AddObserver(
             "MiddleButtonPressEvent", self._on_interactive_spray_middle_press, 3.0
@@ -940,7 +933,7 @@ class ProductViewer(QWidget):
         self.camera_mode_button.setCheckable(True)
         self.camera_mode_button.setChecked(True)
         self.camera_mode_button.setToolTip(
-            "Switch to camera-only navigation. In SPRAY mode, right-drag orbits the camera."
+            "Switch to the existing camera navigation mode. Adjust product orientation with the pose controls above the viewport."
         )
         self.camera_mode_button.clicked.connect(
             lambda checked=False: self._set_interactive_view_mode("camera")
@@ -952,7 +945,7 @@ class ProductViewer(QWidget):
         self.spray_mode_button.setChecked(False)
         self.spray_mode_button.setEnabled(False)
         self.spray_mode_button.setToolTip(
-            "Move: preview | Hold left: paint | Hold right and drag: orbit | Wheel: zoom"
+            "Move: preview | Hold left: paint | Middle-drag: adjust spray angle | Wheel: working distance"
         )
         self.spray_mode_button.clicked.connect(
             lambda checked=False: self._set_interactive_view_mode("spray")
@@ -998,17 +991,6 @@ class ProductViewer(QWidget):
             "color: #9AAAB5; font-size: 9px; padding-left: 6px;"
         )
         row.addWidget(self.spray_perpendicular_status)
-
-        self.camera_orbit_angle_status = QLabel("VIEW YAW: --° | ROLL: --°")
-        self.camera_orbit_angle_status.setMinimumWidth(190)
-        self.camera_orbit_angle_status.setToolTip(
-            "Live camera orbit angles relative to the product coordinate frame. "
-            "These values change during right-button camera orbit; the product pose is unchanged."
-        )
-        self.camera_orbit_angle_status.setStyleSheet(
-            "color: #F6C66A; font-size: 9px; font-weight: 700; padding-left: 6px;"
-        )
-        row.addWidget(self.camera_orbit_angle_status)
 
         self.interactive_paint_color_view_button = QPushButton("ACTUAL PAINT COLOR")
         self.interactive_paint_color_view_button.setCheckable(True)
@@ -4932,27 +4914,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_records.append(record)
         return True
 
-    def _on_interactive_spray_right_press(self, interactor, event):
-        """Start camera orbit without leaving SPRAY mode."""
-        if (
-            not self._interactive_spray_active
-            or self._interactive_view_mode != "spray"
-        ):
-            return
-        self._interactive_spray_camera_dragging = True
-        self._interactive_spray_camera_last_position = tuple(
-            int(value) for value in interactor.GetEventPosition()
-        )
-        # A camera gesture must not deposit coating or bridge two paint samples.
-        self._interactive_spray_recording = False
-        self._interactive_spray_last_deposition_timestamp = None
-        self._interactive_spray_previous_nozzle_world = None
-        self._interactive_spray_last_speed_mm_s = 0.0
-
-    def _on_interactive_spray_right_release(self, interactor, event):
-        self._interactive_spray_camera_dragging = False
-        self._interactive_spray_camera_last_position = None
-
     def _on_interactive_spray_middle_press(self, interactor, event):
         """Begin a middle-button drag to tilt the spray axis."""
         if not self._interactive_spray_active or self._interactive_view_mode != "spray":
@@ -5161,118 +5122,6 @@ class ProductViewer(QWidget):
         else:
             self.plotter.render()
 
-    def _update_camera_orbit_angle_readout(self, pivot, local_x, local_z):
-        """Display camera yaw and roll relative to the product coordinate frame."""
-        if not hasattr(self, "camera_orbit_angle_status"):
-            return
-        camera = self.plotter.camera
-        camera_position = np.asarray(camera.GetPosition(), dtype=np.float64)
-        offset = camera_position - np.asarray(pivot, dtype=np.float64)
-        distance = float(np.linalg.norm(offset))
-        x_axis = np.asarray(local_x, dtype=np.float64).copy()
-        z_axis = np.asarray(local_z, dtype=np.float64).copy()
-        x_axis /= max(float(np.linalg.norm(x_axis)), 1e-12)
-        z_axis /= max(float(np.linalg.norm(z_axis)), 1e-12)
-        if distance <= 1e-12:
-            return
-
-        view_from_pivot = offset / distance
-        x_component = float(np.dot(view_from_pivot, x_axis))
-        y_axis = np.cross(z_axis, x_axis)
-        y_axis /= max(float(np.linalg.norm(y_axis)), 1e-12)
-        y_component = float(np.dot(view_from_pivot, y_axis))
-        yaw = math.degrees(math.atan2(y_component, x_component))
-
-        # Measure roll against the product's local downward axis projected
-        # onto the camera image plane. This remains meaningful while yawing.
-        view_direction = -view_from_pivot
-        reference_up = -z_axis
-        reference_up -= view_direction * float(np.dot(reference_up, view_direction))
-        actual_up = np.asarray(camera.GetViewUp(), dtype=np.float64)
-        actual_up -= view_direction * float(np.dot(actual_up, view_direction))
-        reference_norm = float(np.linalg.norm(reference_up))
-        actual_norm = float(np.linalg.norm(actual_up))
-        if reference_norm <= 1e-10 or actual_norm <= 1e-10:
-            roll = 0.0
-        else:
-            reference_up /= reference_norm
-            actual_up /= actual_norm
-            roll = math.degrees(math.atan2(
-                float(np.dot(view_direction, np.cross(reference_up, actual_up))),
-                float(np.clip(np.dot(reference_up, actual_up), -1.0, 1.0)),
-            ))
-        self.camera_orbit_angle_status.setText(
-            f"VIEW YAW: {yaw:+.1f}° | ROLL: {roll:+.1f}°"
-        )
-
-    def _rotate_camera_from_spray_drag(self, interactor):
-        """Adjust camera yaw and roll with the right mouse button."""
-        current = tuple(int(value) for value in interactor.GetEventPosition())
-        previous = self._interactive_spray_camera_last_position
-        self._interactive_spray_camera_last_position = current
-        if previous is None:
-            return
-        dx = current[0] - previous[0]
-        dy = current[1] - previous[1]
-        if dx == 0 and dy == 0:
-            return
-
-        camera = self.plotter.camera
-        sensitivity = 0.5  # degrees per screen pixel
-
-        # Yaw is measured around the product's local vertical axis.
-        pivot = np.asarray(camera.GetFocalPoint(), dtype=np.float64)
-        local_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-        local_z = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-        if self._pose_actor is not None:
-            actor_matrix = self._pose_actor.GetMatrix()
-            local_x = np.array(
-                [actor_matrix.GetElement(row, 0) for row in range(3)],
-                dtype=np.float64,
-            )
-            local_z = np.array(
-                [actor_matrix.GetElement(row, 2) for row in range(3)],
-                dtype=np.float64,
-            )
-            actor_center = np.asarray(self._pose_actor.GetCenter(), dtype=np.float64)
-            if actor_center.shape == (3,) and np.all(np.isfinite(actor_center)):
-                pivot = actor_center
-
-        def rotate_vector(vector, axis, angle_deg):
-            axis_norm = float(np.linalg.norm(axis))
-            if axis_norm <= 1e-12:
-                return vector
-            axis = axis / axis_norm
-            angle = math.radians(float(angle_deg))
-            cosine = math.cos(angle)
-            sine = math.sin(angle)
-            return (
-                vector * cosine
-                + np.cross(axis, vector) * sine
-                + axis * float(np.dot(axis, vector)) * (1.0 - cosine)
-            )
-
-        yaw_deg = -float(dx) * sensitivity
-        roll_deg = -float(dy) * sensitivity
-        position = np.asarray(camera.GetPosition(), dtype=np.float64)
-        view_up = np.asarray(camera.GetViewUp(), dtype=np.float64)
-        offset = position - pivot
-
-        # Yaw moves the camera around the product. Roll rotates the camera's
-        # image plane around its current viewing axis without moving its position.
-        offset = rotate_vector(offset, local_z, yaw_deg)
-        view_up = rotate_vector(view_up, local_z, yaw_deg)
-        view_direction = -offset / max(float(np.linalg.norm(offset)), 1e-12)
-        view_up = rotate_vector(view_up, view_direction, roll_deg)
-
-        camera.SetFocalPoint(*pivot.tolist())
-        camera.SetPosition(*(pivot + offset).tolist())
-        camera.SetViewUp(*view_up.tolist())
-        camera.OrthogonalizeViewUp()
-        self.plotter.reset_camera_clipping_range()
-        self._update_camera_orbit_angle_readout(pivot, local_x, local_z)
-        self.plotter.render()
-
     def _on_interactive_spray_mouse_move(self, interactor, event):
         if (
             not self._interactive_spray_active
@@ -5287,15 +5136,6 @@ class ProductViewer(QWidget):
                 self._interactive_spray_angle_last_position = None
             else:
                 self._rotate_spray_axis_from_middle_drag(interactor)
-                return
-
-        # Right-drag exclusively controls the camera; do not pick or paint.
-        if self._interactive_spray_camera_dragging:
-            if not bool(QApplication.mouseButtons() & Qt.MouseButton.RightButton):
-                self._interactive_spray_camera_dragging = False
-                self._interactive_spray_camera_last_position = None
-            else:
-                self._rotate_camera_from_spray_drag(interactor)
                 return
 
         # Qt's global button state is the fallback source of truth. Some
@@ -5347,8 +5187,6 @@ class ProductViewer(QWidget):
             or self._interactive_view_mode != "spray"
         ):
             return
-        if self._interactive_spray_camera_dragging:
-            return
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y)
         if pose is None:
@@ -5388,8 +5226,7 @@ class ProductViewer(QWidget):
         ):
             return
         self._interactive_spray_recording = False
-        self._interactive_spray_camera_dragging = False
-        self._interactive_spray_camera_last_position = None
+
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
         self._interactive_spray_angle_x_deg = 0.0
@@ -5406,8 +5243,7 @@ class ProductViewer(QWidget):
         if not self._interactive_spray_active:
             return None
         self._interactive_spray_recording = False
-        self._interactive_spray_camera_dragging = False
-        self._interactive_spray_camera_last_position = None
+
         self._interactive_spray_active = False
         self._interactive_view_mode = "camera"
         self._interactive_spray_last_deposition_timestamp = None
