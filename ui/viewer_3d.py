@@ -1635,7 +1635,9 @@ class ProductViewer(QWidget):
             self._interactive_spray_previous_nozzle_world = None
             self._interactive_spray_last_speed_mm_s = 0.0
             return False
-        self._interactive_apply_paint_deposition(patch, replay_pose)
+        self._interactive_apply_paint_deposition(
+            patch, replay_pose, duration_s=float(dt)
+        )
         self._interactive_refresh_paint_visual(render=False)
         return True
 
@@ -1682,6 +1684,92 @@ class ProductViewer(QWidget):
         self._interactive_recorded_replay_timer.start()
         self.plotter.render()
 
+    def _integrate_interactive_replay_interval(self, start_s, end_s):
+        """Integrate every replay timeline interval, including edges crossed between UI ticks.
+
+        The viewport timer is only a presentation clock. It must never decide
+        which spray segments receive coating, because short edges can be
+        shorter than one timer interval and would otherwise be skipped.
+        """
+        timeline = getattr(self, "_interactive_recorded_replay_timeline", [])
+        end_times = np.asarray(
+            getattr(self, "_interactive_recorded_replay_end_times", []),
+            dtype=np.float64,
+        )
+        if not timeline or not len(end_times):
+            return
+
+        cursor = max(float(start_s), 0.0)
+        target = min(float(end_s), float(timeline[-1]["end_s"]))
+        max_step_s = 0.04
+        epsilon = 1e-10
+        while cursor < target - epsilon:
+            edge_index = int(np.searchsorted(end_times, cursor + epsilon, side="right"))
+            if edge_index >= len(timeline):
+                break
+            edge = timeline[edge_index]
+            edge_start = float(edge["start_s"])
+            edge_end = float(edge["end_s"])
+            interval_end = min(target, edge_end)
+            if interval_end <= cursor + epsilon:
+                cursor = max(cursor, edge_end)
+                continue
+
+            if not edge["spray_on"]:
+                self._interactive_spray_last_deposition_timestamp = None
+                self._interactive_spray_previous_nozzle_world = None
+                self._interactive_spray_last_speed_mm_s = 0.0
+                cursor = interval_end
+                continue
+
+            step_count = max(
+                1, int(math.ceil((interval_end - cursor) / max_step_s))
+            )
+            step_duration = (interval_end - cursor) / step_count
+            for step_index in range(step_count):
+                step_start = cursor + step_index * step_duration
+                step_end = (
+                    interval_end
+                    if step_index == step_count - 1
+                    else cursor + (step_index + 1) * step_duration
+                )
+                edge_duration = max(edge_end - edge_start, 1e-9)
+                start_fraction = np.clip(
+                    (step_start - edge_start) / edge_duration, 0.0, 1.0
+                )
+                end_fraction = np.clip(
+                    (step_end - edge_start) / edge_duration, 0.0, 1.0
+                )
+                start_pose = self._interpolate_replay_record(
+                    edge["start_record"], edge["end_record"], start_fraction
+                )
+                pose = self._interpolate_replay_record(
+                    edge["start_record"], edge["end_record"], end_fraction
+                )
+
+                # Seed the physical travel interval at the exact start of a
+                # spray-on edge. This avoids dropping the first deposition
+                # interval of every stroke.
+                if self._interactive_spray_previous_nozzle_world is None:
+                    self._interactive_spray_previous_nozzle_world = np.asarray(
+                        start_pose["nozzle_point_world"], dtype=np.float64
+                    ).copy()
+                    self._interactive_spray_last_deposition_timestamp = time.monotonic()
+
+                self._interactive_remove_live_actors()
+                gun_actors, gun_polydata = self._interactive_build_gun_visual(
+                    pose["nozzle_point_world"], pose["spray_direction_world"]
+                )
+                self._interactive_spray_live_actors.extend(gun_actors)
+                self._interactive_spray_gun_collision = (
+                    self._interactive_check_gun_collision(gun_polydata)
+                )
+                self._interactive_add_replay_cone_visual(pose)
+                self._interactive_replay_deposition_step(
+                    pose, float(step_end - step_start)
+                )
+            cursor = interval_end
+
     def _advance_interactive_recorded_replay(self):
         timeline = getattr(self, "_interactive_recorded_replay_timeline", [])
         if not timeline:
@@ -1692,17 +1780,34 @@ class ProductViewer(QWidget):
             time.monotonic() - float(self._interactive_recorded_replay_started_at),
         )
         total = float(timeline[-1]["end_s"])
-        if elapsed >= total:
+        target_elapsed = min(elapsed, total)
+        previous_elapsed = float(getattr(
+            self, "_interactive_recorded_replay_last_elapsed", 0.0
+        ))
+
+        # Process all elapsed timeline pieces before updating the display pose.
+        # This includes the final interval when the wall clock reaches the end.
+        if target_elapsed > previous_elapsed:
+            self._integrate_interactive_replay_interval(
+                previous_elapsed, target_elapsed
+            )
+        self._interactive_recorded_replay_last_elapsed = target_elapsed
+
+        if target_elapsed >= total - 1e-10:
             self._stop_interactive_recorded_replay(completed=True)
             return
 
         edge_index = int(np.searchsorted(
-            self._interactive_recorded_replay_end_times, elapsed, side="left"
+            self._interactive_recorded_replay_end_times,
+            target_elapsed,
+            side="right",
         ))
         edge_index = min(edge_index, len(timeline) - 1)
         edge = timeline[edge_index]
         duration = max(float(edge["end_s"] - edge["start_s"]), 1e-9)
-        fraction = (elapsed - float(edge["start_s"])) / duration
+        fraction = np.clip(
+            (target_elapsed - float(edge["start_s"])) / duration, 0.0, 1.0
+        )
         pose = self._interpolate_replay_record(
             edge["start_record"], edge["end_record"], fraction
         )
@@ -1717,17 +1822,9 @@ class ProductViewer(QWidget):
             self._interactive_spray_gun_collision = (
                 self._interactive_check_gun_collision(gun_polydata)
             )
-            self._interactive_replay_deposition_step(pose, min(
-                max(float(elapsed) - float(getattr(
-                    self, "_interactive_recorded_replay_last_elapsed", elapsed
-                )), 0.0),
-                0.10,
-            ))
         else:
-            self._interactive_spray_last_deposition_timestamp = None
-            self._interactive_spray_previous_nozzle_world = None
-            self._interactive_spray_last_speed_mm_s = 0.0
-        self._interactive_recorded_replay_last_elapsed = float(elapsed)
+            self._interactive_spray_gun_collision = False
+            self._interactive_spray_surface_excluded = False
 
         if self._interactive_recorded_replay_actor is not None:
             try:
@@ -1742,7 +1839,7 @@ class ProductViewer(QWidget):
             mode = "SPRAY BLOCKED · GUN COLLISION"
         elif edge["spray_on"] and self._interactive_spray_surface_excluded:
             mode = "SPRAY BLOCKED · STAGE 2 EXCLUDED"
-        current = self._format_route_time(elapsed)
+        current = self._format_route_time(target_elapsed)
         total_text = self._format_route_time(total)
         self.recorded_path_status_label.setText(
             f"{mode} · {edge['kind']} · {current} / {total_text}"
@@ -3964,7 +4061,7 @@ class ProductViewer(QWidget):
             ),
         }
 
-    def _interactive_apply_paint_deposition(self, patch, pose):
+    def _interactive_apply_paint_deposition(self, patch, pose, duration_s=None):
         """Accumulate geometry-aware deposition for one sampled spray interval."""
         # Defense in depth: collision must block the deposition calculation,
         # not merely suppress path recording in the cursor event handler.
@@ -4011,9 +4108,17 @@ class ProductViewer(QWidget):
         self._interactive_spray_last_deposition_timestamp = timestamp
         previous_nozzle = self._interactive_spray_previous_nozzle_world
         self._interactive_spray_previous_nozzle_world = nozzle_world.copy()
-        if previous_nozzle is None or not np.isfinite(raw_dt) or raw_dt <= 0.0:
+        if previous_nozzle is None:
             return
-        dt = min(raw_dt, 0.10)
+        if duration_s is None:
+            if not np.isfinite(raw_dt) or raw_dt <= 0.0:
+                return
+            dt = min(raw_dt, 0.10)
+        else:
+            dt = float(duration_s)
+            if not np.isfinite(dt) or dt <= 0.0:
+                return
+            dt = min(dt, 0.10)
         source_factor = self._get_source_mm_factor()
         if source_factor is None:
             source_factor = 1.0
