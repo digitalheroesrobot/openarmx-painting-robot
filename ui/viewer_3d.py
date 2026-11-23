@@ -6188,10 +6188,29 @@ class ProductViewer(QWidget):
             self._interactive_remove_live_actors()
             self._interactive_spray_latest_pose = None
             self._interactive_update_surface_angle_indicator(None)
-            self._interactive_spray_recording = False
+            # In route mode, a surface hole is not an end to the mouse stroke.
+            # Keep the last valid control points so the smooth curve bridges it.
+            if not (
+                getattr(self, "_interactive_route_generation_only", False)
+                and left_button_held
+            ):
+                self._interactive_spray_recording = False
             self.plotter.render()
             return
         if not bool(pose.get("paintable", True)):
+            if (
+                getattr(self, "_interactive_route_generation_only", False)
+                and self._interactive_spray_recording
+            ):
+                # An explicitly excluded face is a real route break, unlike a
+                # geometric hole. Preserve earlier points and start a new run
+                # after the pointer leaves the excluded region.
+                self._interactive_spray_stroke_input_poses.append(
+                    {"_stroke_break": True}
+                )
+                self._interactive_spray_last_deposition_timestamp = None
+                self._interactive_spray_previous_nozzle_world = None
+                return
             self._interactive_spray_recording = False
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
@@ -6341,20 +6360,102 @@ class ProductViewer(QWidget):
             return 0
         direction /= direction_length
 
-        control = [
-            np.asarray(item["surface_point_world"], dtype=np.float64)
-            for item in raw
-        ]
+        # Explicit Stage 2 excluded faces split a stroke. A failed/far surface
+        # projection is treated as a hole and retained in the same trajectory
+        # plane, so it does not split the route.
+        raw_segments = []
+        current_raw_segment = []
+        for item in raw:
+            if item.get("_stroke_break", False):
+                if current_raw_segment:
+                    raw_segments.append(current_raw_segment)
+                    current_raw_segment = []
+                continue
+            current_raw_segment.append(item)
+        if current_raw_segment:
+            raw_segments.append(current_raw_segment)
+
         dense = []
-        if len(raw) == 1:
-            projected = self._interactive_project_smoothed_surface_point(control[0])
-            if projected is not None and projected["paintable"]:
+        hole_tolerance = max(spacing * 0.35, 1e-4)
+        for raw_segment_index, raw_segment in enumerate(raw_segments):
+            if raw_segment_index:
+                dense.append(None)  # Explicit excluded-region boundary.
+            control = [
+                np.asarray(item["surface_point_world"], dtype=np.float64)
+                for item in raw_segment
+            ]
+
+            def append_curve_sample(curve_point, first_raw, second_raw, t):
+                timestamp = (
+                    float(first_raw["timestamp"]) * (1.0 - t)
+                    + float(second_raw["timestamp"]) * t
+                )
+                normal = (
+                    np.asarray(first_raw["surface_normal_world"], dtype=np.float64)
+                    * (1.0 - t)
+                    + np.asarray(second_raw["surface_normal_world"], dtype=np.float64)
+                    * t
+                )
+                normal_length = float(np.linalg.norm(normal))
+                if normal_length <= 1e-12:
+                    normal = np.asarray(
+                        first_raw["surface_normal_world"], dtype=np.float64
+                    )
+                    normal_length = float(np.linalg.norm(normal))
+                if normal_length <= 1e-12:
+                    return
+                normal /= normal_length
+
+                projected = self._interactive_project_smoothed_surface_point(
+                    curve_point
+                )
+                if projected is not None and not projected["paintable"]:
+                    dense.append(None)
+                    return
+
+                # If the curve point is too far from the nearest mesh face,
+                # it lies in a hole. Keep its original point on the smoothed
+                # trajectory plane instead of snapping it to the hole rim.
+                is_hole = projected is None
+                if projected is not None:
+                    projection_distance = float(np.linalg.norm(
+                        np.asarray(projected["surface_point_world"], dtype=np.float64)
+                        - np.asarray(curve_point, dtype=np.float64)
+                    ))
+                    is_hole = projection_distance > hole_tolerance
+
+                if is_hole:
+                    cell_id = int(
+                        first_raw.get("cell_id", -1)
+                        if t < 0.5 else second_raw.get("cell_id", -1)
+                    )
+                    if cell_id < 0:
+                        return
+                    dense.append({
+                        "surface_point_world": np.asarray(
+                            curve_point, dtype=np.float64
+                        ),
+                        "surface_normal_world": normal.copy(),
+                        "cell_id": cell_id,
+                        "paintable": True,
+                        "timestamp": timestamp,
+                        "is_hole_bridge": True,
+                    })
+                    return
+
                 dense.append({
                     **projected,
-                    "timestamp": float(raw[0]["timestamp"]),
+                    "timestamp": timestamp,
+                    "is_hole_bridge": False,
                 })
-        else:
-            for segment_index in range(len(raw) - 1):
+
+            if len(raw_segment) == 1:
+                append_curve_sample(
+                    control[0], raw_segment[0], raw_segment[0], 0.0
+                )
+                continue
+
+            for segment_index in range(len(raw_segment) - 1):
                 p1 = control[segment_index]
                 p2 = control[segment_index + 1]
                 p0 = control[max(segment_index - 1, 0)]
@@ -6369,31 +6470,18 @@ class ProductViewer(QWidget):
                     curve_point = self._interactive_catmull_rom_point(
                         p0, p1, p2, p3, t
                     )
-                    projected = self._interactive_project_smoothed_surface_point(
-                        curve_point
+                    append_curve_sample(
+                        curve_point,
+                        raw_segment[segment_index],
+                        raw_segment[segment_index + 1],
+                        t,
                     )
-                    if projected is None:
-                        dense.append(None)
-                        continue
-                    timestamp = (
-                        float(raw[segment_index]["timestamp"])
-                        + (
-                            float(raw[segment_index + 1]["timestamp"])
-                            - float(raw[segment_index]["timestamp"])
-                        ) * t
-                    )
-                    dense.append({**projected, "timestamp": timestamp})
-            last = self._interactive_project_smoothed_surface_point(control[-1])
-            if last is not None:
-                dense.append({
-                    **last,
-                    "timestamp": float(raw[-1]["timestamp"]),
-                })
-            else:
-                dense.append(None)
+            append_curve_sample(
+                control[-1], raw_segment[-1], raw_segment[-1], 0.0
+            )
 
-        # Split at missing or non-paintable projected surface regions. Never
-        # create a smoothed bridge across a hole or a Stage 2 excluded face.
+        # Only explicit excluded-face boundaries split the trajectory.
+        # Hole-bridge samples remain part of the same arc-length curve.
         runs = []
         current_run = []
         for item in dense:
