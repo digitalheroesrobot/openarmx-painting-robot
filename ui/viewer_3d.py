@@ -510,6 +510,11 @@ class ProductViewer(QWidget):
         self._interactive_spray_release_observer_id = interactor.AddObserver(
             "LeftButtonReleaseEvent", self._on_interactive_spray_left_release, 3.0
         )
+        self._interactive_spray_double_click_observer_id = interactor.AddObserver(
+            "LeftButtonDoubleClickEvent",
+            self._on_interactive_spray_left_double_click,
+            4.0,
+        )
         self._interactive_spray_middle_press_observer_id = interactor.AddObserver(
             "MiddleButtonPressEvent", self._on_interactive_spray_middle_press, 3.0
         )
@@ -5353,6 +5358,37 @@ class ProductViewer(QWidget):
         pose = self._interactive_apply_locked_spray_direction(pose)
         self._interactive_begin_spray_stroke()
         self._interactive_update_cursor(pose)
+
+    def _on_interactive_spray_left_double_click(self, interactor, event):
+        """Keep a viewport double-click in spray mode and restore preview pose."""
+        if not self._interactive_spray_active:
+            return
+
+        # A double-click is a cursor/preview action, never a request to enter
+        # camera navigation. Reassert spray input ownership in case the
+        # platform's VTK/Qt double-click handling changed the interactor style.
+        if self._interactive_view_mode != "spray":
+            self._set_interactive_view_mode("spray")
+
+        self._interactive_spray_recording = False
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_last_speed_mm_s = 0.0
+        self._interactive_spray_angle_dragging = False
+        self._interactive_spray_angle_last_position = None
+        self._interactive_spray_angle_x_deg = 0.0
+        self._interactive_spray_angle_y_deg = 0.0
+        self._interactive_spray_angle_anchor_pose = None
+        self._interactive_spray_locked_direction_world = None
+
+        x, y = interactor.GetEventPosition()
+        standard_pose = self._interactive_pick_surface_pose(x, y)
+        if standard_pose is not None:
+            self._interactive_update_cursor(standard_pose)
+        else:
+            self._interactive_spray_latest_pose = None
+            self._interactive_update_surface_angle_indicator(None)
+            self.plotter.render()
 
     def _on_interactive_spray_left_release(self, interactor, event):
         if not self._interactive_spray_active:
