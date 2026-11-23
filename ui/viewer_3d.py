@@ -260,17 +260,7 @@ PATCH_COLORS = [
 
 MAX_DIRECTION_ARROWS = 300
 
-# Discrete target-relative coating bands shared by interactive painting,
-# trajectory playback, and the on-screen legend.
-FILM_THICKNESS_COLOR_THRESHOLDS = (0.25, 0.50, 0.75, 1.00)
-FILM_THICKNESS_COLOR_RGB = (
-    (168, 168, 168),    # <25%: unpainted / trace coating (neutral grey)
-    (45, 105, 220),     # 25-<50%: blue
-    (0, 190, 230),      # 50-<75%: cyan
-    (0, 190, 110),      # 75-<100%: green
-    (255, 205, 45),     # exactly 100%: target reached (yellow)
-    (235, 55, 45),      # >100%: excessive film (red)
-)
+# Continuous film-thickness palette used by the viewport legend.
 FILM_THICKNESS_COLOR_HEX = (
     "#A8A8A8", "#2D69DC", "#00BEE6", "#00BE6E", "#FFCD2D", "#EB372D"
 )
