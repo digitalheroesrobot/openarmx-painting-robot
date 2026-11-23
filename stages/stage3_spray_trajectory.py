@@ -10,10 +10,7 @@ import numpy as np
 import trimesh
 
 from core.result_manager import ResultManager
-from core.coating_process import (
-    calculate_robot_waypoint_spacing_mm,
-    validate_coating_process,
-)
+from core.coating_process import validate_coating_process
 from stages.human_like_spray_planner import (
     SweepPlanningConfig,
     plan_human_like_sweeps,
@@ -4136,18 +4133,7 @@ def generate_spray_trajectory(
         coating_process = {
             "fluid_flow_ml_min": legacy_profile.get("fluid_flow_ml_min", 0.0),
         }
-    supplied_robot_settings = (
-        dict(coating_process) if isinstance(coating_process, dict) else {}
-    )
     coating_process_data = validate_coating_process(coating_process)
-    # Robot parameters are supplied to trajectory generation separately from
-    # coating-process configuration and are not part of its validation model.
-    coating_process_data["base_travel_speed_mm_s"] = float(
-        supplied_robot_settings.get("base_travel_speed_mm_s", 500.0)
-    )
-    coating_process_data["robot_control_frequency_hz"] = float(
-        supplied_robot_settings.get("robot_control_frequency_hz", 100.0)
-    )
 
     # Resolve unit before performing any physical-distance calculation.
     source_unit = _resolve_coordinate_unit(
@@ -4165,15 +4151,6 @@ def generate_spray_trajectory(
         sampling_spacing_mm,
         source_unit,
     )
-    robot_waypoint_spacing_mm = calculate_robot_waypoint_spacing_mm(
-        coating_process_data["base_travel_speed_mm_s"],
-        coating_process_data["robot_control_frequency_hz"],
-    )
-    robot_waypoint_spacing_coordinate_units = _mm_to_coordinate_units(
-        robot_waypoint_spacing_mm,
-        source_unit,
-    )
-
     # The active sprayer profile defines the nominal footprint. Surface
     # sampling is then driven by footprint diameter and overlap, not by an
     # arbitrary fixed point interval alone.
@@ -4331,11 +4308,10 @@ def generate_spray_trajectory(
         effective_lane_spacing_mm, source_unit
     )
     sweep_config = SweepPlanningConfig(
-        # Lateral pass pitch comes from spray footprint and overlap. Samples
-        # along each generated lane follow the robot's distance per control
-        # cycle, based on base travel speed / control frequency.
+        # Both adjacent-lane pitch and along-lane sample spacing use the
+        # same overlap-derived footprint interval for consistent simulation.
         lane_spacing=path_track_spacing_units,
-        sample_spacing=robot_waypoint_spacing_coordinate_units,
+        sample_spacing=spacing_coordinate_units,
         max_gap_factor=2.75,
         tangent_blend=0.35,
     )
@@ -4561,7 +4537,9 @@ def generate_spray_trajectory(
         if isinstance(sprayer_profile, dict)
         else {}
     )
-    base_travel_speed = float(coating_process_data["base_travel_speed_mm_s"])
+    # Fixed preview playback speed; Robot Settings are intentionally not
+    # connected to route generation or coating simulation.
+    base_travel_speed = 500.0
     travel_speeds_mm_s = np.full(
         len(ordered["nozzle_points"]), base_travel_speed, dtype=np.float64
     )
@@ -4714,14 +4692,10 @@ def generate_spray_trajectory(
             "sampling_spacing_mm": sampling_spacing_mm,
             "effective_coverage_sampling_spacing_mm": coverage_spacing_mm,
             "coverage_spacing_basis": coverage_spacing_basis,
-            "robot_waypoint_spacing_mm": robot_waypoint_spacing_mm,
-            "robot_control_frequency_hz": float(
-                coating_process_data["robot_control_frequency_hz"]
-            ),
             "spray_angle_deg": spray_angle_deg,
             "sprayer_profile": profile_data,
             "coating_process": coating_process_data,
-            "robot_speed_profile": robot_speed_profile,
+            "preview_speed_model": "FIXED_PREVIEW_SPEED_NOT_ROBOT_SETTINGS",
             "product_transform_4x4": product_transform_matrix.tolist(),
             "product_coordinate_frame": "PRODUCT_CAD",
             "world_coordinate_frame": "WORLD_XYZ",
