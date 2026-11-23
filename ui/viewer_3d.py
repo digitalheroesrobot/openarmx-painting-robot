@@ -2607,6 +2607,7 @@ class ProductViewer(QWidget):
     def start_interactive_spray_path(
         self, standoff, cone_angle_deg, sampling_spacing=None,
         sprayer_profile=None, coating_process=None,
+        excluded_face_mask=None,
     ):
         """Initialize the spray session in camera mode; Space enables painting."""
         if self.current_mesh is None:
@@ -2626,6 +2627,17 @@ class ProductViewer(QWidget):
         self.patch_labels = None
         self.face_status_labels = None
         self.face_surface_types = None
+        if excluded_face_mask is None:
+            self._interactive_spray_excluded_face_mask = np.zeros(
+                len(self.current_mesh.faces), dtype=bool
+            )
+        else:
+            excluded_mask = np.asarray(excluded_face_mask, dtype=bool).reshape(-1)
+            if excluded_mask.size != len(self.current_mesh.faces):
+                raise ValueError(
+                    "Stage 2 excluded-face mask must match the product triangle count."
+                )
+            self._interactive_spray_excluded_face_mask = excluded_mask.copy()
 
         self._interactive_spray_face_thickness_um = np.zeros(
             len(self.current_mesh.faces), dtype=np.float64
@@ -2650,6 +2662,8 @@ class ProductViewer(QWidget):
         self._interactive_spray_start_timestamp = None
         self._interactive_spray_paint_footprint_angle_deg = float(cone_angle_deg)
         self._interactive_spray_gun_collision = False
+        self._interactive_spray_surface_excluded = False
+        self._interactive_spray_excluded_face_mask = None
         self._interactive_spray_collision_filter = None
         self._interactive_spray_paint_state_dirty = False
         self._interactive_coating_process = dict(coating_process or {})
@@ -3113,6 +3127,12 @@ class ProductViewer(QWidget):
         face_normals = np.asarray(self.current_mesh.face_normals, dtype=float)
         if cell_id < 0 or cell_id >= len(face_normals):
             return None
+        excluded_mask = self._interactive_spray_excluded_face_mask
+        surface_excluded = (
+            excluded_mask is not None
+            and cell_id < len(excluded_mask)
+            and bool(excluded_mask[cell_id])
+        )
         normal_local = face_normals[cell_id]
         # Interpolate vertex normals at the picked triangle location so the
         # nozzle attitude does not jump at every triangle boundary.
@@ -3165,6 +3185,7 @@ class ProductViewer(QWidget):
             "nozzle_point_world": nozzle_world,
             "spray_direction_world": spray_direction_world,
             "cell_id": cell_id,
+            "paintable": not surface_excluded,
             "timestamp": time.monotonic(),
         }
 
@@ -3231,7 +3252,11 @@ class ProductViewer(QWidget):
         """Accumulate geometry-aware deposition for one sampled spray interval."""
         # Defense in depth: collision must block the deposition calculation,
         # not merely suppress path recording in the cursor event handler.
-        if self._interactive_spray_gun_collision:
+        if (
+            self._interactive_spray_gun_collision
+            or self._interactive_spray_surface_excluded
+            or not bool(pose.get("paintable", True))
+        ):
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
             self._interactive_spray_last_speed_mm_s = 0.0
@@ -4565,8 +4590,11 @@ class ProductViewer(QWidget):
         self._interactive_spray_gun_actors = gun_actors
         self._interactive_spray_live_actors.extend(gun_actors)
         collision = self._interactive_check_gun_collision(gun_polydata)
+        surface_excluded = not bool(pose.get("paintable", True))
         self._interactive_spray_gun_collision = collision
-        if collision:
+        self._interactive_spray_surface_excluded = surface_excluded
+        spray_blocked = collision or surface_excluded
+        if spray_blocked:
             # Do not carry elapsed spray time or the previous nozzle position
             # across a collision. Otherwise the first clear frame could apply
             # a delayed deposition interval that spans the blocked movement.
@@ -4608,7 +4636,7 @@ class ProductViewer(QWidget):
                 self._interactive_spray_live_actors.append(actor)
             if (
                 self._interactive_spray_recording
-                and not self._interactive_spray_gun_collision
+                and not spray_blocked
             ):
                 recorded_new_pose = self._interactive_append_record(
                     pose, local_pose
@@ -4807,7 +4835,9 @@ class ProductViewer(QWidget):
         )
         self._interactive_spray_live_actors.append(actor)
 
-        if collision:
+        if surface_excluded:
+            status_text = "STAGE 2 EXCLUDED - SPRAY DISABLED"
+        elif collision:
             status_text = "COLLISION - SPRAY BLOCKED"
         else:
             status_text = (
@@ -4818,7 +4848,7 @@ class ProductViewer(QWidget):
         if self._interactive_hud_actor is not None:
             hud_text = (
                 "SPRAY CURSOR | "
-                + ("HOLD LEFT MOUSE TO PAINT | " if not collision else "")
+                + ("HOLD LEFT MOUSE TO PAINT | " if not spray_blocked else "")
                 + status_text
             )
             try:
@@ -4837,13 +4867,13 @@ class ProductViewer(QWidget):
         )
         actor = self.plotter.add_mesh(
             marker,
-            color="#FF3B30" if collision else "#00E676",
+            color="#FF3B30" if spray_blocked else "#00E676",
             smooth_shading=True,
             pickable=False,
         )
         self._interactive_spray_live_actors.append(actor)
 
-        gun_color = "#FF3B30" if collision else "#B9C4CC"
+        gun_color = "#FF3B30" if spray_blocked else "#B9C4CC"
         for gun_actor in gun_actors:
             try:
                 color = QColor(gun_color)
@@ -5132,8 +5162,6 @@ class ProductViewer(QWidget):
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
             self._interactive_spray_last_speed_mm_s = 0.0
-        elif left_button_held and not self._interactive_spray_recording:
-            self._interactive_begin_spray_stroke()
 
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y)
@@ -5144,6 +5172,14 @@ class ProductViewer(QWidget):
             self._interactive_spray_recording = False
             self.plotter.render()
             return
+        if not bool(pose.get("paintable", True)):
+            self._interactive_spray_recording = False
+            self._interactive_spray_last_deposition_timestamp = None
+            self._interactive_spray_previous_nozzle_world = None
+            self._interactive_spray_last_speed_mm_s = 0.0
+        elif left_button_held and not self._interactive_spray_recording:
+            self._interactive_begin_spray_stroke()
+
         if self._interactive_spray_recording:
             self._interactive_lock_spray_direction_from_pose(pose)
         pose = self._interactive_apply_locked_spray_direction(pose)
@@ -5172,6 +5208,9 @@ class ProductViewer(QWidget):
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y)
         if pose is None:
+            return
+        if not bool(pose.get("paintable", True)):
+            self._interactive_update_cursor(pose)
             return
         self._interactive_lock_spray_direction_from_pose(pose)
         pose = self._interactive_apply_locked_spray_direction(pose)
