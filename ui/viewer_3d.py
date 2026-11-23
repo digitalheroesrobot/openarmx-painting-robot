@@ -1081,7 +1081,7 @@ class ProductViewer(QWidget):
             self._interactive_spray_dirty_face_ids = set()
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
-                self._interactive_saved_route_face_thickness_um = None
+            self._interactive_saved_route_face_thickness_um = None
             self._interactive_saved_route_surface_field = None
             self._interactive_refresh_paint_visual(render=False)
         self.recorded_path_optimize_button.setVisible(route_page)
