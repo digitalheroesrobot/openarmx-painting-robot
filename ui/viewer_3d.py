@@ -1293,7 +1293,7 @@ class ProductViewer(QWidget):
         self._interactive_recorded_replay_timing = timing
         before_seconds = float(before_timing["estimated_total_time_s"])
         after_seconds = float(timing["estimated_total_time_s"])
-        saved_seconds = max(before_seconds - after_seconds, 0.0)
+        saved_seconds = before_seconds - after_seconds
         self._interactive_route_optimization_metrics = {
             "before_optimization_estimated_time_s": before_seconds,
             "after_optimization_estimated_time_s": after_seconds,
