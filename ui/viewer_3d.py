@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 import time
 import numpy as np
@@ -3146,8 +3147,14 @@ class ProductViewer(QWidget):
         self, standoff, cone_angle_deg, sampling_spacing=None,
         sprayer_profile=None, coating_process=None,
         excluded_face_mask=None,
+        resume_existing=False,
     ):
-        """Initialize the spray session in camera mode; Space enables painting."""
+        """Start a spray session, optionally continuing the existing coated route.
+
+        When resume_existing is true, the previously recorded route and
+        accumulated coating field are preserved. The operator can inspect the
+        already-painted surface and add new strokes without starting over.
+        """
         if self.current_mesh is None:
             raise RuntimeError("Load a product before starting an interactive spray path.")
         if not np.isfinite(standoff) or standoff <= 0.0:
@@ -3166,6 +3173,26 @@ class ProductViewer(QWidget):
         )
         if self._interactive_spray_active:
             return
+
+        # Route editing is additive. Preserve the optimized route and the
+        # accumulated wet-film state so the operator can see what has already
+        # been sprayed and add only the missing coverage.
+        preserve_existing = bool(resume_existing)
+        existing_records = list(self._interactive_spray_records) if preserve_existing else []
+        existing_thickness = (
+            self._interactive_spray_face_thickness_um.copy()
+            if preserve_existing
+            and self._interactive_spray_face_thickness_um is not None
+            and len(self._interactive_spray_face_thickness_um) == len(self.current_mesh.faces)
+            else None
+        )
+        existing_surface_field = (
+            copy.deepcopy(self._interactive_spray_surface_field)
+            if preserve_existing
+            and isinstance(self._interactive_spray_surface_field, dict)
+            else None
+        )
+
         self.display_mode = "spray_point_preview"
         self.trajectory_data = None
         self.patch_labels = None
@@ -3185,17 +3212,23 @@ class ProductViewer(QWidget):
                 )
             self._interactive_spray_excluded_face_mask = excluded_mask.copy()
 
-        self._interactive_spray_face_thickness_um = np.zeros(
-            len(self.current_mesh.faces), dtype=np.float64
+        self._interactive_spray_face_thickness_um = (
+            existing_thickness
+            if existing_thickness is not None
+            else np.zeros(len(self.current_mesh.faces), dtype=np.float64)
         )
-        self._interactive_spray_surface_field = {
+        self._interactive_spray_surface_field = (
+            existing_surface_field
+            if existing_surface_field is not None
+            else {
             "schema": "STEP_BREP_UV_FILM_THICKNESS_FIELD_V3",
             "coordinate_frame": "ORIGINAL_STEP_FACE_UV",
             "field_representation": "CONTINUOUS_UV_TEXTURE_GRID",
             "interpolation_method": "CAD_SURFACE_METRIC_AWARE_GAUSSIAN",
             "texture_resolution": 256,
             "faces": {},
-        }
+            }
+        )
         self._interactive_spray_texture_actors = {}
         self._interactive_spray_texture_layout = {}
         self._interactive_spray_texture_objects = {}
@@ -3257,19 +3290,53 @@ class ProductViewer(QWidget):
             except Exception:
                 pass
             self._interactive_recorded_replay_actor = None
-        self.interactive_recorded_path_panel.hide()
+        if not preserve_existing:
+            self.interactive_recorded_path_panel.hide()
+        else:
+            self.interactive_recorded_path_panel.show()
+            self.recorded_path_replay_button.setEnabled(len(existing_records) >= 2)
         self._interactive_spray_transform = self._actor_matrix_array().copy()
         self._interactive_spray_surface = self._to_polydata(self.current_mesh).clean()
         self._interactive_spray_locator = vtkOBBTree()
         self._interactive_spray_locator.SetDataSet(self._interactive_spray_surface)
         self._interactive_spray_locator.BuildLocator()
         self._interactive_spray_latest_pose = None
-        self._interactive_spray_records = []
-        self._interactive_spray_stroke_id = -1
-        self._interactive_spray_start_timestamp = None
+        self._interactive_spray_records = list(existing_records)
+        if existing_records:
+            # Continue stroke IDs after the existing route.
+            existing_stroke_ids = [
+                int(item.get("stroke_id", -1)) for item in existing_records
+            ]
+            self._interactive_spray_stroke_id = max(existing_stroke_ids)
+
+            # Exclude the idle time between editing sessions from the
+            # recording elapsed-time metric.
+            latest_timestamp = max(
+                float(item.get("timestamp", 0.0))
+                for item in existing_records
+            )
+            timestamp_shift = time.monotonic() - latest_timestamp
+            if np.isfinite(timestamp_shift):
+                for item in existing_records:
+                    item["timestamp"] = (
+                        float(item.get("timestamp", 0.0)) + timestamp_shift
+                    )
+            self._interactive_spray_start_timestamp = max(
+                float(item.get("timestamp", 0.0))
+                for item in existing_records
+            )
+        else:
+            self._interactive_spray_stroke_id = -1
+            self._interactive_spray_start_timestamp = None
         self._interactive_spray_painted_actors = []
         self._interactive_spray_live_actors = []
         self._interactive_spray_active = True
+
+        # The route editor must reopen with the accumulated wet-film state.
+        if preserve_existing and existing_thickness is not None:
+            self._interactive_refresh_paint_visual(render=False)
+            self._refresh_interactive_recorded_path_actor()
+
         # Cursor motion only previews the nozzle. Paint deposition and pose
         # recording are gated by the left mouse button.
         self._interactive_spray_recording = False
