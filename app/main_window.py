@@ -1325,12 +1325,12 @@ class MainWindow(QMainWindow):
         self.route_next_button.hide()
         layout.addWidget(self.route_next_button)
 
-        self.route_edit_button = QPushButton("RE-RECORD / EDIT ROUTE")
+        self.route_edit_button = QPushButton("ADD / EDIT SPRAY ROUTE")
         self.route_edit_button.setObjectName("SecondaryButton")
         self.route_edit_button.setToolTip(
-            "Start a fresh route-recording session so the spray strokes can be revised."
+            "Continue the existing spray route. The current coating remains visible so you can add missing spray strokes."
         )
-        self.route_edit_button.clicked.connect(self._restart_interactive_spray_path)
+        self.route_edit_button.clicked.connect(self._continue_interactive_spray_path)
         self.route_edit_button.hide()
         layout.addWidget(self.route_edit_button)
 
@@ -4125,8 +4125,8 @@ class MainWindow(QMainWindow):
         )
         self.viewer._interactive_refresh_recorded_paint_color()
 
-    def _start_interactive_spray_path(self):
-        """Automatically start mouse-driven spray recording on Stage 3 entry."""
+    def _start_interactive_spray_path(self, resume_existing=False):
+        """Start or continue mouse-driven spray recording on Stage 3."""
         if (
             self._operation_running
             or self.current_mesh is None
@@ -4163,6 +4163,7 @@ class MainWindow(QMainWindow):
                     and self.current_stage2_result.get("face_status_labels") is not None
                     else None
                 ),
+                resume_existing=bool(resume_existing),
             )
         except Exception as exc:
             QMessageBox.critical(self, "Interactive Spray Path Error", str(exc))
@@ -4186,9 +4187,14 @@ class MainWindow(QMainWindow):
             else len(self.current_mesh.faces)
         )
         paintable_count = max(len(self.current_mesh.faces) - excluded_count, 0)
+        action_text = (
+            "CONTINUE SPRAYING"
+            if resume_existing
+            else "START SPRAYING"
+        )
         self.status_bar.showMessage(
             f"STAGE 2: {excluded_count} NON-PAINTABLE FACES | "
-            "CAMERA VIEW ACTIVE | PRESS SPACE FOR SPRAY MODE"
+            f"{action_text} | CAMERA VIEW ACTIVE | PRESS SPACE FOR SPRAY MODE"
         )
         self.analysis_summary.setText(
             "SPRAY TRAJECTORY\n\n"
@@ -4392,15 +4398,19 @@ class MainWindow(QMainWindow):
             "If the coverage is unsatisfactory, return to ROUTE GENERATION."
         )
 
-    def _restart_interactive_spray_path(self):
-        """Discard the current route and begin a fresh route-recording session."""
-        if self._operation_running or self.active_stage != STAGE_SPRAY_TRAJECTORY:
+    def _continue_interactive_spray_path(self):
+        """Continue the existing route while preserving its accumulated coating."""
+        if (
+            self._operation_running
+            or self.active_stage != STAGE_SPRAY_TRAJECTORY
+            or self.interactive_spray_path is None
+            or not self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
+        ):
             return
-        self.interactive_spray_path = None
-        self.stage_completed[STAGE_SPRAY_TRAJECTORY] = False
+
         self.stage_completed[STAGE_SPRAY_SIMULATION] = False
         self.viewer.set_recorded_path_page("route")
-        self._start_interactive_spray_path()
+        self._start_interactive_spray_path(resume_existing=True)
         self._refresh_workflow_ui()
 
     def _display_current_trajectory(self):
