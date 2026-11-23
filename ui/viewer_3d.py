@@ -3514,6 +3514,15 @@ class ProductViewer(QWidget):
 
     def _interactive_build_excluded_face_overlay(self):
         """Show Stage 2 non-paintable triangles as a persistent red overlay."""
+        if self._interactive_spray_excluded_overlay_actor is not None:
+            try:
+                self.plotter.remove_actor(
+                    self._interactive_spray_excluded_overlay_actor,
+                    render=False,
+                )
+            except Exception:
+                pass
+            self._interactive_spray_excluded_overlay_actor = None
         mask = self._interactive_spray_excluded_face_mask
         if mask is None or not np.any(mask) or self.current_mesh is None:
             return False
