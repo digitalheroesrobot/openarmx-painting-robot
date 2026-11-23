@@ -325,7 +325,6 @@ class ProductViewer(QWidget):
         self.face_status_labels = None
         self.trajectory_face_patch_labels = None
         self.trajectory_data = None
-        self._trajectory_timing_stale = False
         self.trajectory_path_statistics = {}
         self.trajectory_validation = {}
         self._playback_spray_actor = None
@@ -7248,7 +7247,7 @@ class ProductViewer(QWidget):
                 total = len(self.trajectory_data["nozzle_points"]) if self.trajectory_data is not None else 0
                 self.trajectory_playback_label.setText(f"0 / {total}")
 
-    def update_coating_process_preview(self, coating_process, timing_stale=False):
+    def update_coating_process_preview(self, coating_process):
         """Apply saved process settings to the loaded trajectory without restarting the app."""
         if not isinstance(coating_process, dict):
             raise TypeError("coating_process must be a dictionary.")
@@ -7260,7 +7259,6 @@ class ProductViewer(QWidget):
         parameters = dict(self.trajectory_data.get("parameters", {}))
         parameters["coating_process"] = dict(coating_process)
         self.trajectory_data["parameters"] = parameters
-        self._trajectory_timing_stale = bool(timing_stale)
         self._stop_trajectory_playback(reset=True)
         self._update_film_thickness_legend(
             coating_process.get("target_dry_film_thickness_um", 0.0)
