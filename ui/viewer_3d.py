@@ -1329,6 +1329,8 @@ class ProductViewer(QWidget):
         starts = np.r_[0, np.flatnonzero(np.diff(segment_ids) != 0) + 1]
         ends = np.r_[starts[1:], len(records)]
         stroke_endpoints = []
+        arrow_points = []
+        arrow_vectors = []
         for start_index, end_index in zip(starts, ends):
             points = np.asarray([
                 records[index]["nozzle_point_world"]
@@ -1342,7 +1344,75 @@ class ProductViewer(QWidget):
                     lighting=False, pickable=False,
                 )
                 self._interactive_spray_route_actors.append(actor)
+
+                # Keep the route line, but also visualize the actual spray
+                # direction stored at each trajectory sample. The arrow points
+                # from the nozzle toward the coating surface.
+                stroke_indices = np.arange(int(start_index), int(end_index))
+                if len(stroke_indices) > 1:
+                    arrow_indices = stroke_indices[
+                        np.linspace(
+                            0,
+                            len(stroke_indices) - 1,
+                            min(len(stroke_indices), MAX_DIRECTION_ARROWS),
+                            dtype=int,
+                        )
+                    ]
+                    arrow_points.extend(
+                        np.asarray(
+                            [records[index]["nozzle_point_world"] for index in arrow_indices],
+                            dtype=np.float64,
+                        )
+                    )
+                    arrow_vectors.extend(
+                        np.asarray(
+                            [records[index]["spray_direction_world"] for index in arrow_indices],
+                            dtype=np.float64,
+                        )
+                    )
             stroke_endpoints.append((points[0], points[-1]))
+
+        if arrow_points:
+            arrow_points_array = np.asarray(arrow_points, dtype=np.float64)
+            arrow_vectors_array = np.asarray(arrow_vectors, dtype=np.float64)
+            vector_lengths = np.linalg.norm(arrow_vectors_array, axis=1)
+            valid = vector_lengths > 1e-9
+            if np.any(valid):
+                arrow_points_array = arrow_points_array[valid]
+                arrow_vectors_array = (
+                    arrow_vectors_array[valid]
+                    / vector_lengths[valid, None]
+                )
+                path_extent = np.ptp(
+                    np.asarray(
+                        [item["nozzle_point_world"] for item in records],
+                        dtype=np.float64,
+                    ),
+                    axis=0,
+                )
+                arrow_length = max(float(np.max(path_extent)) * 0.025, 1.0)
+                arrow_data = pv.PolyData(arrow_points_array)
+                arrow_data["spray_direction"] = arrow_vectors_array
+                arrow_actor = arrow_data.glyph(
+                    orient="spray_direction",
+                    scale=False,
+                    factor=arrow_length,
+                    geom=pv.Arrow(
+                        start=(0.0, 0.0, 0.0),
+                        direction=(1.0, 0.0, 0.0),
+                        tip_length=0.30,
+                        tip_radius=0.10,
+                        shaft_radius=0.035,
+                        resolution=12,
+                    ),
+                )
+                actor = self.plotter.add_mesh(
+                    arrow_actor,
+                    color="#FFD54A",
+                    lighting=False,
+                    pickable=False,
+                )
+                self._interactive_spray_route_actors.append(actor)
 
         for index in range(len(stroke_endpoints) - 1):
             connector_points = np.asarray([
