@@ -168,35 +168,36 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             width * 0.5 + 1e-8,
         )
 
-    def test_robot_waypoint_spacing_uses_speed_and_control_frequency(self):
+    def test_route_point_spacing_uses_spray_footprint_overlap(self):
         result = generate_spray_trajectory(
             mesh=self.mesh.copy(),
             face_status_labels=self.status.copy(),
             patch_labels=np.asarray([7, 9], dtype=np.int64),
             standoff_mm=100.0,
             sampling_spacing_mm=10.0,
-            spray_angle_deg=45.0,
+            spray_angle_deg=50.0,
             coordinate_unit="mm",
-            sprayer_profile=self.profile.copy(),
-            coating_process={
-                "base_travel_speed_mm_s": 240.0,
-                "robot_control_frequency_hz": 120.0,
+            sprayer_profile={
+                **self.profile,
+                "pattern_type": "round_cone",
+                "spray_cone_angle_deg": 50.0,
+                "overlap_percent": 50.0,
             },
+            coating_process={},
         )
+        expected_width = 2.0 * 100.0 * np.tan(np.deg2rad(25.0))
+        expected_pitch = expected_width * 0.5
         self.assertAlmostEqual(
-            result["parameters"]["robot_waypoint_spacing_mm"],
-            2.0,
+            result["parameters"]["effective_coverage_sampling_spacing_mm"],
+            expected_pitch,
             places=8,
         )
         self.assertAlmostEqual(
-            result["rasterization"]["robot_waypoint_spacing_mm"],
-            2.0,
+            result["rasterization"]["effective_sample_spacing_mm"],
+            expected_pitch,
             places=8,
         )
-        self.assertEqual(
-            result["rasterization"]["robot_waypoint_sampling_basis"],
-            "BASE_TRAVEL_SPEED_DIVIDED_BY_ROBOT_CONTROL_FREQUENCY",
-        )
+        self.assertNotIn("robot_waypoint_spacing_mm", result["parameters"])
 
     def test_legacy_16_column_data_contract_is_unchanged(self):
         result = self._generate([7, 9])
