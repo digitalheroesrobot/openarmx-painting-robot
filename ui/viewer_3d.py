@@ -3568,9 +3568,14 @@ class ProductViewer(QWidget):
         surface_h = np.append(pose["surface_point_world"], 1.0)
         direction_product = inverse[:3, :3] @ pose["spray_direction_world"]
         direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
+        normal_product = inverse[:3, :3] @ np.asarray(
+            pose["surface_normal_world"], dtype=np.float64
+        )
+        normal_product /= max(float(np.linalg.norm(normal_product)), 1e-12)
         return {
             "nozzle_point": (inverse @ point_h)[:3],
             "surface_point": (inverse @ surface_h)[:3],
+            "surface_normal": normal_product,
             "spray_direction": direction_product,
             "quaternion_xyzw": self._interactive_pose_quaternion_from_direction(
                 direction_product
@@ -5296,6 +5301,7 @@ class ProductViewer(QWidget):
             "spray_direction_world": pose["spray_direction_world"].copy(),
             "nozzle_point_product": local_pose["nozzle_point"].copy(),
             "surface_point_product": local_pose["surface_point"].copy(),
+            "surface_normal_product": local_pose["surface_normal"].copy(),
             "spray_direction_product": local_pose["spray_direction"].copy(),
             "quaternion_product_xyzw": local_pose["quaternion_xyzw"].copy(),
             "timestamp": float(pose["timestamp"]),
@@ -5771,51 +5777,27 @@ class ProductViewer(QWidget):
         records = list(self._interactive_spray_records)
         route_length = 0.0
         route_optimization = None
-        if len(records) >= 2:
-            source_ids = np.asarray(
-                [item["stroke_id"] for item in records], dtype=np.int64
-            )
-            stroke_count = int(len(np.unique(source_ids)))
-            if stroke_count > 1:
-                # Reorder complete strokes, never individual surface samples.
-                # A single continuous stroke needs no route optimization.
-                from stages.spray_stroke_route_optimizer import optimize_stroke_order
-                candidate = {
-                    "nozzle_points": np.asarray(
-                        [item["nozzle_point_product"] for item in records], dtype=float
-                    ),
-                    "spray_directions": np.asarray(
-                        [item["spray_direction_product"] for item in records], dtype=float
-                    ),
-                    "segment_ids": source_ids,
-                }
-                optimized = optimize_stroke_order(
-                    candidate,
-                    orientation_weight_coordinate_units_per_rad=0.0,
-                    max_2opt_passes=1 if stroke_count <= 30 else 0,
-                )
-                route_optimization = optimized["route_optimization"]
-                ordered_indices = []
-                for route_stroke in route_optimization["strokes"]:
-                    indices = np.flatnonzero(
-                        source_ids == route_stroke["source_segment_id"]
-                    )
-                    if route_stroke["reversed"]:
-                        indices = indices[::-1]
-                    ordered_indices.extend(indices.tolist())
-                records = [records[index] for index in ordered_indices]
-
+        route_timing = None
+        if records:
             self._interactive_spray_records = list(records)
-            points = np.asarray([item["nozzle_point_world"] for item in records])
-            path = pv.PolyData(points)
-            path.lines = np.asarray([len(points), *range(len(points))], dtype=np.int64)
-            self._interactive_spray_path_actor = self.plotter.add_mesh(
-                path, color="#00E5FF", line_width=3.0,
-                lighting=False, pickable=False,
-            )
-            route_length = float(np.linalg.norm(np.diff(
-                np.asarray([item["nozzle_point_product"] for item in records]), axis=0
-            ), axis=1).sum())
+            if len(records) >= 2:
+                self.interactive_recorded_path_panel.show()
+                self.recorded_path_replay_button.setEnabled(True)
+                self._optimize_interactive_recorded_path()
+                records = list(self._interactive_spray_records)
+                route_optimization = getattr(
+                    self, "_interactive_spray_route_optimization", None
+                )
+                route_timing = getattr(
+                    self, "_interactive_recorded_replay_timing", None
+                )
+                if route_timing:
+                    mm_factor = float(self._get_source_mm_factor() or 1.0)
+                    route_length = (
+                        float(route_timing["spray_distance_mm"])
+                        + float(route_timing["travel_distance_mm"])
+                    ) / mm_factor
+            self._refresh_interactive_recorded_path_actor()
 
         result = {
             "schema": "INTERACTIVE_SURFACE_FOLLOWING_SPRAY_PATH_V2",
@@ -5864,6 +5846,28 @@ class ProductViewer(QWidget):
                 [item["stroke_id"] for item in records], dtype=np.int64
             ),
             "route_length_product_units": route_length,
+            "spray_length_mm": (
+                float(route_timing["spray_distance_mm"]) if route_timing else 0.0
+            ),
+            "travel_length_mm": (
+                float(route_timing["travel_distance_mm"]) if route_timing else 0.0
+            ),
+            "spray_duration_s": (
+                float(route_timing["spray_time_s"]) if route_timing else 0.0
+            ),
+            "travel_duration_s": (
+                float(route_timing["travel_time_s"]) if route_timing else 0.0
+            ),
+            "tool_delay_s": (
+                float(route_timing["tool_delay_s"]) if route_timing else 0.0
+            ),
+            "estimated_duration_s": (
+                float(route_timing["estimated_total_time_s"]) if route_timing else 0.0
+            ),
+            "route_timing": (
+                {key: value for key, value in route_timing.items() if key != "timeline"}
+                if route_timing else None
+            ),
             "route_optimization": route_optimization,
             "surface_film_thickness_field": self._interactive_export_surface_field(),
             "face_thickness_um": (
@@ -5879,6 +5883,12 @@ class ProductViewer(QWidget):
             self.recorded_path_status_label.setText(
                 f"{len(records)} poses · {len(np.unique([r['stroke_id'] for r in records]))} strokes"
             )
+            if route_timing:
+                self.recorded_path_time_label.setText(
+                    f"EST. {self._format_route_time(route_timing['estimated_total_time_s'])}  |  "
+                    f"SPRAY {self._format_route_time(route_timing['spray_time_s'])}  |  "
+                    f"OFF {self._format_route_time(route_timing['travel_time_s'] + route_timing['tool_delay_s'])}"
+                )
             self._refresh_interactive_recorded_path_actor()
         self.plotter.add_text(
             f"INTERACTIVE SPRAY PATH COMPLETE  |  {len(records)} RECORDED POSES",
