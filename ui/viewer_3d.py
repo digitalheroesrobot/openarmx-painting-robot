@@ -2437,7 +2437,7 @@ class ProductViewer(QWidget):
         return enabled
 
     def _refresh_interactive_endpoint_markers(self):
-        """Render selectable start/end markers for every recorded spray stroke."""
+        """Show unmistakably different, labelled start and end endpoint markers."""
         for actor in getattr(self, "_interactive_endpoint_marker_actors", []):
             try:
                 self.plotter.remove_actor(actor, render=False)
@@ -2446,7 +2446,7 @@ class ProductViewer(QWidget):
         self._interactive_endpoint_marker_actors = []
         self._interactive_endpoint_pick_targets = []
         ranges = self._interactive_stroke_ranges()
-        if not ranges:
+        if not ranges or not getattr(self, "_interactive_manual_connector_mode", False):
             return
 
         all_points = np.asarray([
@@ -2455,21 +2455,43 @@ class ProductViewer(QWidget):
             for record in (item["records"][0], item["records"][-1])
         ], dtype=np.float64)
         extent = float(np.linalg.norm(np.ptp(all_points, axis=0))) if len(all_points) else 1.0
-        radius = max(extent * 0.009, 1.0)
-        show_markers = bool(getattr(self, "_interactive_manual_connector_mode", False))
-        if not show_markers:
-            return
+        radius = max(extent * 0.014, 2.0)
+        selected = list(getattr(self, "_interactive_manual_connector_selection", []))
+        selected_key = None
+        if selected:
+            selected_key = (
+                int(selected[0]["stroke_index"]),
+                str(selected[0]["kind"]),
+            )
 
+        label_points = []
+        label_text = []
+        label_colors = []
         for stroke_index, item in enumerate(ranges):
-            for kind, record, color in (
-                ("start", item["records"][0], "#48D7F0"),
-                ("end", item["records"][-1], "#FFB454"),
-            ):
+            endpoints = (
+                ("start", item["records"][0], "#00DFFF", "S"),
+                ("end", item["records"][-1], "#FF8C00", "E"),
+            )
+            for kind, record, base_color, prefix in endpoints:
                 point = np.asarray(record["nozzle_point_world"], dtype=np.float64)
-                marker = pv.Sphere(radius=radius, center=point, theta_resolution=18, phi_resolution=18)
+                is_selected = selected_key == (stroke_index, kind)
+                color = "#FFFFFF" if is_selected else base_color
+                marker = pv.Sphere(
+                    radius=radius * (1.30 if is_selected else 1.0),
+                    center=point,
+                    theta_resolution=24,
+                    phi_resolution=24,
+                )
                 actor = self.plotter.add_mesh(
-                    marker, color=color, opacity=0.98,
-                    smooth_shading=True, lighting=False, pickable=False,
+                    marker,
+                    color=color,
+                    opacity=1.0,
+                    ambient=1.0,
+                    diffuse=0.0,
+                    specular=0.0,
+                    smooth_shading=False,
+                    lighting=False,
+                    pickable=False,
                 )
                 self._interactive_endpoint_marker_actors.append(actor)
                 self._interactive_endpoint_pick_targets.append({
@@ -2479,14 +2501,44 @@ class ProductViewer(QWidget):
                     "kind": kind,
                     "record": record,
                 })
+                # Screen-facing labels make endpoint identity readable even
+                # when two 3-D markers overlap from the current camera angle.
+                label_points.append(point + np.array([0.0, 0.0, radius * 1.8]))
+                label_text.append(f"{prefix}{stroke_index + 1}")
+                label_colors.append(color)
+
+        if label_points:
+            labels = self.plotter.add_point_labels(
+                np.asarray(label_points, dtype=np.float64),
+                label_text,
+                font_size=14,
+                text_color="#FFFFFF",
+                shape="rounded_rect",
+                shape_color="#10212B",
+                shape_opacity=0.96,
+                always_visible=True,
+                show_points=False,
+                margin=4,
+                pickable=False,
+            )
+            self._interactive_endpoint_marker_actors.append(labels)
         self.plotter.render()
 
-    def _interactive_pick_route_endpoint(self, x, y, tolerance_px=22.0):
-        """Pick the closest visible route endpoint in screen space."""
+    def _interactive_pick_route_endpoint(self, x, y, tolerance_px=30.0):
+        """Pick only the endpoint type expected by the current connection step."""
         renderer = self.plotter.renderer
+        selection = list(getattr(self, "_interactive_manual_connector_selection", []))
+        expected_kind = "start" if selection else "end"
+        expected_stroke = (
+            int(selection[0]["stroke_index"]) + 1 if selection else None
+        )
         best = None
         best_distance = float(tolerance_px)
         for target in self._interactive_endpoint_pick_targets:
+            if target["kind"] != expected_kind:
+                continue
+            if expected_stroke is not None and int(target["stroke_index"]) != expected_stroke:
+                continue
             point = target["point"]
             renderer.SetWorldPoint(
                 float(point[0]), float(point[1]), float(point[2]), 1.0
