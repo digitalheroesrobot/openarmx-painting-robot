@@ -2403,6 +2403,11 @@ class ProductViewer(QWidget):
             )
         self._interactive_manual_connector_mode = enabled
         self._interactive_manual_connector_selection = []
+        button = getattr(self, "recorded_path_connect_button", None)
+        if button is not None and button.isChecked() != enabled:
+            button.blockSignals(True)
+            button.setChecked(enabled)
+            button.blockSignals(False)
         interactor = self.plotter.iren.interactor
         if enabled:
             if self._interactive_manual_connector_input_style is None:
