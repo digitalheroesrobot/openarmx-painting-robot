@@ -134,7 +134,6 @@ def calculate_cone_deposition_step(
     transfer_efficiency_percent: float,
     volume_solids_percent: float,
     number_of_coats: int = 1,
-    travel_speed_mm_s: float = 0.0,
     radial_alpha: float = 2.0,
     radial_beta: float = 2.0,
     core_deposition_fraction: float = 0.88,
@@ -153,7 +152,7 @@ def calculate_cone_deposition_step(
 
     Distance controls both the nominal footprint and overspray scale, cone
     angle controls the nominal footprint, incidence controls local
-    deposition, and duration/travel speed controls deposited volume. The
+    deposition, and recorded sample duration controls deposited volume. The
     distribution fractions are engineering defaults until measured spray
     pattern data are supplied for the actual nozzle.
     """
@@ -174,14 +173,11 @@ def calculate_cone_deposition_step(
         raise ValueError("spray_direction must be finite (3,).")
     cone = float(cone_angle_deg)
     dt = float(duration_s)
-    speed = float(travel_speed_mm_s)
     flow = float(fluid_flow_ml_min)
     if not math.isfinite(cone) or not 0.0 < cone < 179.0:
         raise ValueError("cone_angle_deg must be in (0,179).")
     if not math.isfinite(dt) or dt < 0.0:
         raise ValueError("duration_s must be finite and non-negative.")
-    if not math.isfinite(speed) or speed < 0.0:
-        raise ValueError("travel_speed_mm_s must be finite and non-negative.")
     if not math.isfinite(flow) or flow < 0.0:
         raise ValueError("fluid_flow_ml_min must be finite and non-negative.")
 
@@ -337,7 +333,6 @@ def calculate_cone_deposition_step(
             "inside_cone": inside,
             "overspray_outside_cone": outside,
             "facing_cosine": facing,
-            "travel_speed_mm_s": speed,
             "footprint_radius_mm": radius,
         }
 
@@ -355,7 +350,6 @@ def calculate_cone_deposition_step(
             "inside_cone": inside,
             "overspray_outside_cone": outside,
             "facing_cosine": facing,
-            "travel_speed_mm_s": speed,
             "footprint_radius_mm": radius,
         }
     deposited = input_dry * weight
@@ -369,7 +363,6 @@ def calculate_cone_deposition_step(
         "inside_cone": inside,
         "overspray_outside_cone": outside,
         "facing_cosine": facing,
-        "travel_speed_mm_s": speed,
         "footprint_radius_mm": radius,
         "overspray_sigma_mm": sigma,
         "normalized_xy": normalized_xy,
