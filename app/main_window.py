@@ -4352,23 +4352,27 @@ class MainWindow(QMainWindow):
             optimization_metrics.get("optimizer_compute_time_s", 0.0)
         )
         recording_seconds = float(result.get("recording_elapsed_s", 0.0))
+        signed_saved_time = (
+            ("-" if saved_time < 0.0 else "+")
+            + format_time(abs(saved_time))
+        )
         self.summary_chart.hide()
         self.summary_section.setText("ROUTE GENERATION")
         self.analysis_summary.setStyleSheet("color: #00E676;")
         self.analysis_summary.setText(
-            "SPRAY ROUTE READY FOR SIMULATION\\n\\n"
-            f"RECORDED POSES: {len(result.get('nozzle_points_product', [])):,}\\n"
-            f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\\n"
-            f"ROUTE LENGTH: {float(result.get('route_length_product_units', 0.0)):.2f} {self.coordinate_unit}\\n"
-            f"ESTIMATED COMPLETION: {format_time(result.get('estimated_duration_s', 0.0))}\\n"
-            f"RECORDING ELAPSED: {format_time(recording_seconds)}\\n\\n"
-            "ROUTE OPTIMIZATION TIME COMPARISON\\n"
-            f"BEFORE: {format_time(before_time)}\\n"
-            f"AFTER: {format_time(after_time)}\\n"
-            f"TIME SAVED: {format_time(saved_time)} ({saved_percent:.1f}%)\\n"
-            f"OPTIMIZER COMPUTE: {optimizer_seconds:.3f} s\\n"
-            f"ROUTING: {route_info.get('algorithm', 'STROKE ORDER RETAINED')}\\n\\n"
-            "Review the optimized route in the 3D view.\\n"
+            "SPRAY ROUTE READY FOR SIMULATION\n\n"
+            f"RECORDED POSES: {len(result.get('nozzle_points_product', [])):,}\n"
+            f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\n"
+            f"ROUTE LENGTH: {float(result.get('route_length_product_units', 0.0)):.2f} {self.coordinate_unit}\n"
+            f"ESTIMATED COMPLETION: {format_time(result.get('estimated_duration_s', 0.0))}\n"
+            f"RECORDING ELAPSED: {format_time(recording_seconds)}\n\n"
+            "ROUTE OPTIMIZATION TIME COMPARISON\n"
+            f"BEFORE: {format_time(before_time)}\n"
+            f"AFTER: {format_time(after_time)}\n"
+            f"TIME SAVED: {signed_saved_time} ({saved_percent:.1f}%)\n"
+            f"OPTIMIZER COMPUTE: {optimizer_seconds:.3f} s\n"
+            f"ROUTING: {route_info.get('algorithm', 'STROKE ORDER RETAINED')}\n\n"
+            "Review the optimized route in the 3D view.\n"
             "Select NEXT: SPRAY SIMULATION to verify the coating process."
         )
 
