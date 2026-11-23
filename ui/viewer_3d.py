@@ -6082,7 +6082,9 @@ class ProductViewer(QWidget):
             self._interactive_spray_recording = False
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
-            elif left_button_held and not self._interactive_spray_recording:
+            return
+
+        if left_button_held and not self._interactive_spray_recording:
             self._interactive_begin_spray_stroke()
 
         if self._interactive_spray_recording:
