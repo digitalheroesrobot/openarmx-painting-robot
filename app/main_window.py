@@ -2835,7 +2835,10 @@ class MainWindow(QMainWindow):
         if hasattr(self, "interactive_spray_path_button"):
             route_page = self.active_stage == STAGE_SPRAY_TRAJECTORY
             simulation_page = self.active_stage == STAGE_SPRAY_SIMULATION
-            route_exists = self.interactive_spray_path is not None
+            route_exists = (
+                self.interactive_spray_path is not None
+                and self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
+            )
             recording = bool(self.viewer._interactive_spray_active)
             self.interactive_spray_path_button.setVisible(route_page and recording)
             self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
@@ -2846,10 +2849,15 @@ class MainWindow(QMainWindow):
             self.interactive_paint_color_button.setEnabled(
                 route_page and not self._operation_running
             )
+            self.route_next_button.setText("NEXT: SPRAY SIMULATION  →")
+            self.route_next_button.setMinimumHeight(42)
             self.route_next_button.setVisible(route_page and route_exists and not recording)
             self.route_next_button.setEnabled(
                 route_page and route_exists and not recording and not self._operation_running
             )
+            if route_page and route_exists and not recording:
+                self.route_next_button.show()
+                self.route_next_button.raise_()
             self.route_edit_button.setVisible(route_page and route_exists and not recording)
             self.route_edit_button.setEnabled(
                 route_page and route_exists and not recording and not self._operation_running
