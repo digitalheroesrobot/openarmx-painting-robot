@@ -6,6 +6,7 @@ import trimesh
 
 from stages.stage3_spray_trajectory import (
     FACE_PAINTABLE_CANDIDATE,
+    _calculate_spray_footprint,
     generate_spray_trajectory,
 )
 
@@ -37,10 +38,41 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             face_status_labels=self.status.copy(),
             patch_labels=np.asarray(patch_labels, dtype=np.int64),
             standoff_mm=100.0,
-            sampling_spacing_mm=10.0,
             spray_angle_deg=45.0,
             coordinate_unit="mm",
             sprayer_profile=self.profile.copy(),
+        )
+
+    def test_configured_round_cone_profile_produces_expected_real_spacing(self):
+        profile = {
+            "pattern_type": "round_cone",
+            "standoff_mm": 180.0,
+            "spray_cone_angle_deg": 74.0,
+            "overlap_percent": 50.0,
+        }
+        footprint = _calculate_spray_footprint(
+            profile, profile["standoff_mm"]
+        )
+        expected_width = (
+            2.0 * 180.0 * np.tan(np.deg2rad(74.0 / 2.0))
+        )
+        expected_spacing = expected_width * 0.5
+
+        self.assertAlmostEqual(expected_width, 271.2794580370059, places=8)
+        self.assertAlmostEqual(expected_spacing, 135.63972901850295, places=8)
+        self.assertAlmostEqual(
+            footprint["working_distance_mm"], 180.0, places=8
+        )
+        self.assertAlmostEqual(
+            footprint["included_angle_deg"], 74.0, places=8
+        )
+        self.assertAlmostEqual(
+            footprint["overlap_percent"], 50.0, places=8
+        )
+        self.assertAlmostEqual(
+            footprint["nominal_point_spacing_mm"],
+            expected_spacing,
+            places=8,
         )
 
     def test_face_and_patch_boundaries_do_not_change_sweep_order(self):
@@ -175,7 +207,6 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             face_status_labels=self.status.copy(),
             patch_labels=np.asarray([7, 9], dtype=np.int64),
             standoff_mm=100.0,
-            sampling_spacing_mm=10.0,
             spray_angle_deg=45.0,
             coordinate_unit="mm",
             sprayer_profile=self.profile.copy(),
