@@ -445,7 +445,12 @@ class ProductViewer(QWidget):
         self._interactive_spray_display_mode = "thickness"
         self._interactive_recorded_replay_index = 0
         self._interactive_recorded_replay_actor = None
+        self._interactive_recorded_replay_timeline = []
+        self._interactive_recorded_replay_end_times = np.empty(0, dtype=np.float64)
+        self._interactive_recorded_replay_started_at = None
+        self._interactive_recorded_replay_timing = None
         self._interactive_spray_path_actor = None
+        self._interactive_spray_route_actors = []
         self._interactive_recorded_replay_timer = QTimer(self)
         self._interactive_recorded_replay_timer.setInterval(40)
         self._interactive_recorded_replay_timer.timeout.connect(
@@ -1029,6 +1034,12 @@ class ProductViewer(QWidget):
         row.addWidget(self.recorded_path_stop_button)
         self.recorded_path_status_label = QLabel("No recorded path")
         row.addWidget(self.recorded_path_status_label, 1)
+        self.recorded_path_time_label = QLabel("EST. TIME: --")
+        self.recorded_path_time_label.setMinimumWidth(220)
+        self.recorded_path_time_label.setStyleSheet(
+            "color: #79D7A5; font-weight: 800;"
+        )
+        row.addWidget(self.recorded_path_time_label)
         self.recorded_path_color_view_button = QPushButton("VIEW: FILM")
         self.recorded_path_color_view_button.setCheckable(True)
         self.recorded_path_color_view_button.toggled.connect(
@@ -1067,11 +1078,155 @@ class ProductViewer(QWidget):
         except (ValueError, TypeError):
             return np.asarray([217.0, 91.0, 67.0], dtype=np.float64)
 
+    @staticmethod
+    def _format_route_time(seconds):
+        value = max(float(seconds), 0.0)
+        hours = int(value // 3600.0)
+        minutes = int((value % 3600.0) // 60.0)
+        whole_seconds = int(round(value % 60.0))
+        if whole_seconds >= 60:
+            whole_seconds = 0
+            minutes += 1
+        if minutes >= 60:
+            minutes = 0
+            hours += 1
+        return (
+            f"{hours:02d}:{minutes:02d}:{whole_seconds:02d}"
+            if hours else f"{minutes:02d}:{whole_seconds:02d}"
+        )
+
+    def _build_interactive_route_timing(self, records):
+        """Estimate spray and spray-OFF travel time from configured process speeds."""
+        if not records:
+            return {
+                "spray_distance_mm": 0.0, "travel_distance_mm": 0.0,
+                "spray_time_s": 0.0, "travel_time_s": 0.0,
+                "tool_delay_s": 0.0, "estimated_total_time_s": 0.0,
+                "timeline": [], "speed_model": "NO_RECORDS",
+            }
+
+        process = dict(DEFAULT_COATING_PROCESS)
+        process.update(self._interactive_coating_process or {})
+        base_speed = max(float(process.get("base_travel_speed_mm_s", 500.0)), 0.1)
+        minimum_speed = min(
+            max(float(process.get("min_travel_speed_mm_s", 300.0)), 0.1),
+            base_speed,
+        )
+        acceleration = max(
+            float(process.get("max_travel_acceleration_mm_s2", 1000.0)), 0.1
+        )
+        spray_on_delay = max(float(process.get("spray_on_delay_ms", 0.0)), 0.0) / 1000.0
+        spray_off_delay = max(float(process.get("spray_off_delay_ms", 0.0)), 0.0) / 1000.0
+        mm_factor = self._get_source_mm_factor()
+        if mm_factor is None:
+            raise ValueError("A known source coordinate unit is required for route timing.")
+
+        points = np.asarray(
+            [item["nozzle_point_product"] for item in records], dtype=np.float64
+        )
+        normals = np.asarray(
+            [item["surface_normal_product"] for item in records], dtype=np.float64
+        )
+        segment_ids = np.asarray(
+            [item["stroke_id"] for item in records], dtype=np.int64
+        )
+        from stages.stage3_spray_trajectory import _calculate_adaptive_travel_speed_profile
+        speeds, _, speed_metadata = _calculate_adaptive_travel_speed_profile(
+            nozzle_points=points,
+            surface_normals=normals,
+            segment_ids=segment_ids,
+            coordinate_unit=self.source_unit,
+            base_speed_mm_s=base_speed,
+            minimum_speed_mm_s=minimum_speed,
+            maximum_acceleration_mm_s2=acceleration,
+        )
+
+        timeline = []
+        elapsed = 0.0
+        spray_distance = 0.0
+        travel_distance = 0.0
+        spray_time = 0.0
+        travel_time = 0.0
+        delay_time = 0.0
+
+        def append_edge(first, second, duration, spray_on, kind):
+            nonlocal elapsed
+            duration = max(float(duration), 0.0)
+            if duration <= 1e-9:
+                return
+            timeline.append({
+                "start_s": elapsed,
+                "end_s": elapsed + duration,
+                "start_record": first,
+                "end_record": second,
+                "spray_on": bool(spray_on),
+                "kind": str(kind),
+            })
+            elapsed += duration
+
+        starts = np.r_[0, np.flatnonzero(np.diff(segment_ids) != 0) + 1]
+        ends = np.r_[starts[1:], len(records)]
+        previous_end = None
+        for block_number, (start_index, end_index) in enumerate(zip(starts, ends)):
+            start_index, end_index = int(start_index), int(end_index)
+            first = records[start_index]
+            last = records[end_index - 1]
+
+            if previous_end is not None:
+                p0 = np.asarray(previous_end["nozzle_point_product"], dtype=float)
+                p1 = np.asarray(first["nozzle_point_product"], dtype=float)
+                distance_mm = float(np.linalg.norm(p1 - p0) * mm_factor)
+                travel_distance += distance_mm
+                duration = distance_mm / base_speed
+                if spray_off_delay > 0.0:
+                    append_edge(previous_end, previous_end, spray_off_delay, False, "SPRAY_OFF_DELAY")
+                    delay_time += spray_off_delay
+                append_edge(previous_end, first, duration, False, "TRAVEL_OFF")
+                travel_time += duration
+
+            if spray_on_delay > 0.0:
+                append_edge(first, first, spray_on_delay, False, "SPRAY_ON_DELAY")
+                delay_time += spray_on_delay
+
+            for index in range(start_index, end_index - 1):
+                first_record, second_record = records[index], records[index + 1]
+                distance_mm = float(np.linalg.norm(
+                    np.asarray(second_record["nozzle_point_product"], dtype=float)
+                    - np.asarray(first_record["nozzle_point_product"], dtype=float)
+                ) * mm_factor)
+                mean_speed = max(
+                    0.5 * (float(speeds[index]) + float(speeds[index + 1])),
+                    1e-6,
+                )
+                duration = distance_mm / mean_speed
+                spray_distance += distance_mm
+                spray_time += duration
+                append_edge(first_record, second_record, duration, True, "SPRAY_ON")
+
+            if spray_off_delay > 0.0 and block_number < len(starts) - 1:
+                append_edge(last, last, spray_off_delay, False, "SPRAY_OFF_DELAY")
+                delay_time += spray_off_delay
+            previous_end = last
+
+        return {
+            "spray_distance_mm": float(spray_distance),
+            "travel_distance_mm": float(travel_distance),
+            "spray_time_s": float(spray_time),
+            "travel_time_s": float(travel_time),
+            "tool_delay_s": float(delay_time),
+            "estimated_total_time_s": float(elapsed),
+            "spray_speed_profile": speed_metadata,
+            "travel_speed_mm_s": float(base_speed),
+            "timeline": timeline,
+            "speed_model": "STAGE3_ADAPTIVE_SPRAY_SPEED_PLUS_BASE_SPEED_OFF_TRAVEL",
+            "travel_safety": "STRAIGHT_LINE_ESTIMATE_ONLY_NOT_COLLISION_CHECKED",
+        }
+
     def _optimize_interactive_recorded_path(self):
-        """Reorder complete recorded strokes while preserving each stroke's samples."""
+        """Optimize stroke order/orientation and refresh route timing and display."""
         records = list(self._interactive_spray_records)
-        if len(records) < 2:
-            self.recorded_path_status_label.setText("Need at least two recorded poses")
+        if not records:
+            self.recorded_path_status_label.setText("No recorded path")
             return False
         source_ids = np.asarray([item["stroke_id"] for item in records], dtype=np.int64)
         stroke_ids = np.unique(source_ids)
@@ -1085,7 +1240,7 @@ class ProductViewer(QWidget):
             optimized = optimize_stroke_order(
                 candidate,
                 orientation_weight_coordinate_units_per_rad=0.0,
-                max_2opt_passes=1 if len(stroke_ids) <= 30 else 0,
+                max_2opt_passes=2 if len(stroke_ids) <= 30 else 0,
             )
             ordered = []
             for stroke in optimized["route_optimization"]["strokes"]:
@@ -1096,75 +1251,198 @@ class ProductViewer(QWidget):
             records = ordered
             self._interactive_spray_records = list(records)
             route_info = optimized["route_optimization"]
+            self._interactive_spray_route_optimization = route_info
             self.recorded_path_status_label.setText(
                 f"Optimized {len(stroke_ids)} strokes · "
-                f"{route_info.get('optimized_route_length', route_info.get('route_length', 0.0)):.1f} units"
+                f"{route_info['optimality'].replace('_', ' ')}"
             )
         else:
+            self._interactive_spray_records = list(records)
+            self._interactive_spray_route_optimization = {
+                "algorithm": "SINGLE_STROKE_ORDER_PRESERVED",
+                "stroke_count": 1,
+                "optimality": "NO_INTER_STROKE_ROUTING_REQUIRED",
+            }
             self.recorded_path_status_label.setText(
-                f"Single stroke · {len(records)} poses · order retained"
+                f"Single stroke · {len(records)} poses"
             )
+
+        timing = self._build_interactive_route_timing(records)
+        self._interactive_recorded_replay_timing = timing
+        self.recorded_path_time_label.setText(
+            f"EST. {self._format_route_time(timing['estimated_total_time_s'])}  |  "
+            f"SPRAY {self._format_route_time(timing['spray_time_s'])}  |  "
+            f"OFF {self._format_route_time(timing['travel_time_s'] + timing['tool_delay_s'])}"
+        )
         self._refresh_interactive_recorded_path_actor()
         return True
 
     def _refresh_interactive_recorded_path_actor(self):
-        if self._interactive_spray_path_actor is not None:
+        for actor in getattr(self, "_interactive_spray_route_actors", []):
             try:
-                self.plotter.remove_actor(self._interactive_spray_path_actor, render=False)
+                self.plotter.remove_actor(actor, render=False)
             except Exception:
                 pass
+        self._interactive_spray_route_actors = []
+        self._interactive_spray_path_actor = None
         records = self._interactive_spray_records
-        if len(records) < 2:
-            self._interactive_spray_path_actor = None
+        if not records:
             return
-        points = np.asarray([item["nozzle_point_world"] for item in records], dtype=float)
-        path = pv.PolyData(points)
-        path.lines = np.asarray([len(points), *range(len(points))], dtype=np.int64)
-        self._interactive_spray_path_actor = self.plotter.add_mesh(
-            path, color="#00E5FF", line_width=3.0, lighting=False, pickable=False
-        )
+
+        segment_ids = np.asarray([item["stroke_id"] for item in records], dtype=np.int64)
+        starts = np.r_[0, np.flatnonzero(np.diff(segment_ids) != 0) + 1]
+        ends = np.r_[starts[1:], len(records)]
+        stroke_endpoints = []
+        for start_index, end_index in zip(starts, ends):
+            points = np.asarray([
+                records[index]["nozzle_point_world"]
+                for index in range(int(start_index), int(end_index))
+            ], dtype=np.float64)
+            if len(points) >= 2:
+                path = pv.PolyData(points)
+                path.lines = np.asarray([len(points), *range(len(points))], dtype=np.int64)
+                actor = self.plotter.add_mesh(
+                    path, color="#42E887", line_width=4.0,
+                    lighting=False, pickable=False,
+                )
+                self._interactive_spray_route_actors.append(actor)
+            stroke_endpoints.append((points[0], points[-1]))
+
+        for index in range(len(stroke_endpoints) - 1):
+            connector_points = np.asarray([
+                stroke_endpoints[index][1], stroke_endpoints[index + 1][0]
+            ], dtype=np.float64)
+            connector = pv.PolyData(connector_points)
+            connector.lines = np.asarray([2, 0, 1], dtype=np.int64)
+            actor = self.plotter.add_mesh(
+                connector, color="#5BA8FF", line_width=2.5,
+                style="wireframe", lighting=False, pickable=False,
+            )
+            self._interactive_spray_route_actors.append(actor)
+
+        if self._interactive_spray_route_actors:
+            self._interactive_spray_path_actor = self._interactive_spray_route_actors[0]
         self.plotter.render()
+
+    @staticmethod
+    def _interpolate_replay_record(first, second, fraction):
+        fraction = float(np.clip(fraction, 0.0, 1.0))
+        def vector(key):
+            a = np.asarray(first[key], dtype=np.float64)
+            b = np.asarray(second[key], dtype=np.float64)
+            value = a + (b - a) * fraction
+            if key == "spray_direction_world":
+                value /= max(float(np.linalg.norm(value)), 1e-12)
+            return value
+        return {
+            "nozzle_point_world": vector("nozzle_point_world"),
+            "spray_direction_world": vector("spray_direction_world"),
+        }
 
     def _start_interactive_recorded_replay(self):
         records = self._interactive_spray_records
         if len(records) < 2:
             self.recorded_path_status_label.setText("No replayable recorded path")
             return
+        if not self._interactive_recorded_replay_timing:
+            self._optimize_interactive_recorded_path()
+        timing = self._interactive_recorded_replay_timing
+        timeline = timing.get("timeline", []) if timing else []
+        if not timeline:
+            self.recorded_path_status_label.setText("Route timing unavailable")
+            return
+
         self._interactive_recorded_replay_timer.stop()
+        self._interactive_remove_live_actors()
+        self._interactive_recorded_replay_timeline = timeline
+        self._interactive_recorded_replay_end_times = np.asarray(
+            [edge["end_s"] for edge in timeline], dtype=np.float64
+        )
+        self._interactive_recorded_replay_started_at = time.monotonic()
+        self._interactive_recorded_replay_index = 0
+        self.recorded_path_replay_button.setEnabled(False)
+        self.recorded_path_stop_button.setEnabled(True)
+        self._advance_interactive_recorded_replay()
+        self._interactive_recorded_replay_timer.start()
+        self.plotter.render()
+
+    def _advance_interactive_recorded_replay(self):
+        timeline = getattr(self, "_interactive_recorded_replay_timeline", [])
+        if not timeline:
+            self._stop_interactive_recorded_replay()
+            return
+        elapsed = max(
+            0.0,
+            time.monotonic() - float(self._interactive_recorded_replay_started_at),
+        )
+        total = float(timeline[-1]["end_s"])
+        if elapsed >= total:
+            self._stop_interactive_recorded_replay(completed=True)
+            return
+
+        edge_index = int(np.searchsorted(
+            self._interactive_recorded_replay_end_times, elapsed, side="left"
+        ))
+        edge_index = min(edge_index, len(timeline) - 1)
+        edge = timeline[edge_index]
+        duration = max(float(edge["end_s"] - edge["start_s"]), 1e-9)
+        fraction = (elapsed - float(edge["start_s"])) / duration
+        pose = self._interpolate_replay_record(
+            edge["start_record"], edge["end_record"], fraction
+        )
+
+        self._interactive_remove_live_actors()
+        gun_actors, _ = self._interactive_build_gun_visual(
+            pose["nozzle_point_world"], pose["spray_direction_world"]
+        )
+        self._interactive_spray_live_actors.extend(gun_actors)
+        if edge["spray_on"]:
+            nozzle = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
+            direction = np.asarray(pose["spray_direction_world"], dtype=np.float64)
+            half_angle = math.radians(self._interactive_spray_cone_angle_deg) * 0.5
+            plume_height = max(float(self._interactive_spray_standoff), 1e-6)
+            plume_radius = max(
+                plume_height * math.tan(half_angle), plume_height * 0.01
+            )
+            plume = pv.Cone(
+                center=nozzle + direction * (0.5 * plume_height),
+                direction=direction,
+                height=plume_height,
+                radius=plume_radius,
+                resolution=20,
+                capping=False,
+            )
+            plume_actor = self.plotter.add_mesh(
+                plume, color="#FFDDA0", opacity=0.13,
+                lighting=False, pickable=False,
+            )
+            self._interactive_spray_live_actors.append(plume_actor)
+            particle_fractions = np.asarray([0.20, 0.40, 0.60, 0.80], dtype=float)
+            particle_points = (
+                nozzle[None, :]
+                + particle_fractions[:, None] * plume_height * direction[None, :]
+            )
+            particle_cloud = pv.PolyData(particle_points)
+            particle_actor = self.plotter.add_mesh(
+                particle_cloud, color="#FFF0C7", opacity=0.45,
+                point_size=5.0, render_points_as_spheres=True,
+                lighting=False, pickable=False,
+            )
+            self._interactive_spray_live_actors.append(particle_actor)
+
         if self._interactive_recorded_replay_actor is not None:
             try:
                 self.plotter.remove_actor(self._interactive_recorded_replay_actor, render=False)
             except Exception:
                 pass
-        self._interactive_recorded_replay_index = 0
-        radius = max(float(self._interactive_spray_standoff) * 0.025, 0.5)
-        marker = pv.Sphere(radius=radius, center=(0.0, 0.0, 0.0), theta_resolution=16, phi_resolution=12)
-        self._interactive_recorded_replay_actor = self.plotter.add_mesh(
-            marker, color="#00E676", smooth_shading=True, pickable=False
-        )
-        first = np.asarray(records[0]["nozzle_point_world"], dtype=float)
-        self._interactive_recorded_replay_actor.SetPosition(*first.tolist())
-        self.recorded_path_replay_button.setEnabled(False)
-        self.recorded_path_stop_button.setEnabled(True)
-        self.recorded_path_status_label.setText(f"Replaying 1 / {len(records)}")
-        self._interactive_recorded_replay_timer.start()
-        self.plotter.render()
+            self._interactive_recorded_replay_actor = None
 
-    def _advance_interactive_recorded_replay(self):
-        records = self._interactive_spray_records
-        if not records or self._interactive_recorded_replay_actor is None:
-            self._stop_interactive_recorded_replay()
-            return
-        self._interactive_recorded_replay_index += 1
-        if self._interactive_recorded_replay_index >= len(records):
-            self._stop_interactive_recorded_replay(completed=True)
-            return
-        point = np.asarray(
-            records[self._interactive_recorded_replay_index]["nozzle_point_world"], dtype=float
-        )
-        self._interactive_recorded_replay_actor.SetPosition(*point.tolist())
+        self._interactive_recorded_replay_index = edge_index
+        mode = "SPRAY ON" if edge["spray_on"] else "SPRAY OFF"
+        current = self._format_route_time(elapsed)
+        total_text = self._format_route_time(total)
         self.recorded_path_status_label.setText(
-            f"Replaying {self._interactive_recorded_replay_index + 1} / {len(records)}"
+            f"{mode} · {edge['kind']} · {current} / {total_text}"
         )
         self.plotter.render()
 
@@ -1172,18 +1450,16 @@ class ProductViewer(QWidget):
         self._interactive_recorded_replay_timer.stop()
         self.recorded_path_replay_button.setEnabled(bool(self._interactive_spray_records))
         self.recorded_path_stop_button.setEnabled(False)
+        self._interactive_remove_live_actors()
+        self._interactive_recorded_replay_timeline = []
+        self._interactive_recorded_replay_end_times = np.empty(0, dtype=np.float64)
+        self._interactive_recorded_replay_started_at = None
         if completed:
             self.recorded_path_status_label.setText(
                 f"Replay complete · {len(self._interactive_spray_records)} poses"
             )
         elif self._interactive_spray_records:
             self.recorded_path_status_label.setText("Replay stopped")
-        if self._interactive_recorded_replay_actor is not None:
-            try:
-                self.plotter.remove_actor(self._interactive_recorded_replay_actor, render=False)
-            except Exception:
-                pass
-            self._interactive_recorded_replay_actor = None
         self.plotter.render()
 
     def _build_trajectory_controls(self):
