@@ -1399,18 +1399,19 @@ class ProductViewer(QWidget):
             QMessageBox.warning(self, "Export trajectory", "The route has no positive duration.")
             return False
 
-        # Keep exact spray-state transition times as well as the configured
-        # controller-period samples so ON/OFF boundaries are never lost.
-        sample_times = list(np.arange(0.0, duration, 1.0 / frequency, dtype=np.float64))
-        sample_times.extend(
-            float(edge[key]) for edge in timeline for key in ("start_s", "end_s")
-        )
-        sample_times.append(duration)
-        sample_times = np.asarray(sorted(set(round(float(t), 10) for t in sample_times)), dtype=np.float64)
+        # Emit a uniform controller-rate sequence. If the route duration is
+        # not an exact controller period, append one final period-aligned row;
+        # its pose is clamped to the route endpoint.
+        period = 1.0 / frequency
+        sample_count = max(1, int(math.ceil(duration * frequency - 1e-10)))
+        sample_times = np.arange(sample_count + 1, dtype=np.float64) * period
         end_times = np.asarray([edge["end_s"] for edge in timeline], dtype=np.float64)
 
         output_rows = []
         inverse = np.linalg.inv(self._interactive_spray_transform)
+        product_rotation = self._interactive_product_rotation_matrix(
+            self._interactive_spray_transform[:3, :3]
+        )
         for sample_index, t in enumerate(sample_times):
             edge_index = min(
                 int(np.searchsorted(end_times, t + 1e-10, side="right")),
@@ -1419,42 +1420,50 @@ class ProductViewer(QWidget):
             edge = timeline[edge_index]
             edge_duration = max(float(edge["end_s"] - edge["start_s"]), 1e-12)
             fraction = float(np.clip((t - float(edge["start_s"])) / edge_duration, 0.0, 1.0))
-            pose = self._interpolate_replay_record(
-                edge["start_record"], edge["end_record"], fraction
-            )
-            nozzle_world = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
-            nozzle_product = (inverse @ np.append(nozzle_world, 1.0))[:3]
-            position_mm = nozzle_product * mm_factor
-            product_rotation = self._interactive_product_rotation_matrix(
-                self._interactive_spray_transform[:3, :3]
-            )
-            direction_world = np.asarray(
-                pose["spray_direction_world"], dtype=np.float64
-            )
-            direction_world /= max(float(np.linalg.norm(direction_world)), 1e-12)
-            direction_product = product_rotation.T @ direction_world
-            direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
-            # Preserve an imported full product-frame orientation when present.
-            # Native mouse-created circular-cone poses use the documented,
-            # deterministic roll convention around the nozzle tool axis.
-            quaternion = pose.get("nozzle_quaternion_product_xyzw")
-            if quaternion is None:
-                quaternion = self._interactive_pose_quaternion_from_direction(
-                    direction_product
+            spray_on = bool(edge["spray_on"])
+            row = {
+                "t": f"{float(t):.9f}",
+                "x": "",
+                "y": "",
+                "z": "",
+                "qx": "",
+                "qy": "",
+                "qz": "",
+                "qw": "",
+                "on/off": "1" if spray_on else "0",
+            }
+            if spray_on:
+                pose = self._interpolate_replay_record(
+                    edge["start_record"], edge["end_record"], fraction
                 )
-            quaternion = np.asarray(quaternion, dtype=np.float64)
-            quaternion /= max(float(np.linalg.norm(quaternion)), 1e-12)
-            output_rows.append({
-                "t": f"{float(t):.6f}",
-                "x": f"{position_mm[0]:.6f}",
-                "y": f"{position_mm[1]:.6f}",
-                "z": f"{position_mm[2]:.6f}",
-                "qx": f"{quaternion[0]:.9f}",
-                "qy": f"{quaternion[1]:.9f}",
-                "qz": f"{quaternion[2]:.9f}",
-                "qw": f"{quaternion[3]:.9f}",
-                "on/off": "1" if bool(edge["spray_on"]) else "0",
-            })
+                nozzle_world = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
+                nozzle_product = (inverse @ np.append(nozzle_world, 1.0))[:3]
+                position_mm = nozzle_product * mm_factor
+                direction_world = np.asarray(
+                    pose["spray_direction_world"], dtype=np.float64
+                )
+                direction_world /= max(float(np.linalg.norm(direction_world)), 1e-12)
+                direction_product = product_rotation.T @ direction_world
+                direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
+                # Imported full orientations retain their roll. Native spray
+                # poses use the deterministic product-frame roll convention.
+                quaternion = pose.get("nozzle_quaternion_product_xyzw")
+                if quaternion is None:
+                    quaternion = self._interactive_pose_quaternion_from_direction(
+                        direction_product
+                    )
+                quaternion = np.asarray(quaternion, dtype=np.float64)
+                quaternion /= max(float(np.linalg.norm(quaternion)), 1e-12)
+                row.update({
+                    "x": f"{position_mm[0]:.6f}",
+                    "y": f"{position_mm[1]:.6f}",
+                    "z": f"{position_mm[2]:.6f}",
+                    "qx": f"{quaternion[0]:.9f}",
+                    "qy": f"{quaternion[1]:.9f}",
+                    "qz": f"{quaternion[2]:.9f}",
+                    "qw": f"{quaternion[3]:.9f}",
+                })
+            output_rows.append(row)
 
         filename, _ = QFileDialog.getSaveFileName(
             self, "Export robot trajectory CSV", "spray_trajectory.csv", "CSV files (*.csv)"
@@ -1483,7 +1492,8 @@ class ProductViewer(QWidget):
             f"Exported {len(output_rows):,} samples.\n"
             f"Controller frequency: {frequency:g} Hz\n"
             f"Duration: {duration:.3f} s\n"
-            f"Positions: product-local mm; orientation: product-local XYZW quaternion."
+            f"Spray-ON rows: product-local mm and XYZW quaternion.\n"
+            f"Spray-OFF rows: time and on/off only; pose fields are empty."
         )
         return True
 
@@ -1527,12 +1537,12 @@ class ProductViewer(QWidget):
         try:
             previous_t = -float("inf")
             for row_number, row in enumerate(rows, start=2):
-                values = np.asarray(
-                    [float(row[key]) for key in required[:8]], dtype=np.float64
-                )
-                if not np.all(np.isfinite(values)):
-                    raise ValueError(f"Line {row_number}: all numeric values must be finite.")
-                t = float(values[0])
+                try:
+                    t = float(row["t"])
+                except (TypeError, ValueError):
+                    raise ValueError(f"Line {row_number}: t must be numeric.")
+                if not np.isfinite(t):
+                    raise ValueError(f"Line {row_number}: t must be finite.")
                 if t < 0.0 or t <= previous_t:
                     raise ValueError(f"Line {row_number}: t must be non-negative and strictly increasing.")
                 if row_number == 2 and abs(t) > 1e-9:
@@ -1540,61 +1550,83 @@ class ProductViewer(QWidget):
                 state_text = str(row["on/off"]).strip()
                 if state_text not in ("0", "1"):
                     raise ValueError(f"Line {row_number}: on/off must be 0 or 1.")
-                quaternion = values[4:8]
-                rotation_product = self._csv_quaternion_rotation_xyzw(quaternion)
-                # CSV XYZ and XYZW are both expressed in the original CAD /
-                # product-local frame. The nozzle tool's local +Z axis points
-                # away from the surface, opposite the spray direction.
-                direction_product = -(
-                    rotation_product @ np.array([0.0, 0.0, 1.0], dtype=np.float64)
-                )
-                direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
-                nozzle_product = values[1:4] / mm_factor
-                surface_product = nozzle_product + direction_product * standoff
-                nozzle_world = (transform @ np.append(nozzle_product, 1.0))[:3]
-                surface_world = (transform @ np.append(surface_product, 1.0))[:3]
-                direction_world = product_rotation @ direction_product
-                direction_world /= max(float(np.linalg.norm(direction_world)), 1e-12)
-                normal_world = -direction_world
-                normal_product = -direction_product
-
-                # Map the imported nozzle pose to the nearest CAD face so the
-                # existing spray deposition simulation can use its normal mask.
-                cell_id = int(self._interactive_spray_surface.find_closest_cell(surface_product))
-                if cell_id < 0:
-                    raise ValueError(f"Line {row_number}: pose could not be associated with the loaded CAD surface.")
-
-                parsed.append({
-                    "t": t,
-                    "spray_on": state_text == "1",
-                    "nozzle_point_world": nozzle_world,
-                    "surface_point_world": surface_world,
-                    "surface_normal_world": normal_world,
-                    "spray_direction_world": direction_world,
-                    "nozzle_point_product": nozzle_product,
-                    "surface_point_product": surface_product,
-                    "surface_normal_product": normal_product,
-                    "spray_direction_product": direction_product,
-                    "nozzle_quaternion_product_xyzw": (
-                        quaternion / max(float(np.linalg.norm(quaternion)), 1e-12)
-                    ),
-                    "face_index": cell_id,
-                    "cell_id": cell_id,
-                })
+                pose_fields = [str(row.get(key, "") or "").strip() for key in required[1:8]]
+                if state_text == "0":
+                    if any(pose_fields):
+                        raise ValueError(
+                            f"Line {row_number}: spray-OFF rows must leave x,y,z,qx,qy,qz,qw empty."
+                        )
+                    parsed.append({"t": t, "spray_on": False, "pose": None})
+                else:
+                    if not all(pose_fields):
+                        raise ValueError(
+                            f"Line {row_number}: spray-ON rows require x,y,z and qx,qy,qz,qw."
+                        )
+                    pose_values = np.asarray([float(value) for value in pose_fields], dtype=np.float64)
+                    if not np.all(np.isfinite(pose_values)):
+                        raise ValueError(f"Line {row_number}: pose values must be finite.")
+                    quaternion = pose_values[3:7]
+                    rotation_product = self._csv_quaternion_rotation_xyzw(quaternion)
+                    # The nozzle tool's local +Z axis points away from the
+                    # surface, opposite the spray direction.
+                    direction_product = -(
+                        rotation_product @ np.array([0.0, 0.0, 1.0], dtype=np.float64)
+                    )
+                    direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
+                    nozzle_product = pose_values[:3] / mm_factor
+                    surface_product = nozzle_product + direction_product * standoff
+                    nozzle_world = (transform @ np.append(nozzle_product, 1.0))[:3]
+                    surface_world = (transform @ np.append(surface_product, 1.0))[:3]
+                    direction_world = product_rotation @ direction_product
+                    direction_world /= max(float(np.linalg.norm(direction_world)), 1e-12)
+                    normal_world = -direction_world
+                    normal_product = -direction_product
+                    cell_id = int(
+                        self._interactive_spray_surface.find_closest_cell(surface_product)
+                    )
+                    if cell_id < 0:
+                        raise ValueError(
+                            f"Line {row_number}: pose could not be associated with the loaded CAD surface."
+                        )
+                    pose = {
+                        "nozzle_point_world": nozzle_world,
+                        "surface_point_world": surface_world,
+                        "surface_normal_world": normal_world,
+                        "spray_direction_world": direction_world,
+                        "nozzle_point_product": nozzle_product,
+                        "surface_point_product": surface_product,
+                        "surface_normal_product": normal_product,
+                        "spray_direction_product": direction_product,
+                        "nozzle_quaternion_product_xyzw": (
+                            quaternion / max(float(np.linalg.norm(quaternion)), 1e-12)
+                        ),
+                        "face_index": cell_id,
+                        "cell_id": cell_id,
+                    }
+                    parsed.append({"t": t, "spray_on": True, "pose": pose})
                 previous_t = t
         except (ValueError, TypeError, KeyError, IndexError, np.linalg.LinAlgError) as exc:
             QMessageBox.critical(self, "Import trajectory", f"Invalid trajectory data:\n{exc}")
             return False
 
-        # Rebuild stroke IDs for route visualization; the imported time/state
-        # sequence itself is retained exactly for playback.
+        # Spray-OFF rows intentionally contain no pose: MoveIt2 will generate
+        # the collision-free transfer. For this application's visualization,
+        # hold the most recent valid nozzle pose during those intervals. If
+        # the file starts with OFF rows, use the first subsequent ON pose.
+        first_pose = next((item["pose"] for item in parsed if item["pose"] is not None), None)
+        if first_pose is None:
+            QMessageBox.warning(self, "Import trajectory", "CSV contains no spray-ON pose samples.")
+            return False
         records = []
         stroke_id = -1
         previous_state = False
+        held_pose = first_pose
         for item in parsed:
+            if item["pose"] is not None:
+                held_pose = item["pose"]
             if item["spray_on"] and not previous_state:
                 stroke_id += 1
-            record = {key: value for key, value in item.items() if key not in ("t", "spray_on")}
+            record = dict(held_pose)
             record["stroke_id"] = stroke_id if item["spray_on"] else -(stroke_id + 1)
             record["timestamp"] = item["t"]
             records.append(record)
@@ -1653,9 +1685,9 @@ class ProductViewer(QWidget):
         QMessageBox.information(
             self, "Import trajectory",
             f"Loaded {len(records):,} samples for simulation.\n"
-            "XYZ positions are interpreted as product-local millimetres.\n"
-            "Quaternion qx,qy,qz,qw is interpreted in the same product-local frame.\n"
-            "The loaded time and spray ON/OFF sequence will be replayed as stored."
+            "Spray-ON rows: XYZ in product-local millimetres and XYZW quaternion.\n"
+            "Spray-OFF rows: only time and on/off are required; pose fields must be empty.\n"
+            "For visualization, OFF intervals hold the last valid nozzle pose; MoveIt2 handles transfer planning."
         )
         self.plotter.render()
         return True
