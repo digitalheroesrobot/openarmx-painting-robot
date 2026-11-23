@@ -298,8 +298,8 @@ def _calculate_spray_footprint(
     angle = _safe_float(profile.get("spray_cone_angle_deg"))
     if angle is None:
         angle = 0.0
-    if not 0.0 < angle <= 150.0:
-        raise ValueError("Circular spray angle must be greater than 0 and no more than 150 degrees.")
+    if not 0.0 <= angle <= 150.0:
+        raise ValueError("Circular spray angle must be between 0 and 150 degrees.")
 
     overlap = _safe_float(profile.get("overlap_percent"))
     if overlap is None:
