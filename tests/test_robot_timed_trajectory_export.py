@@ -1,6 +1,6 @@
 import numpy as np
 
-from ui.viewer_3d import ProductViewer
+from core.trajectory_export import build_product_pose_trajectory
 
 
 def _records():
@@ -25,7 +25,7 @@ def _records():
 
 
 def test_export_time_is_cumulative_distance_over_robot_speed():
-    trajectory, metadata = ProductViewer._build_product_pose_trajectory(
+    trajectory, metadata = build_product_pose_trajectory(
         _records(),
         {
             "base_travel_speed_mm_s": 100.0,
@@ -50,10 +50,10 @@ def test_export_time_is_cumulative_distance_over_robot_speed():
 
 def test_controller_frequency_does_not_change_spatial_waypoints_or_time():
     settings = {"base_travel_speed_mm_s": 100.0}
-    slow_rate, slow_meta = ProductViewer._build_product_pose_trajectory(
+    slow_rate, slow_meta = build_product_pose_trajectory(
         _records(), {**settings, "robot_control_frequency_hz": 50.0}, 1.0
     )
-    fast_rate, fast_meta = ProductViewer._build_product_pose_trajectory(
+    fast_rate, fast_meta = build_product_pose_trajectory(
         _records(), {**settings, "robot_control_frequency_hz": 200.0}, 1.0
     )
     np.testing.assert_allclose(slow_rate, fast_rate)
@@ -62,7 +62,7 @@ def test_controller_frequency_does_not_change_spatial_waypoints_or_time():
 
 
 def test_export_time_is_monotonic_and_ends_at_last_pose():
-    trajectory, metadata = ProductViewer._build_product_pose_trajectory(
+    trajectory, metadata = build_product_pose_trajectory(
         _records(),
         {"base_travel_speed_mm_s": 250.0, "robot_control_frequency_hz": 100.0},
         mm_per_unit=0.001,
