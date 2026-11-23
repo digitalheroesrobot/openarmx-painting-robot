@@ -4144,6 +4144,15 @@ class MainWindow(QMainWindow):
         format_time = self.viewer._format_route_time
         route_info = result.get("route_optimization") or {}
         route_algorithm = route_info.get("algorithm", "STROKE ORDER RETAINED")
+        route_timing = result.get("route_timing") or {}
+        speed_info = route_timing.get("spray_speed_profile", {})
+        generated_min_speed = float(
+            speed_info.get("minimum_generated_speed_mm_s", 0.0)
+        )
+        generated_max_speed = float(
+            speed_info.get("maximum_generated_speed_mm_s", 0.0)
+        )
+        travel_speed = float(route_timing.get("travel_speed_mm_s", 0.0))
         self.analysis_summary.setText(
             "OPTIMIZED INTERACTIVE SPRAY ROUTE\n\n"
             f"RECORDED POSES: {len(nozzle_points):,}\n"
@@ -4154,10 +4163,14 @@ class MainWindow(QMainWindow):
             f"SPRAY TIME: {format_time(spray_time)}\n"
             f"TRAVEL TIME: {format_time(travel_time)}\n"
             f"TOOL DELAYS: {format_time(tool_delay)}\n"
-            f"ESTIMATED COMPLETION: {format_time(total_time)}\n\n"
+            f"ESTIMATED COMPLETION: {format_time(total_time)}\n"
+            f"SPRAY SPEED: {generated_min_speed:.0f}-{generated_max_speed:.0f} mm/s\n"
+            f"SPRAY-OFF TRAVEL SPEED: {travel_speed:.0f} mm/s\n\n"
             f"ROUTING: {route_algorithm}\n"
             "GREEN: SPRAY-ON STROKES  |  BLUE: SPRAY-OFF CONNECTORS\n"
-            "Press REPLAY to visually verify the optimized spray route."
+            "Route order is heuristic, not a guaranteed global optimum.\n"
+            "Straight spray-OFF connectors are not collision-checked or robot-ready.\n"
+            "Press SIMULATE to visually verify the optimized spray route."
         )
         self.status_bar.showMessage(
             f"ROUTE OPTIMIZED | ESTIMATED COMPLETION {format_time(total_time)} | "
