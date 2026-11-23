@@ -142,8 +142,8 @@ WORKFLOW_STAGES = [
     {
         "name": "ROUTE GENERATION",
         "description": (
-            "Record spray strokes, optimize their order and direction, "
-            "and review the proposed route."
+            "Record spray strokes in the desired order, then manually connect "
+            "each stroke end to the next stroke start at the configured spray distance."
         ),
         "action": "RECORD SPRAY ROUTE",
     },
@@ -1311,7 +1311,7 @@ class MainWindow(QMainWindow):
         self.interactive_spray_path_button.setObjectName("SecondaryButton")
         self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
         self.interactive_spray_path_button.setToolTip(
-            "Finish the interactive spray path and optimize its recorded stroke route. Hold the left mouse button to paint."
+            "Finish the spray strokes. Then use CONNECT ENDPOINTS to join each stroke end to the next stroke start. Hold the left mouse button to paint."
         )
         self.interactive_spray_path_button.clicked.connect(
             self._finish_interactive_spray_path
@@ -4316,9 +4316,9 @@ class MainWindow(QMainWindow):
         spray_distance = float(result.get("spray_length_mm", 0.0))
         connector_distance = float(result.get("travel_length_mm", 0.0))
         route_info = result.get("route_optimization") or {}
-        route_algorithm = route_info.get("algorithm", "STROKE ORDER RETAINED")
+        route_algorithm = route_info.get("algorithm", "USER DRAWN ORDER PRESERVED")
         self.analysis_summary.setText(
-            "OPTIMIZED INTERACTIVE SPRAY ROUTE\n\n"
+            "USER-ORDERED INTERACTIVE SPRAY ROUTE\n\n"
             f"RECORDED POSES: {len(nozzle_points):,}\n"
             f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\n"
             f"TOTAL ROUTE LENGTH: {float(result.get('total_route_distance_mm', spray_distance + connector_distance)):.1f} mm\n"
