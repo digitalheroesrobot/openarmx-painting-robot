@@ -4079,6 +4079,14 @@ class MainWindow(QMainWindow):
                 sampling_spacing=float(parameters["sampling_spacing_mm"]) / mm_per_unit,
                 sprayer_profile=parameters["sprayer_profile"],
                 coating_process=parameters["coating_process"],
+                excluded_face_mask=(
+                    np.asarray(
+                        self.current_stage2_result["face_status_labels"]
+                    ) == FACE_EXCLUDED
+                    if isinstance(self.current_stage2_result, dict)
+                    and self.current_stage2_result.get("face_status_labels") is not None
+                    else None
+                ),
             )
         except Exception as exc:
             QMessageBox.critical(self, "Interactive Spray Path Error", str(exc))
