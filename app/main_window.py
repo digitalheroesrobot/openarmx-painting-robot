@@ -4135,17 +4135,33 @@ class MainWindow(QMainWindow):
 
         nozzle_points = np.asarray(result["nozzle_points_product"], dtype=float)
         path_length = float(result.get("route_length_product_units", 0.0))
+        spray_distance = float(result.get("spray_length_mm", 0.0))
+        travel_distance = float(result.get("travel_length_mm", 0.0))
+        spray_time = float(result.get("spray_duration_s", 0.0))
+        travel_time = float(result.get("travel_duration_s", 0.0))
+        tool_delay = float(result.get("tool_delay_s", 0.0))
+        total_time = float(result.get("estimated_duration_s", 0.0))
+        format_time = self.viewer._format_route_time
+        route_info = result.get("route_optimization") or {}
+        route_algorithm = route_info.get("algorithm", "STROKE ORDER RETAINED")
         self.analysis_summary.setText(
-            "INTERACTIVE SPRAY PATH COMPLETE\n\n"
-            f"RECORDED POSES: {len(nozzle_points)}\n"
+            "OPTIMIZED INTERACTIVE SPRAY ROUTE\n\n"
+            f"RECORDED POSES: {len(nozzle_points):,}\n"
+            f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\n"
             f"ROUTE LENGTH: {path_length:.2f} {self.coordinate_unit}\n"
-            f"STANDOFF: {result['standoff_source_units']:.2f} {self.coordinate_unit}\n"
-            f"CONE ANGLE: {result['cone_angle_deg']:.1f} deg\n\n"
-            "CYAN: OPTIMIZED NOZZLE ROUTE"
+            f"SPRAY DISTANCE: {spray_distance:.1f} mm\n"
+            f"SPRAY-OFF TRAVEL: {travel_distance:.1f} mm\n\n"
+            f"SPRAY TIME: {format_time(spray_time)}\n"
+            f"TRAVEL TIME: {format_time(travel_time)}\n"
+            f"TOOL DELAYS: {format_time(tool_delay)}\n"
+            f"ESTIMATED COMPLETION: {format_time(total_time)}\n\n"
+            f"ROUTING: {route_algorithm}\n"
+            "GREEN: SPRAY-ON STROKES  |  BLUE: SPRAY-OFF CONNECTORS\n"
+            "Press REPLAY to visually verify the optimized spray route."
         )
         self.status_bar.showMessage(
-            f"INTERACTIVE SPRAY PATH COMPLETE | {len(nozzle_points)} POSES | "
-            f"ROUTE {path_length:.2f} {self.coordinate_unit}"
+            f"ROUTE OPTIMIZED | ESTIMATED COMPLETION {format_time(total_time)} | "
+            f"{len(np.unique(result.get('stroke_ids', [])))} STROKES"
         )
 
     def _display_current_trajectory(self):
