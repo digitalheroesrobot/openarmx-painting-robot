@@ -180,7 +180,6 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             sprayer_profile=self.profile.copy(),
             coating_process={
                 "base_travel_speed_mm_s": 240.0,
-                "min_travel_speed_mm_s": 120.0,
                 "robot_control_frequency_hz": 120.0,
             },
         )
