@@ -2767,7 +2767,7 @@ class ProductViewer(QWidget):
                 path = pv.PolyData(points)
                 path.lines = np.asarray([len(points), *range(len(points))], dtype=np.int64)
                 actor = self.plotter.add_mesh(
-                    path, color="#42E887", line_width=4.0,
+                    path, color="#9AD8B5", opacity=0.34, line_width=2.2,
                     lighting=False, pickable=False,
                 )
                 self._interactive_spray_route_actors.append(actor)
@@ -2798,6 +2798,22 @@ class ProductViewer(QWidget):
                         )
                     )
             stroke_endpoints.append((points[0], points[-1]))
+
+        # Keep the trajectory line visually quiet and make the actual
+        # spray sample locations the dominant route layer.
+        spray_point_data = pv.PolyData(np.asarray([
+            item["nozzle_point_world"] for item in records
+        ], dtype=np.float64))
+        spray_point_actor = self.plotter.add_mesh(
+            spray_point_data,
+            color="#FFD166",
+            point_size=10.0,
+            render_points_as_spheres=True,
+            opacity=1.0,
+            lighting=False,
+            pickable=False,
+        )
+        self._interactive_spray_route_actors.append(spray_point_actor)
 
         if arrow_points:
             arrow_points_array = np.asarray(arrow_points, dtype=np.float64)
@@ -2860,13 +2876,14 @@ class ProductViewer(QWidget):
                 len(connector_points), *range(len(connector_points))
             ], dtype=np.int64)
             actor = self.plotter.add_mesh(
-                connector, color="#5BA8FF", line_width=3.0,
+                connector, color="#91C9F2", opacity=0.38, line_width=2.4,
                 lighting=False, pickable=False,
             )
             self._interactive_spray_route_actors.append(actor)
 
         if self._interactive_spray_route_actors:
             self._interactive_spray_path_actor = self._interactive_spray_route_actors[0]
+        self._refresh_interactive_endpoint_markers()
         self.plotter.render()
 
     @staticmethod
@@ -8058,6 +8075,8 @@ class ProductViewer(QWidget):
                         raw_segment[segment_index + 1],
                         t,
                     )
+                    if step % 64 == 0:
+                        QApplication.processEvents()
             append_curve_sample(
                 control[-1], raw_segment[-1], raw_segment[-1], 0.0
             )
@@ -8512,6 +8531,8 @@ class ProductViewer(QWidget):
         if records:
             self._interactive_spray_records = list(records)
             if len(records) >= 2:
+                self._interactive_manual_connector_required = True
+                self._interactive_precomputed_connector_paths = {}
                 self.interactive_recorded_path_panel.show()
                 self.recorded_path_replay_button.setEnabled(True)
                 self._optimize_interactive_recorded_path()
