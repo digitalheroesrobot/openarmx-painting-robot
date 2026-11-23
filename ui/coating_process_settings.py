@@ -56,17 +56,6 @@ class CoatingProcessSettingsDialog(QDialog):
             spin.setValue(float(self.current_process[key]))
             if key in ("fluid_flow_ml_min", "transfer_efficiency_percent", "volume_solids_percent"):
                 spin.setToolTip("Use a value confirmed for the actual paint and spray equipment. Zero means not configured.")
-            elif key == "robot_control_frequency_hz":
-                spin.setToolTip(
-                    "Enter the actual robot controller trajectory/position update "
-                    "frequency. The 100 Hz default is only a provisional starting value."
-                )
-            elif key == "base_travel_speed_mm_s":
-                spin.setToolTip(
-                    "Nominal painting speed on straight sections. The planner may "
-                    "reduce speed on curves and corners; validate this value with "
-                    "the actual robot and coating process."
-                )
             self.fields[key] = spin
             form.addRow(label, spin)
         root.addLayout(form)
