@@ -4169,6 +4169,12 @@ class MainWindow(QMainWindow):
             return
         self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
         self.interactive_spray_path_button.setEnabled(True)
+        # Stage entry refresh runs before recording starts. Refresh again now
+        # so the finish control becomes visible immediately after activation.
+        self._refresh_workflow_ui()
+        self.interactive_spray_path_button.setVisible(True)
+        self.interactive_spray_path_button.setEnabled(True)
+        self.interactive_spray_path_button.raise_()
         stage2_labels = np.asarray(
             self.current_stage2_result.get("face_status_labels", [])
             if isinstance(self.current_stage2_result, dict)
