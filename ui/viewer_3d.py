@@ -9890,7 +9890,11 @@ class ProductViewer(QWidget):
             )
         ):
             try:
-                edge_mesh = self.current_mesh.extract_feature_edges(
+                # current_mesh is a Trimesh object. Convert it to
+                # PyVista PolyData before asking VTK to extract CAD-like
+                # boundary and sharp-feature edges.
+                product_polydata = self._to_polydata(self.current_mesh)
+                edge_mesh = product_polydata.extract_feature_edges(
                     feature_angle=38.0,
                     boundary_edges=True,
                     non_manifold_edges=True,
