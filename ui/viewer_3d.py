@@ -7060,6 +7060,7 @@ class ProductViewer(QWidget):
                 dtype=np.float64,
             )
             if len(points) == 1:
+                total_length = 0.0
                 distances = np.asarray([0.0], dtype=np.float64)
             else:
                 segment_lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
