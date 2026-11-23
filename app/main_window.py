@@ -4082,7 +4082,7 @@ class MainWindow(QMainWindow):
                 excluded_face_mask=(
                     np.asarray(
                         self.current_stage2_result["face_status_labels"]
-                    ) == FACE_EXCLUDED
+                    ) != FACE_PAINTABLE_CANDIDATE
                     if isinstance(self.current_stage2_result, dict)
                     and self.current_stage2_result.get("face_status_labels") is not None
                     else None
