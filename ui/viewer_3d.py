@@ -7667,6 +7667,13 @@ class ProductViewer(QWidget):
             "travel_length_mm": (
                 float(route_timing["connector_distance_mm"]) if route_timing else 0.0
             ),
+            "total_route_distance_mm": (
+                float(route_timing["total_route_distance_mm"]) if route_timing else 0.0
+            ),
+            "estimated_duration_s": (
+                float(route_timing["estimated_duration_s"]) if route_timing else 0.0
+            ),
+            "robot_motion_settings": dict(self._robot_motion_settings),
             "route_timing": (
                 {key: value for key, value in route_timing.items() if key != "timeline"}
                 if route_timing else None
