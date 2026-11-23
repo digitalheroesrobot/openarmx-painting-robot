@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import csv
 import math
 import time
 import numpy as np
@@ -49,6 +50,8 @@ from PySide6.QtWidgets import (
     QSlider,
     QProgressBar,
     QColorDialog,
+    QFileDialog,
+    QMessageBox,
 )
 from pyvistaqt import QtInteractor
 from vtkmodules.vtkRenderingCore import vtkCellPicker
@@ -1230,6 +1233,22 @@ class ProductViewer(QWidget):
             self._stop_interactive_recorded_replay
         )
         row.addWidget(self.recorded_path_stop_button)
+        self.recorded_path_export_button = QPushButton("EXPORT CSV")
+        self.recorded_path_export_button.setToolTip(
+            "Export the complete timed robot trajectory, including spray-OFF safe connectors."
+        )
+        self.recorded_path_export_button.clicked.connect(
+            self._export_interactive_trajectory_csv
+        )
+        row.addWidget(self.recorded_path_export_button)
+        self.recorded_path_import_button = QPushButton("IMPORT CSV")
+        self.recorded_path_import_button.setToolTip(
+            "Load a timed robot trajectory CSV for simulation playback."
+        )
+        self.recorded_path_import_button.clicked.connect(
+            self._import_interactive_trajectory_csv
+        )
+        row.addWidget(self.recorded_path_import_button)
         self.recorded_path_status_label = QLabel("No recorded path")
         row.addWidget(self.recorded_path_status_label, 1)
         self.recorded_path_time_label = QLabel("ROUTE DISTANCE: --")
@@ -1306,6 +1325,8 @@ class ProductViewer(QWidget):
         self.recorded_path_optimize_button.setVisible(route_page)
         self.recorded_path_replay_button.setVisible(not route_page)
         self.recorded_path_stop_button.setVisible(not route_page)
+        self.recorded_path_export_button.setVisible(not route_page)
+        self.recorded_path_import_button.setVisible(not route_page)
         self.recorded_path_color_view_button.setVisible(not route_page)
         self.interactive_paint_color_view_button.setVisible(not route_page)
         self.recorded_path_time_label.setVisible(True)
@@ -1314,6 +1335,291 @@ class ProductViewer(QWidget):
         if route_page and has_route:
             self._refresh_interactive_recorded_path_actor()
         self.plotter.render()
+
+
+    @staticmethod
+    def _csv_quaternion_rotation_xyzw(quaternion):
+        """Convert a normalized XYZW quaternion to a 3x3 rotation matrix."""
+        q = np.asarray(quaternion, dtype=np.float64)
+        if q.shape != (4,) or not np.all(np.isfinite(q)):
+            raise ValueError("Quaternion must contain four finite values.")
+        norm = float(np.linalg.norm(q))
+        if norm < 1e-8:
+            raise ValueError("Quaternion magnitude is zero.")
+        x, y, z, w = q / norm
+        return np.asarray([
+            [1.0 - 2.0 * (y*y + z*z), 2.0 * (x*y - z*w), 2.0 * (x*z + y*w)],
+            [2.0 * (x*y + z*w), 1.0 - 2.0 * (x*x + z*z), 2.0 * (y*z - x*w)],
+            [2.0 * (x*z - y*w), 2.0 * (y*z + x*w), 1.0 - 2.0 * (x*x + y*y)],
+        ], dtype=np.float64)
+
+    def _export_interactive_trajectory_csv(self):
+        """Export the optimized, time-parameterized robot path in the requested CSV schema."""
+        records = list(getattr(self, "_interactive_spray_records", []))
+        if len(records) < 2:
+            QMessageBox.warning(self, "Export trajectory", "There is no completed spray route to export.")
+            return False
+
+        timing = getattr(self, "_interactive_recorded_replay_timing", None)
+        if not timing or timing.get("safety_status") != "SAFE" or not timing.get("timeline"):
+            if not self._optimize_interactive_recorded_path():
+                QMessageBox.warning(
+                    self, "Export trajectory",
+                    "The route cannot be exported because a safe exterior connector route could not be validated."
+                )
+                return False
+            timing = self._interactive_recorded_replay_timing
+
+        mm_factor = self._get_source_mm_factor()
+        if mm_factor is None or not np.isfinite(mm_factor) or mm_factor <= 0.0:
+            QMessageBox.warning(self, "Export trajectory", "The CAD source unit is unknown; positions cannot be converted to millimetres.")
+            return False
+
+        frequency = float(self._robot_motion_settings.get("control_frequency_hz", 100.0))
+        if not np.isfinite(frequency) or frequency <= 0.0:
+            QMessageBox.warning(self, "Export trajectory", "Robot control frequency must be greater than zero.")
+            return False
+
+        timeline = timing["timeline"]
+        duration = float(timeline[-1]["end_s"])
+        if duration <= 0.0:
+            QMessageBox.warning(self, "Export trajectory", "The route has no positive duration.")
+            return False
+
+        # Keep exact spray-state transition times as well as the configured
+        # controller-period samples so ON/OFF boundaries are never lost.
+        sample_times = list(np.arange(0.0, duration, 1.0 / frequency, dtype=np.float64))
+        sample_times.extend(
+            float(edge[key]) for edge in timeline for key in ("start_s", "end_s")
+        )
+        sample_times.append(duration)
+        sample_times = np.asarray(sorted(set(round(float(t), 10) for t in sample_times)), dtype=np.float64)
+        end_times = np.asarray([edge["end_s"] for edge in timeline], dtype=np.float64)
+
+        output_rows = []
+        inverse = np.linalg.inv(self._interactive_spray_transform)
+        for sample_index, t in enumerate(sample_times):
+            edge_index = min(
+                int(np.searchsorted(end_times, t + 1e-10, side="right")),
+                len(timeline) - 1,
+            )
+            edge = timeline[edge_index]
+            edge_duration = max(float(edge["end_s"] - edge["start_s"]), 1e-12)
+            fraction = float(np.clip((t - float(edge["start_s"])) / edge_duration, 0.0, 1.0))
+            pose = self._interpolate_replay_record(
+                edge["start_record"], edge["end_record"], fraction
+            )
+            position_mm = np.asarray(pose["nozzle_point_world"], dtype=np.float64) * mm_factor
+            # CSV position and orientation are both expressed in the
+            # application/world coordinate frame.
+            direction_world = np.asarray(
+                pose["spray_direction_world"], dtype=np.float64
+            )
+            direction_world /= max(float(np.linalg.norm(direction_world)), 1e-12)
+            quaternion = self._interactive_pose_quaternion_from_direction(direction_world)
+            output_rows.append({
+                "t": f"{float(t):.6f}",
+                "x": f"{position_mm[0]:.6f}",
+                "y": f"{position_mm[1]:.6f}",
+                "z": f"{position_mm[2]:.6f}",
+                "qx": f"{quaternion[0]:.9f}",
+                "qy": f"{quaternion[1]:.9f}",
+                "qz": f"{quaternion[2]:.9f}",
+                "qw": f"{quaternion[3]:.9f}",
+                "on/off": "1" if bool(edge["spray_on"]) else "0",
+            })
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Export robot trajectory CSV", "spray_trajectory.csv", "CSV files (*.csv)"
+        )
+        if not filename:
+            return False
+        if not filename.lower().endswith(".csv"):
+            filename += ".csv"
+        try:
+            with open(filename, "w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(
+                    stream,
+                    fieldnames=["t", "x", "y", "z", "qx", "qy", "qz", "qw", "on/off"],
+                )
+                writer.writeheader()
+                writer.writerows(output_rows)
+        except (OSError, csv.Error) as exc:
+            QMessageBox.critical(self, "Export trajectory", f"Could not write CSV file:\n{exc}")
+            return False
+
+        self.recorded_path_status_label.setText(
+            f"CSV EXPORTED · {len(output_rows):,} samples · {duration:.2f} s"
+        )
+        QMessageBox.information(
+            self, "Export trajectory",
+            f"Exported {len(output_rows):,} samples.\n"
+            f"Controller frequency: {frequency:g} Hz\n"
+            f"Duration: {duration:.3f} s\n"
+            f"Positions: mm; quaternion order: qx, qy, qz, qw."
+        )
+        return True
+
+    def _import_interactive_trajectory_csv(self):
+        """Load and validate a timed XYZW robot trajectory for simulation playback."""
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Import robot trajectory CSV", "", "CSV files (*.csv)"
+        )
+        if not filename:
+            return False
+
+        required = ["t", "x", "y", "z", "qx", "qy", "qz", "qw", "on/off"]
+        try:
+            with open(filename, "r", newline="", encoding="utf-8-sig") as stream:
+                reader = csv.DictReader(stream)
+                if reader.fieldnames is None or [name.strip() for name in reader.fieldnames] != required:
+                    raise ValueError(
+                        "CSV header must be exactly: " + ",".join(required)
+                    )
+                rows = list(reader)
+        except (OSError, csv.Error, UnicodeError, ValueError) as exc:
+            QMessageBox.critical(self, "Import trajectory", f"Could not read CSV file:\n{exc}")
+            return False
+
+        if len(rows) < 2:
+            QMessageBox.warning(self, "Import trajectory", "CSV must contain at least two trajectory samples.")
+            return False
+
+        mm_factor = self._get_source_mm_factor()
+        if mm_factor is None or not np.isfinite(mm_factor) or mm_factor <= 0.0:
+            QMessageBox.warning(self, "Import trajectory", "Load a CAD product with a known source unit before importing a trajectory.")
+            return False
+
+        standoff = float(self._interactive_spray_standoff)
+        transform = np.asarray(self._interactive_spray_transform, dtype=np.float64)
+        inverse = np.linalg.inv(transform)
+        parsed = []
+        try:
+            previous_t = -float("inf")
+            for row_number, row in enumerate(rows, start=2):
+                values = np.asarray(
+                    [float(row[key]) for key in required[:8]], dtype=np.float64
+                )
+                if not np.all(np.isfinite(values)):
+                    raise ValueError(f"Line {row_number}: all numeric values must be finite.")
+                t = float(values[0])
+                if t < 0.0 or t <= previous_t:
+                    raise ValueError(f"Line {row_number}: t must be non-negative and strictly increasing.")
+                if row_number == 2 and abs(t) > 1e-9:
+                    raise ValueError("The first trajectory timestamp must be 0 seconds.")
+                state_text = str(row["on/off"]).strip()
+                if state_text not in ("0", "1"):
+                    raise ValueError(f"Line {row_number}: on/off must be 0 or 1.")
+                quaternion = values[4:8]
+                rotation = self._csv_quaternion_rotation_xyzw(quaternion)
+                direction_world = -(rotation @ np.array([0.0, 0.0, 1.0], dtype=np.float64))
+                direction_world /= max(float(np.linalg.norm(direction_world)), 1e-12)
+                nozzle_world = values[1:4] / mm_factor
+                surface_world = nozzle_world + direction_world * standoff
+                nozzle_product = (inverse @ np.append(nozzle_world, 1.0))[:3]
+                surface_product = (inverse @ np.append(surface_world, 1.0))[:3]
+                direction_product = inverse[:3, :3] @ direction_world
+                direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
+                normal_world = -direction_world
+                normal_product = -direction_product
+
+                # Map the imported nozzle pose to the nearest CAD face so the
+                # existing spray deposition simulation can use its normal mask.
+                cell_id = int(self._interactive_spray_surface.find_closest_cell(surface_product))
+                if cell_id < 0:
+                    raise ValueError(f"Line {row_number}: pose could not be associated with the loaded CAD surface.")
+
+                parsed.append({
+                    "t": t,
+                    "spray_on": state_text == "1",
+                    "nozzle_point_world": nozzle_world,
+                    "surface_point_world": surface_world,
+                    "surface_normal_world": normal_world,
+                    "spray_direction_world": direction_world,
+                    "nozzle_point_product": nozzle_product,
+                    "surface_point_product": surface_product,
+                    "surface_normal_product": normal_product,
+                    "spray_direction_product": direction_product,
+                    "face_index": cell_id,
+                    "cell_id": cell_id,
+                })
+                previous_t = t
+        except (ValueError, TypeError, KeyError, IndexError, np.linalg.LinAlgError) as exc:
+            QMessageBox.critical(self, "Import trajectory", f"Invalid trajectory data:\n{exc}")
+            return False
+
+        # Rebuild stroke IDs for route visualization; the imported time/state
+        # sequence itself is retained exactly for playback.
+        records = []
+        stroke_id = -1
+        previous_state = False
+        for item in parsed:
+            if item["spray_on"] and not previous_state:
+                stroke_id += 1
+            record = {key: value for key, value in item.items() if key not in ("t", "spray_on")}
+            record["stroke_id"] = stroke_id if item["spray_on"] else -(stroke_id + 1)
+            record["timestamp"] = item["t"]
+            records.append(record)
+            previous_state = item["spray_on"]
+
+        timeline = []
+        for index in range(1, len(parsed)):
+            start = parsed[index - 1]
+            end = parsed[index]
+            if end["t"] <= start["t"]:
+                continue
+            timeline.append({
+                "start_s": float(start["t"]),
+                "end_s": float(end["t"]),
+                "start_record": records[index - 1],
+                "end_record": records[index],
+                "spray_on": bool(start["spray_on"]),
+                "kind": "IMPORTED_CSV_SPRAY_ON" if start["spray_on"] else "IMPORTED_CSV_SPRAY_OFF",
+            })
+
+        if not timeline:
+            QMessageBox.warning(self, "Import trajectory", "CSV contains no playable time intervals.")
+            return False
+
+        self._interactive_recorded_replay_timer.stop()
+        self._interactive_spray_records = records
+        self._interactive_recorded_replay_timing = {
+            "safety_status": "SAFE",
+            "timeline": timeline,
+            "estimated_duration_s": float(parsed[-1]["t"] - parsed[0]["t"]),
+            "recorded_replay_duration_s": float(parsed[-1]["t"] - parsed[0]["t"]),
+            "total_route_distance_mm": float(np.sum([
+                np.linalg.norm(
+                    np.asarray(records[i]["nozzle_point_world"])
+                    - np.asarray(records[i - 1]["nozzle_point_world"])
+                ) * mm_factor for i in range(1, len(records))
+            ])),
+            "spray_distance_mm": 0.0,
+            "connector_distance_mm": 0.0,
+        }
+        self._interactive_precomputed_connector_paths = {}
+        self._interactive_spray_route_optimization = {
+            "algorithm": "IMPORTED_TIME_PARAMETERIZED_CSV",
+            "stroke_count": stroke_id + 1,
+            "optimality": "EXTERNAL_SEQUENCE_PRESERVED",
+        }
+        self._interactive_spray_replay_button_state = None
+        self._refresh_interactive_recorded_path_actor()
+        self.recorded_path_replay_button.setEnabled(True)
+        self.recorded_path_status_label.setText(
+            f"CSV LOADED · {len(records):,} samples · {timeline[-1]['end_s']:.2f} s"
+        )
+        self.recorded_path_time_label.setText(
+            f"IMPORTED ROUTE  |  {timeline[-1]['end_s'] - timeline[0]['start_s']:.2f} s"
+        )
+        QMessageBox.information(
+            self, "Import trajectory",
+            f"Loaded {len(records):,} samples for simulation.\n"
+            "CSV positions are interpreted in millimetres and quaternion order is qx, qy, qz, qw.\n"
+            "The loaded time and spray ON/OFF sequence will be replayed as stored."
+        )
+        self.plotter.render()
+        return True
 
     def _on_interactive_paint_display_mode_changed(self, show_paint_color):
         self._interactive_spray_display_mode = (
