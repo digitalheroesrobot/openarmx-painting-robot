@@ -655,6 +655,9 @@ class MainWindow(QMainWindow):
         self.viewer.patch_selected.connect(
             self._on_viewer_patch_selected
         )
+        self.viewer.route_readiness_changed.connect(
+            self._on_manual_route_readiness_changed
+        )
 
         # Left sidebar
         self.left_panel = self._build_left_panel()
@@ -4262,6 +4265,20 @@ class MainWindow(QMainWindow):
             "Use FINISH SPRAY PATH in this panel to complete recording."
         )
 
+    def _on_manual_route_readiness_changed(self, ready):
+        """Enable the next workflow stage only after every manual connector is safe."""
+        ready = bool(ready)
+        self.stage_completed[STAGE_SPRAY_TRAJECTORY] = ready
+        if ready:
+            self.status_bar.showMessage(
+                "ALL MANUAL CONNECTORS VALIDATED · SPRAY ROUTE READY"
+            )
+        else:
+            self.status_bar.showMessage(
+                "CONNECT EACH STROKE END TO THE NEXT START TO COMPLETE THE ROUTE"
+            )
+        self._refresh_workflow_ui()
+
     def _finish_interactive_spray_path(self):
         """Stop interactive input, optimize the recorded stroke route and report it."""
         if self._operation_running or not self.viewer._interactive_spray_active:
@@ -4306,7 +4323,11 @@ class MainWindow(QMainWindow):
             self._refresh_workflow_ui()
             return
 
-        self.stage_completed[STAGE_SPRAY_TRAJECTORY] = True
+        route_timing = getattr(
+            self.viewer, "_interactive_recorded_replay_timing", None
+        ) or {}
+        route_ready = route_timing.get("safety_status") == "SAFE"
+        self.stage_completed[STAGE_SPRAY_TRAJECTORY] = bool(route_ready)
         self.stage_completed[STAGE_SPRAY_SIMULATION] = False
         self.viewer.set_recorded_path_page("route")
         self._refresh_workflow_ui()
@@ -4321,15 +4342,21 @@ class MainWindow(QMainWindow):
             "USER-ORDERED INTERACTIVE SPRAY ROUTE\n\n"
             f"RECORDED POSES: {len(nozzle_points):,}\n"
             f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\n"
-            f"TOTAL ROUTE LENGTH: {float(result.get('total_route_distance_mm', spray_distance + connector_distance)):.1f} mm\n"
             f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
-            f"SPRAY-OFF CONNECTORS: {connector_distance:.1f} mm\n"
-            f"ESTIMATED PAINTING TIME: {self.viewer._format_route_time(float(result.get('estimated_duration_s', 0.0)))}\n"
+            + (
+                f"SPRAY-OFF CONNECTORS: {connector_distance:.1f} mm\n"
+                f"TOTAL ROUTE LENGTH: {float(result.get('total_route_distance_mm', spray_distance + connector_distance)):.1f} mm\n"
+                f"ESTIMATED PAINTING TIME: {self.viewer._format_route_time(float(result.get('estimated_duration_s', 0.0)))}\n"
+                if route_ready else
+                "SPRAY-OFF CONNECTORS: PENDING MANUAL ENDPOINT CONNECTION\n"
+                "TOTAL ROUTE LENGTH / TIME: AVAILABLE AFTER ALL CONNECTORS PASS SAFETY CHECK\n"
+            )
             f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\n\n"
             f"ROUTING: {route_algorithm}\n"
-            "GREEN: SPRAY-ON STROKES  |  BLUE: SPRAY-OFF CONNECTORS\n"
-            "Stroke order uses collision-checked exterior connector lengths; "
-            "the search is heuristic, not a proof of global optimum.\n"
+            "PALE GREEN: SPRAY-ON STROKES  |  PALE BLUE: MANUAL SPRAY-OFF CONNECTORS\n"
+            "Spray points are highlighted. Stroke order and direction are preserved.\n"
+            "Each connector follows the CAD surface at the configured spray distance and "
+            "is accepted only after full sprayer collision checks.\n"
             "All route segments are timed at the configured constant painting speed.\n"
             "Control frequency is reserved for future spray-point export."
         )
