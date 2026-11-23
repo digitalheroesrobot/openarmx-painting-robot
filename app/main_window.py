@@ -36,7 +36,6 @@ from core.step_loader import load_step, convert_step_report_units
 from core.result_manager import ResultManager
 from core.geometry_analyzer import detect_hole_candidates
 from core.coating_process import (
-    calculate_robot_waypoint_spacing_mm,
     load_coating_process,
 )
 from core.robot_settings import load_robot_settings
@@ -369,10 +368,6 @@ class MainWindow(QMainWindow):
         self.robot_settings = load_robot_settings(
             self.robot_settings_config_path, self.coating_process
         )
-        self.coating_process.update({
-            "base_travel_speed_mm_s": self.robot_settings["base_travel_speed_mm_s"],
-            "robot_control_frequency_hz": self.robot_settings["robot_control_frequency_hz"],
-        })
 
         self.result_manager = ResultManager(self.project_root)
 
@@ -2457,22 +2452,19 @@ class MainWindow(QMainWindow):
     def _get_current_spray_parameters(self):
         profile = dict(self.sprayer_profile)
         coating_process = dict(self.coating_process)
-        coating_process.update({
-            "base_travel_speed_mm_s": self.robot_settings["base_travel_speed_mm_s"],
-            "robot_control_frequency_hz": self.robot_settings["robot_control_frequency_hz"],
-        })
-        robot_waypoint_spacing_mm = calculate_robot_waypoint_spacing_mm(
-            coating_process["base_travel_speed_mm_s"],
-            coating_process["robot_control_frequency_hz"],
-        )
+        standoff_mm = float(profile["standoff_mm"])
+        footprint = _calculate_spray_footprint(profile, standoff_mm)
+        spray_width_mm = float(footprint.get("width_mm", 0.0))
+        track_pitch_mm = float(footprint.get("nominal_track_spacing_mm", 0.0))
+        if spray_width_mm > 0.0 and track_pitch_mm > 0.0:
+            point_spacing_mm = min(track_pitch_mm, 0.5 * spray_width_mm)
+        else:
+            point_spacing_mm = float(profile["sampling_spacing_mm"])
         return {
-            "standoff_mm": float(profile["standoff_mm"]),
-            # Stage 3's surface coverage grid uses the spray footprint and
-            # overlap; this configured value remains its fallback only.
-            "sampling_spacing_mm": float(profile["sampling_spacing_mm"]),
-            # Interactive robot route samples are placed once per control
-            # cycle at the configured base speed.
-            "robot_waypoint_spacing_mm": float(robot_waypoint_spacing_mm),
+            "standoff_mm": standoff_mm,
+            # One overlap-derived spacing is shared by route recording,
+            # Stage 3 sweep generation, and Stage 4 verification replay.
+            "sampling_spacing_mm": float(point_spacing_mm),
             "spray_angle_deg": float(profile.get("spray_cone_angle_deg", 0.0)),
             "sprayer_profile": profile,
             "coating_process": coating_process,
@@ -2518,6 +2510,7 @@ class MainWindow(QMainWindow):
         self._on_spray_parameter_changed()
 
     def _open_robot_settings(self):
+        """Open and persist a robot/product profile without changing simulation settings."""
         if self._operation_running:
             return
         product_name = (
@@ -2536,41 +2529,15 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted or dialog.selected_settings is None:
             return
         self.robot_settings = dict(dialog.selected_settings)
-        self.coating_process.update({
-            "base_travel_speed_mm_s": self.robot_settings["base_travel_speed_mm_s"],
-            "robot_control_frequency_hz": self.robot_settings["robot_control_frequency_hz"],
-        })
-        motion_keys = ("base_travel_speed_mm_s", "robot_control_frequency_hz")
-        generated_process = (
-            self.current_stage3_parameters.get("coating_process", {})
-            if isinstance(self.current_stage3_parameters, dict)
-            else {}
-        )
-        timing_stale = any(
-            float(generated_process.get(key, self.coating_process.get(key, 0.0)))
-            != float(self.coating_process.get(key, 0.0))
-            for key in motion_keys
-        )
-        self.viewer.update_coating_process_preview(
-            self.coating_process, timing_stale=timing_stale
-        )
-        if not timing_stale and self.current_stage3_parameters is not None:
-            self.current_stage3_parameters["coating_process"] = dict(self.coating_process)
-            if isinstance(self.current_stage3_result, dict):
-                trajectory = self.current_stage3_result.get("trajectory", {})
-                if isinstance(trajectory, dict):
-                    parameters = dict(trajectory.get("parameters", {}))
-                    parameters["coating_process"] = dict(self.coating_process)
-                    trajectory["parameters"] = parameters
         self.robot_settings_label.setText(
             f"ROBOT: {self.robot_settings['name']}  |  "
             f"{self.robot_settings['base_travel_speed_mm_s']:.1f} mm/s  |  "
             f"{self.robot_settings['robot_control_frequency_hz']:.1f} Hz"
         )
         self.status_bar.showMessage(
-            f"ROBOT PROFILE LOADED: {self.robot_settings['name']}"
+            f"ROBOT PROFILE SAVED: {self.robot_settings['name']} "
+            "(profile values are not connected to simulation)"
         )
-        self._on_spray_parameter_changed()
 
     def _open_coating_process_settings(self):
         if self._operation_running:
@@ -2583,32 +2550,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted or dialog.selected_process is None:
             return
         self.coating_process = dict(dialog.selected_process)
-        self.coating_process.update({
-            "base_travel_speed_mm_s": self.robot_settings["base_travel_speed_mm_s"],
-            "robot_control_frequency_hz": self.robot_settings["robot_control_frequency_hz"],
-        })
-        motion_keys = ("base_travel_speed_mm_s", "robot_control_frequency_hz")
-        generated_process = (
-            self.current_stage3_parameters.get("coating_process", {})
-            if isinstance(self.current_stage3_parameters, dict)
-            else {}
-        )
-        timing_stale = any(
-            float(generated_process.get(key, self.coating_process.get(key, 0.0)))
-            != float(self.coating_process.get(key, 0.0))
-            for key in motion_keys
-        )
-        self.viewer.update_coating_process_preview(
-            self.coating_process, timing_stale=timing_stale
-        )
-        if not timing_stale and self.current_stage3_parameters is not None:
-            self.current_stage3_parameters["coating_process"] = dict(self.coating_process)
-            if isinstance(self.current_stage3_result, dict):
-                trajectory = self.current_stage3_result.get("trajectory", {})
-                if isinstance(trajectory, dict):
-                    parameters = dict(trajectory.get("parameters", {}))
-                    parameters["coating_process"] = dict(self.coating_process)
-                    trajectory["parameters"] = parameters
+        self.viewer.update_coating_process_preview(self.coating_process)
         self.coating_process_label.setText(
             f"PROCESS: {self.coating_process.get('name', 'Unnamed')}  |  "
             f"TARGET: {self.coating_process['target_dry_film_thickness_um']:.1f} µm  |  "
@@ -2638,12 +2580,8 @@ class MainWindow(QMainWindow):
                 ):
                     return False
             elif key == "coating_process":
-                motion_keys = ("base_travel_speed_mm_s", "robot_control_frequency_hz")
-                if any(
-                    value.get(motion_key) != previous[key].get(motion_key)
-                    for motion_key in motion_keys
-                ):
-                    return False
+                # Coating parameters do not change the geometric route.
+                continue
             elif value != previous[key]:
                 return False
 
@@ -4249,7 +4187,7 @@ class MainWindow(QMainWindow):
             self.viewer.start_interactive_spray_path(
                 standoff=float(parameters["standoff_mm"]) / mm_per_unit,
                 cone_angle_deg=float(footprint["included_angle_deg"]),
-                sampling_spacing=float(parameters["robot_waypoint_spacing_mm"]) / mm_per_unit,
+                sampling_spacing=float(parameters["sampling_spacing_mm"]) / mm_per_unit,
                 sprayer_profile=parameters["sprayer_profile"],
                 coating_process=parameters["coating_process"],
                 excluded_face_mask=(
