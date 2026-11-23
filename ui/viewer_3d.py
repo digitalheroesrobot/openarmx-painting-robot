@@ -2533,14 +2533,30 @@ class ProductViewer(QWidget):
         standoff = max(float(self._interactive_spray_standoff), 1e-6)
         start_surface = np.asarray(start_record["surface_point_product"], dtype=np.float64)
         end_surface = np.asarray(end_record["surface_point_product"], dtype=np.float64)
+        # The nozzle is positioned along the CAD surface normal even when
+        # the operator has tilted the spray axis. Use that geometric normal
+        # for the stand-off offset; connector travel itself is normal to the
+        # surface and must not inherit a tilted spray direction.
         start_outward = self._interactive_unit_vector(
-            -np.asarray(start_record["spray_direction_product"], dtype=np.float64)
+            np.asarray(start_record["surface_normal_product"], dtype=np.float64)
         )
         end_outward = self._interactive_unit_vector(
-            -np.asarray(end_record["spray_direction_product"], dtype=np.float64)
+            np.asarray(end_record["surface_normal_product"], dtype=np.float64)
         )
         if start_outward is None or end_outward is None:
-            return blocked("selected endpoint has an invalid spray direction")
+            return blocked("selected endpoint has an invalid surface normal")
+        start_offset = (
+            np.asarray(start_record["nozzle_point_product"], dtype=np.float64)
+            - start_surface
+        )
+        end_offset = (
+            np.asarray(end_record["nozzle_point_product"], dtype=np.float64)
+            - end_surface
+        )
+        if float(np.dot(start_outward, start_offset)) < 0.0:
+            start_outward = -start_outward
+        if float(np.dot(end_outward, end_offset)) < 0.0:
+            end_outward = -end_outward
 
         profile = self._interactive_sprayer_profile or {}
         def profile_mm(key, default):
