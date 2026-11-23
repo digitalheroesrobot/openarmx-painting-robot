@@ -723,6 +723,10 @@ class ProductViewer(QWidget):
     def eventFilter(self, watched, event):
         """Capture held camera-rotation keys from the 3D viewport."""
         if watched is self.plotter.interactor:
+            if event.type() == QEvent.Type.FocusOut:
+                self._camera_rotation_keys.clear()
+                self._camera_rotation_timer.stop()
+                return False
             if event.type() == QEvent.Type.KeyPress:
                 key = event.key()
                 if key in (
