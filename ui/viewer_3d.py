@@ -539,8 +539,18 @@ class ProductViewer(QWidget):
             self._on_interactive_spray_left_double_click,
             4.0,
         )
-        # Qt shortcut is more reliable than VTK KeyPressEvent when the
-        # camera interactor style has taken keyboard focus.
+        # Keep a VTK-level Space handler as well as the Qt shortcut below.
+        # After restoring the camera interactor style, the embedded VTK
+        # widget can own keyboard focus and consume the key before QShortcut
+        # receives it. A high-priority observer makes the mode switch
+        # independent of which widget currently owns focus.
+        self._interactive_spray_key_press_observer_id = interactor.AddObserver(
+            "KeyPressEvent",
+            self._on_interactive_spray_key_press,
+            4.5,
+        )
+        # Qt shortcut remains as a fallback for platforms that do not forward
+        # keyboard events through the VTK interactor.
         self._interactive_spray_space_shortcut = QShortcut(
             QKeySequence(Qt.Key_Space), self
         )
@@ -6459,6 +6469,16 @@ class ProductViewer(QWidget):
             self._interactive_update_surface_angle_indicator(None)
             self.plotter.render()
         return True
+
+    def _on_interactive_spray_key_press(self, interactor, event):
+        """Handle Space directly in VTK so camera focus cannot swallow it."""
+        if not self._interactive_spray_active:
+            return
+        key_sym = str(interactor.GetKeySym() or "").strip().lower()
+        if key_sym not in ("space", "spacebar"):
+            return
+        if self._interactive_spray_mode == "camera":
+            self._return_to_interactive_spray_mode()
 
     def _on_interactive_spray_left_double_click(self, interactor, event):
         """A left-button double-click returns the viewport to camera mode."""
