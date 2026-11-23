@@ -5053,10 +5053,7 @@ class ProductViewer(QWidget):
 
     def _on_interactive_camera_pan_press(self, interactor, event):
         """Start a camera-only pan; the product transform is never modified."""
-        if (
-            not self._interactive_spray_active
-
-        ):
+        if not self._interactive_spray_active:
             return
         self._interactive_camera_pan_dragging = True
         self._interactive_camera_pan_last_position = tuple(
@@ -5160,10 +5157,7 @@ class ProductViewer(QWidget):
         maximum limits. The current cursor pose is recomputed immediately,
         so the nozzle moves even when the mouse cursor itself is stationary.
         """
-        if (
-            not self._interactive_spray_active
-
-        ):
+        if not self._interactive_spray_active:
             return
 
         event_name = str(event)
@@ -5201,10 +5195,7 @@ class ProductViewer(QWidget):
             self.plotter.render()
 
     def _on_interactive_spray_mouse_move(self, interactor, event):
-        if (
-            not self._interactive_spray_active
-
-        ):
+        if not self._interactive_spray_active:
             return
 
         # Right-drag translates the camera only. The product and spray pose
@@ -5270,10 +5261,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_start_timestamp = None
 
     def _on_interactive_spray_left_press(self, interactor, event):
-        if (
-            not self._interactive_spray_active
-
-        ):
+        if not self._interactive_spray_active:
             return
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y)
@@ -5341,10 +5329,7 @@ class ProductViewer(QWidget):
 
     def _on_interactive_spray_leave(self, interactor, event):
         # Never keep spraying after the pointer leaves the 3D viewport.
-        if (
-            not self._interactive_spray_active
-
-        ):
+        if not self._interactive_spray_active:
             return
         self._interactive_spray_recording = False
 
