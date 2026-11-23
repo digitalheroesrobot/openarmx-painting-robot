@@ -462,6 +462,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_texture_actors = {}
         self._interactive_spray_texture_layout = {}
         self._interactive_spray_texture_objects = {}
+        self._interactive_spray_excluded_overlay_actor = None
         self._interactive_spray_dirty_face_ids = set()
         self._interactive_spray_base_opacity = None
         self._interactive_spray_face_area_mm2 = None
@@ -2682,6 +2683,7 @@ class ProductViewer(QWidget):
         # STEP models render coating as per-Face UV textures. The original
         # mesh actor remains available for cell picking and occlusion.
         self._interactive_build_brep_texture_actors()
+        self._interactive_build_excluded_face_overlay()
 
         self._interactive_spray_standoff = float(standoff)
         self._interactive_spray_cone_angle_deg = float(cone_angle_deg)
@@ -2761,6 +2763,56 @@ class ProductViewer(QWidget):
             name="interactive_spray_hud",
         )
         self.plotter.render()
+
+    def _interactive_build_excluded_face_overlay(self):
+        """Show Stage 2 non-paintable triangles as a persistent red overlay."""
+        mask = self._interactive_spray_excluded_face_mask
+        if mask is None or not np.any(mask) or self.current_mesh is None:
+            return False
+        excluded_ids = np.flatnonzero(mask)
+        if not len(excluded_ids):
+            return False
+        try:
+            source = self._to_polydata(self.current_mesh)
+            excluded_surface = source.extract_cells(excluded_ids).extract_surface().triangulate()
+            if excluded_surface.n_cells == 0:
+                return False
+            excluded_surface = excluded_surface.compute_normals(
+                point_normals=True,
+                cell_normals=False,
+                auto_orient_normals=False,
+                inplace=False,
+            )
+            points = np.asarray(excluded_surface.points, dtype=np.float64)
+            normals = np.asarray(
+                excluded_surface.point_data.get("Normals", np.zeros_like(points)),
+                dtype=np.float64,
+            )
+            diagonal = float(np.linalg.norm(
+                np.asarray(self.current_mesh.bounds[1], dtype=np.float64)
+                - np.asarray(self.current_mesh.bounds[0], dtype=np.float64)
+            ))
+            offset = max(diagonal * 3e-6, 1e-8)
+            if normals.shape == points.shape:
+                excluded_surface.points = points + normals * offset
+            actor = self.plotter.add_mesh(
+                excluded_surface,
+                color="#FF3030",
+                opacity=0.42,
+                lighting=False,
+                show_edges=False,
+                pickable=False,
+                name="stage2_excluded_face_overlay",
+            )
+            actor.SetOrigin(0.0, 0.0, 0.0)
+            actor.SetUserMatrix(
+                self._vtk_matrix_from_numpy(self._actor_matrix_array())
+            )
+            self._interactive_spray_excluded_overlay_actor = actor
+            return True
+        except Exception:
+            self._interactive_spray_excluded_overlay_actor = None
+            return False
 
     def _interactive_build_brep_texture_actors(self):
         """Create one UV-textured render surface per original STEP B-Rep Face.
@@ -3819,6 +3871,9 @@ class ProductViewer(QWidget):
         uv_valid = np.asarray(brep_context["triangle_uv_valid"], dtype=bool)
         selected = np.unique(np.asarray(ids, dtype=np.int64))
         selected = selected[(selected >= 0) & (selected < len(mesh.faces))]
+        # The ray footprint can intersect multiple triangles. Never allow
+        # Stage 2 non-paintable triangles into the deposition kernel.
+        selected = selected[~excluded_mask[selected]]
         selected = selected[uv_valid[selected]]
         if not selected.size:
             return
@@ -3826,9 +3881,20 @@ class ProductViewer(QWidget):
         # Build inexpensive, tessellation-derived surface samples once per mesh.
         # The old path evaluated OpenCascade at hundreds/thousands of UV texels
         # during every mouse update; this cache eliminates those calls entirely.
+        excluded_mask = np.asarray(
+            self._interactive_spray_excluded_face_mask,
+            dtype=bool,
+        )
+        if excluded_mask.shape != (len(mesh.faces),):
+            return
         cache = getattr(self, "_interactive_brep_surface_sample_cache", None)
         cache_key = id(mesh)
-        if not isinstance(cache, dict) or cache.get("mesh_id") != cache_key:
+        cache_matches = (
+            isinstance(cache, dict)
+            and cache.get("mesh_id") == cache_key
+            and np.array_equal(cache.get("excluded_mask"), excluded_mask)
+        )
+        if not cache_matches:
             vertices = np.asarray(mesh.vertices, dtype=np.float64)
             triangles = np.asarray(mesh.faces, dtype=np.int64)
             triangle_points = vertices[triangles]
@@ -3836,6 +3902,7 @@ class ProductViewer(QWidget):
             uv_centers = np.full((sample_count, 2), np.nan, dtype=np.float64)
             metrics = np.full((sample_count, 2, 2), np.nan, dtype=np.float64)
             face_layouts = {}
+            from core.uv_coating_texture import rasterize_face_uv_grid
             for face_value in np.unique(face_ids[uv_valid]):
                 face_id = int(face_value)
                 face_tri_ids = np.flatnonzero((face_ids == face_id) & uv_valid)
@@ -3845,6 +3912,20 @@ class ProductViewer(QWidget):
                     brep_context["face_records"][face_id - 1],
                     triangle_uvs[face_tri_ids],
                 )
+                paintable_tri_ids = face_tri_ids[~excluded_mask[face_tri_ids]]
+                if len(paintable_tri_ids):
+                    paintable_uv_mask = rasterize_face_uv_grid(
+                        triangle_uvs[paintable_tri_ids],
+                        layout["uv_bounds"],
+                        resolution=int(DEFAULT_UV_TEXTURE_RESOLUTION),
+                        periodic_u=layout["periodic_u"],
+                        periodic_v=layout["periodic_v"],
+                    )["valid_mask"]
+                else:
+                    paintable_uv_mask = np.zeros(
+                        (int(DEFAULT_UV_TEXTURE_RESOLUTION), int(DEFAULT_UV_TEXTURE_RESOLUTION)),
+                        dtype=bool,
+                    )
                 bounds = np.asarray(layout["uv_bounds"], dtype=np.float64)
                 normalized = face_uv_triangles_to_texture_coordinates(
                     triangle_uvs[face_tri_ids],
@@ -3888,9 +3969,11 @@ class ProductViewer(QWidget):
                     "resolution": int(DEFAULT_UV_TEXTURE_RESOLUTION),
                     "triangle_count": int(len(face_tri_ids)),
                     "triangle_ids": face_tri_ids,
+                    "paintable_uv_mask": paintable_uv_mask,
                 }
             cache = {
                 "mesh_id": cache_key,
+                "excluded_mask": excluded_mask.copy(),
                 "points_local": np.mean(triangle_points, axis=1),
                 "vertices_local": triangle_points,
                 "normals_local": np.asarray(mesh.face_normals, dtype=np.float64).copy(),
@@ -3945,7 +4028,9 @@ class ProductViewer(QWidget):
         # painted dots on otherwise uncoated Face regions.
         hit_face_ids = np.unique(cache["face_ids"][selected])
         candidate_ids = np.flatnonzero(
-            np.isin(cache["face_ids"], hit_face_ids) & cache["uv_valid"]
+            np.isin(cache["face_ids"], hit_face_ids)
+            & cache["uv_valid"]
+            & ~excluded_mask
         )
         if len(candidate_ids):
             candidate_points_mm = (
@@ -4132,6 +4217,12 @@ class ProductViewer(QWidget):
                 periodic_v=bool(face_layout["periodic_v"]),
                 sample_covariance_px=np.asarray(covariances, dtype=np.float64),
             )
+            # Gaussian splats may cross a Stage 2 boundary on the same CAD
+            # B-Rep Face. Clip the texture back to the exact paintable UV
+            # domain so excluded triangles cannot receive visible coating.
+            paintable_uv_mask = face_layout.get("paintable_uv_mask")
+            if paintable_uv_mask is not None:
+                face_record["thickness_grid_um"][~paintable_uv_mask] = 0.0
             face_record["direct_deposition_sample_count"] = int(len(triangle_ids))
             face_record["direct_deposition_volume_mm3"] = float(
                 np.sum(deposited[local_mask])
@@ -5355,6 +5446,15 @@ class ProductViewer(QWidget):
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_remove_live_actors()
+        if self._interactive_spray_excluded_overlay_actor is not None:
+            try:
+                self.plotter.remove_actor(
+                    self._interactive_spray_excluded_overlay_actor,
+                    render=False,
+                )
+            except Exception:
+                pass
+            self._interactive_spray_excluded_overlay_actor = None
 
         interactor = self.plotter.iren.interactor
         if self._interactive_saved_style is not None:
