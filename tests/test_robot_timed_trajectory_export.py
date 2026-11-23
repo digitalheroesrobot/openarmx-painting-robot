@@ -52,7 +52,7 @@ def test_export_time_is_cumulative_distance_over_robot_speed():
         "t", "x", "y", "z", "qx", "qy", "qz", "qw", "on_off"
     ]
     assert metadata["segment_spray_on"] == [True, False]
-    assert metadata["duration_s"] == 0.35
+    assert np.isclose(metadata["duration_s"], 0.35)
     assert metadata["quaternion_order"] == "XYZW"
     assert metadata["transitions"][0]["off_state_row"] == 2
     assert metadata["transitions"][0]["off_travel_destination_row"] == 3
