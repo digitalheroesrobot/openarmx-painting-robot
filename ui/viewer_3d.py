@@ -6246,8 +6246,27 @@ class ProductViewer(QWidget):
             np.asarray(item["surface_point_world"], dtype=np.float64)
             for item in raw
         ]
-        curve_points = []
+        curve_segments = []
+        current_segment = []
         spacing = max(float(self._interactive_spray_sampling_spacing), 1e-6)
+        hole_tolerance = max(spacing * 0.35, 1e-4)
+
+        def append_preview_point(candidate):
+            projected = self._interactive_project_smoothed_surface_point(candidate)
+            if projected is not None and not projected["paintable"]:
+                if len(current_segment) >= 2:
+                    curve_segments.append(current_segment)
+                current_segment.clear()
+                return
+            if projected is None:
+                current_segment.append(np.asarray(candidate, dtype=np.float64))
+                return
+            projected_point = np.asarray(projected["surface_point_world"], dtype=np.float64)
+            if np.linalg.norm(projected_point - candidate) > hole_tolerance:
+                current_segment.append(np.asarray(candidate, dtype=np.float64))
+            else:
+                current_segment.append(projected_point)
+
         for index in range(len(control) - 1):
             p1 = control[index]
             p2 = control[index + 1]
@@ -6259,22 +6278,22 @@ class ProductViewer(QWidget):
             ))
             for step in range(count):
                 t = float(step) / float(count)
-                candidate = self._interactive_catmull_rom_point(
-                    p0, p1, p2, p3, t
-                )
-                projected = self._interactive_project_smoothed_surface_point(
-                    candidate
-                )
-                if projected is not None and projected["paintable"]:
-                    curve_points.append(projected["surface_point_world"])
-        projected_end = self._interactive_project_smoothed_surface_point(control[-1])
-        if projected_end is not None and projected_end["paintable"]:
-            curve_points.append(projected_end["surface_point_world"])
-        if len(curve_points) < 2:
+                candidate = self._interactive_catmull_rom_point(p0, p1, p2, p3, t)
+                append_preview_point(candidate)
+        append_preview_point(control[-1])
+        if len(current_segment) >= 2:
+            curve_segments.append(current_segment)
+        if not curve_segments:
             return
-        points = np.asarray(curve_points, dtype=np.float64)
+        points = np.vstack([np.asarray(segment, dtype=np.float64) for segment in curve_segments])
+        line_cells = []
+        offset = 0
+        for segment in curve_segments:
+            count = len(segment)
+            line_cells.extend([count, *range(offset, offset + count)])
+            offset += count
         path = pv.PolyData(points)
-        path.lines = np.asarray([len(points), *range(len(points))], dtype=np.int64)
+        path.lines = np.asarray(line_cells, dtype=np.int64)
         self._interactive_spray_stroke_preview_actor = self.plotter.add_mesh(
             path,
             color="#7CFFB2",
