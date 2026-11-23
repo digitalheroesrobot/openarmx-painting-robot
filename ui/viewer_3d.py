@@ -5497,6 +5497,11 @@ class ProductViewer(QWidget):
                         locator=self._interactive_spray_locator,
                     )
                     if not sample_footprints or not sample_footprints[0][0].n_cells:
+                        # Match replay behavior: a sample with no valid surface
+                        # footprint breaks deposition continuity.
+                        self._interactive_spray_last_deposition_timestamp = None
+                        self._interactive_spray_previous_nozzle_world = None
+                        self._interactive_spray_last_speed_mm_s = 0.0
                         continue
                     sample_patch = sample_footprints[0][0]
                     sample_patch.points = (
