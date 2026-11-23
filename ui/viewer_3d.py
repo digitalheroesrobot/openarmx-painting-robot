@@ -5894,6 +5894,18 @@ class ProductViewer(QWidget):
             or self._interactive_spray_mode != "spray"
         ):
             return
+        x, y = interactor.GetEventPosition()
+        # Capture the mouse-up location before closing the stroke. Without this
+        # final sample, the last cursor movement between the final move event
+        # and button release was omitted from the recorded route.
+        if self._interactive_spray_recording:
+            final_pose = self._interactive_pick_surface_pose(x, y)
+            if final_pose is not None and bool(final_pose.get("paintable", True)):
+                final_pose = self._interactive_apply_locked_spray_direction(
+                    final_pose
+                )
+                self._interactive_update_cursor(final_pose)
+
         self._interactive_spray_recording = False
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
@@ -5906,7 +5918,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_angle_anchor_pose = None
         self._interactive_spray_locked_direction_world = None
         self._interactive_spray_latest_pose = None
-        x, y = interactor.GetEventPosition()
         standard_pose = self._interactive_pick_surface_pose(x, y)
         if standard_pose is not None:
             self._interactive_update_cursor(standard_pose)
