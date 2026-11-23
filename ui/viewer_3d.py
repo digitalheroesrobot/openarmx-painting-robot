@@ -5086,11 +5086,11 @@ class ProductViewer(QWidget):
         # to yaw, so these accumulators are intentionally crossed here.
         sensitivity = 0.20
         self._interactive_spray_angle_x_deg = float(np.clip(
-            self._interactive_spray_angle_x_deg + dx * sensitivity,
+            self._interactive_spray_angle_x_deg - dx * sensitivity,
             -45.0, 45.0,
         ))
         self._interactive_spray_angle_y_deg = float(np.clip(
-            self._interactive_spray_angle_y_deg + dy * sensitivity,
+            self._interactive_spray_angle_y_deg - dy * sensitivity,
             -45.0, 45.0,
         ))
 
