@@ -7504,8 +7504,6 @@ class ProductViewer(QWidget):
             "cone_cosine": cone_cosine,
             "standoff_units": max(standoff_units, 1e-9),
             "pattern_type": pattern_type,
-            "fan_thickness_units": fan_thickness_units,
-            "fan_reference_distance_units": fan_reference_distance_units,
             "footprint_width_units": footprint_width_units,
             "footprint_thickness_units": footprint_thickness_units,
             "footprint_width_mm": footprint_width_units * mm_per_unit,
@@ -7670,7 +7668,7 @@ class ProductViewer(QWidget):
             rgba[previous_faces] = 0
 
         current_faces = np.empty(0, dtype=np.int64)
-        known = cache["pattern_type"] == "round_cone" or cache["fan_thickness_units"] > 0.0
+        known = True
         if cache["spray_on_mask"][path_index] and known:
             hits = self._get_surface_sample_hits_from_spray(path_index)
             if len(hits):
@@ -8182,9 +8180,7 @@ class ProductViewer(QWidget):
         )
         self._playback_spray_actor.SetVisibility(0)
 
-        # Visible spray-state cue. Round-cone geometry is explicitly built
-        # from nozzle apex to the configured target-plane radius. Flat fan is
-        # shown as a thin sheet; its thickness is not invented if unmeasured.
+        # Visible circular-cone spray-state cue.
         sheet_length = cache["standoff_units"]
         sheet_half_width = max(cache["footprint_width_units"] * 0.5, 1e-6)
         # Circular spray volume: nozzle apex to the circular target footprint.
