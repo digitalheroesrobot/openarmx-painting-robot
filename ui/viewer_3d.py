@@ -3784,6 +3784,88 @@ class ProductViewer(QWidget):
                 pass
         self._interactive_spray_live_actors = []
 
+    def update_interactive_sprayer_profile(self, sprayer_profile, sampling_spacing):
+        """Apply changed sprayer geometry to the active route preview immediately."""
+        if not self._interactive_spray_active:
+            return False
+
+        profile = dict(sprayer_profile or {})
+        factor = self._get_source_mm_factor()
+        if factor is None:
+            return False
+
+        standoff_mm = float(profile.get("standoff_mm", 0.0))
+        cone_angle_deg = float(profile.get("spray_cone_angle_deg", 0.0))
+        if not np.isfinite(standoff_mm) or standoff_mm <= 0.0:
+            raise ValueError("Spray working distance must be finite and positive.")
+        if (
+            not np.isfinite(cone_angle_deg)
+            or not 0.0 < cone_angle_deg < 179.0
+        ):
+            raise ValueError("Spray cone angle must be between 0 and 179 degrees.")
+        spacing_source = float(sampling_spacing)
+        if not np.isfinite(spacing_source) or spacing_source <= 0.0:
+            raise ValueError("Spray point spacing must be finite and positive.")
+
+        distance_source = standoff_mm / float(factor)
+        self._interactive_sprayer_profile = profile
+        self._interactive_spray_standoff = distance_source
+        self._interactive_spray_cone_angle_deg = cone_angle_deg
+        self._interactive_spray_sampling_spacing = spacing_source
+
+        # A settings change starts a new sampling interval; never interpolate
+        # between points generated with two different spray geometries.
+        self._interactive_spray_sampling_previous_pose = None
+        self._interactive_spray_sampling_distance_accumulator = 0.0
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+
+        try:
+            tail_sigma_fraction = max(
+                float(profile.get("overspray_tail_sigma_fraction", 0.35)),
+                0.05,
+            )
+        except (TypeError, ValueError):
+            tail_sigma_fraction = 0.35
+        overspray_extent_factor = 1.0 + 3.0 * tail_sigma_fraction
+        self._interactive_spray_paint_footprint_angle_deg = math.degrees(
+            2.0 * math.atan(
+                math.tan(math.radians(cone_angle_deg * 0.5))
+                * overspray_extent_factor
+            )
+        )
+
+        self.working_distance_spin.blockSignals(True)
+        self.working_distance_spin.setValue(standoff_mm)
+        self.working_distance_spin.blockSignals(False)
+
+        pose = self._interactive_spray_latest_pose
+        if pose is not None:
+            updated = dict(pose)
+            surface_point = np.asarray(
+                pose["surface_point_world"], dtype=np.float64
+            )
+            direction = np.asarray(
+                pose["spray_direction_world"], dtype=np.float64
+            )
+            direction /= max(float(np.linalg.norm(direction)), 1e-12)
+            updated["nozzle_point_world"] = (
+                surface_point - direction * distance_source
+            )
+            updated["timestamp"] = time.monotonic()
+
+            # Rebuild the cone and footprint without recording an extra route
+            # sample merely because the operator edited the sprayer profile.
+            was_recording = self._interactive_spray_recording
+            self._interactive_spray_recording = False
+            try:
+                self._interactive_update_cursor(updated)
+            finally:
+                self._interactive_spray_recording = was_recording
+        else:
+            self.plotter.render()
+        return True
+
     def _on_interactive_working_distance_changed(self, value_mm):
         """Change the spray tip-to-surface working distance live."""
         if not self._interactive_spray_active:
