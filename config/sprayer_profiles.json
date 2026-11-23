@@ -12,7 +12,6 @@
       "standoff_mm": 180,
       "spray_cone_angle_deg": 74,
       "overlap_percent": 50,
-      "sampling_spacing_mm": 20,
       "atomizing_air_pressure_bar": 1.7,
       "fluid_pressure_bar": 0,
       "fluid_flow_ml_min": 0,
