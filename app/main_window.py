@@ -1325,10 +1325,10 @@ class MainWindow(QMainWindow):
         self.route_next_button.hide()
         layout.addWidget(self.route_next_button)
 
-        self.route_edit_button = QPushButton("ADD / EDIT SPRAY ROUTE")
+        self.route_edit_button = QPushButton("ADD TO EXISTING ROUTE")
         self.route_edit_button.setObjectName("SecondaryButton")
         self.route_edit_button.setToolTip(
-            "Continue the existing spray route. The current coating remains visible so you can add missing spray strokes."
+            "Continue from the existing route. The current sprayed/coated state remains visible; add only the missing spray strokes."
         )
         self.route_edit_button.clicked.connect(self._continue_interactive_spray_path)
         self.route_edit_button.hide()
