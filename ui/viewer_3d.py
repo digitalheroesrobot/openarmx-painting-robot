@@ -1222,6 +1222,13 @@ class ProductViewer(QWidget):
             raise ValueError("Viewer interaction mode must be 'camera' or 'spray'.")
         if mode == "spray" and not self._interactive_spray_active:
             return False
+        # While an interactive spray session is active, never hand input
+        # ownership back to the camera style. Camera orbit remains available
+        # through right-drag; leaving spray mode requires finishing the session.
+        if mode == "camera" and self._interactive_spray_active:
+            self.camera_mode_button.setChecked(False)
+            self.spray_mode_button.setChecked(True)
+            return False
 
         if mode == "camera":
             # Switching away from spray immediately ends the current stroke.
@@ -2800,6 +2807,7 @@ class ProductViewer(QWidget):
             self._interactive_saved_style_enabled = bool(style.GetEnabled())
         self._interactive_spray_input_style = vtkInteractorStyleUser()
         self.interaction_mode_panel.show()
+        self.camera_mode_button.setEnabled(False)
         self.spray_mode_button.setEnabled(True)
         self.working_distance_spin.setEnabled(True)
         factor = self._get_source_mm_factor()
@@ -5458,6 +5466,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_input_style = None
         self._interactive_saved_style = None
         self.interaction_mode_panel.hide()
+        self.camera_mode_button.setEnabled(True)
         self.camera_mode_button.setChecked(True)
         self.spray_mode_button.setChecked(False)
         self.spray_mode_button.setEnabled(False)
