@@ -456,6 +456,7 @@ class ProductViewer(QWidget):
         self._interactive_recorded_replay_end_times = np.empty(0, dtype=np.float64)
         self._interactive_recorded_replay_started_at = None
         self._interactive_recorded_replay_timing = None
+        self._robot_motion_settings = {"painting_speed_mm_s": 150.0, "control_frequency_hz": 100.0}
         self._interactive_spray_path_actor = None
         self._interactive_spray_route_actors = []
         self._interactive_recorded_replay_timer = QTimer(self)
@@ -1248,6 +1249,22 @@ class ProductViewer(QWidget):
         panel.hide()
         return panel
 
+    def set_robot_motion_settings(self, settings):
+        """Apply robot speed for route-time estimates; frequency is stored for later export."""
+        values = dict(settings or {})
+        speed = float(values.get("painting_speed_mm_s", 150.0))
+        frequency = float(values.get("control_frequency_hz", 100.0))
+        if not np.isfinite(speed) or speed <= 0.0:
+            raise ValueError("Robot painting speed must be a positive finite value.")
+        if not np.isfinite(frequency) or frequency <= 0.0:
+            raise ValueError("Robot control frequency must be a positive finite value.")
+        self._robot_motion_settings = {
+            "painting_speed_mm_s": speed,
+            "control_frequency_hz": frequency,
+        }
+        # Changing robot speed invalidates only the timing, never route geometry.
+        self._interactive_recorded_replay_timing = None
+
     def set_recorded_path_page(self, page):
         """Show route-editing or simulation controls for the active workflow page."""
         page = str(page).lower()
@@ -1559,27 +1576,32 @@ class ProductViewer(QWidget):
         return sampled
 
     def _build_interactive_route_metrics(self, records):
-        """Measure spray strokes and collision-checked spray-OFF routes."""
+        """Build safe spray-OFF connectors and time every route segment at robot speed."""
         if not records:
             return {
                 "spray_distance_mm": 0.0,
                 "connector_distance_mm": 0.0,
+                "total_route_distance_mm": 0.0,
+                "estimated_duration_s": 0.0,
                 "recorded_replay_duration_s": 0.0,
                 "timeline": [],
                 "safe_connector_paths": [],
                 "safety_status": "NO_ROUTE",
             }
         mm_factor = self._get_source_mm_factor()
-        if mm_factor is None:
+        if mm_factor is None or mm_factor <= 0.0:
             raise ValueError("A known source coordinate unit is required for route distances.")
+        speed_mm_s = float(
+            getattr(self, "_robot_motion_settings", {}).get("painting_speed_mm_s", 150.0)
+        )
+        if not np.isfinite(speed_mm_s) or speed_mm_s <= 0.0:
+            raise ValueError("Robot painting speed must be greater than zero.")
+
         points = np.asarray(
             [item["nozzle_point_product"] for item in records], dtype=np.float64
         )
         segment_ids = np.asarray(
             [item["stroke_id"] for item in records], dtype=np.int64
-        )
-        timestamps = np.asarray(
-            [item.get("timestamp", 0.0) for item in records], dtype=np.float64
         )
         spray_distance = 0.0
         for segment_id in np.unique(segment_ids):
@@ -1595,19 +1617,21 @@ class ProductViewer(QWidget):
         connector_distance = 0.0
         elapsed = 0.0
         for index in range(1, len(records)):
-            duration = abs(float(timestamps[index] - timestamps[index - 1]))
-            if not np.isfinite(duration):
-                duration = 0.0
-            duration = max(duration, 0.01)
             spray_on = bool(segment_ids[index] == segment_ids[index - 1])
             if spray_on:
+                p0 = np.asarray(records[index - 1]["nozzle_point_product"], dtype=np.float64)
+                p1 = np.asarray(records[index]["nozzle_point_product"], dtype=np.float64)
+                distance_mm = float(np.linalg.norm(p1 - p0)) * mm_factor
+                if distance_mm <= 1e-12:
+                    continue
+                duration = distance_mm / speed_mm_s
                 timeline.append({
                     "start_s": elapsed,
                     "end_s": elapsed + duration,
                     "start_record": records[index - 1],
                     "end_record": records[index],
                     "spray_on": True,
-                    "kind": "SPRAY_ON_RECORDED_INTERVAL",
+                    "kind": "SPRAY_ON_ROBOT_SPEED",
                 })
                 elapsed += duration
                 continue
@@ -1619,6 +1643,8 @@ class ProductViewer(QWidget):
                 return {
                     "spray_distance_mm": float(spray_distance),
                     "connector_distance_mm": float(connector_distance),
+                    "total_route_distance_mm": float(spray_distance + connector_distance),
+                    "estimated_duration_s": 0.0,
                     "recorded_replay_duration_s": float(elapsed),
                     "timeline": [],
                     "safe_connector_paths": safe_connector_paths,
@@ -1641,6 +1667,8 @@ class ProductViewer(QWidget):
                 return {
                     "spray_distance_mm": float(spray_distance),
                     "connector_distance_mm": float(connector_distance),
+                    "total_route_distance_mm": float(spray_distance + connector_distance),
+                    "estimated_duration_s": 0.0,
                     "recorded_replay_duration_s": float(elapsed),
                     "timeline": [],
                     "safe_connector_paths": safe_connector_paths,
@@ -1648,9 +1676,10 @@ class ProductViewer(QWidget):
                     "blocked_transition": int(index),
                 }
             for path_index, length in enumerate(lengths):
-                if length <= 1e-12:
+                distance_mm = float(length) * mm_factor
+                if distance_mm <= 1e-12:
                     continue
-                segment_duration = duration * float(length / total_length)
+                segment_duration = distance_mm / speed_mm_s
                 timeline.append({
                     "start_s": elapsed,
                     "end_s": elapsed + segment_duration,
@@ -1661,10 +1690,15 @@ class ProductViewer(QWidget):
                 })
                 elapsed += segment_duration
 
+        total_distance = float(spray_distance + connector_distance)
+        expected_duration = total_distance / speed_mm_s
         return {
             "spray_distance_mm": float(spray_distance),
             "connector_distance_mm": float(connector_distance),
+            "total_route_distance_mm": total_distance,
+            "estimated_duration_s": float(expected_duration),
             "recorded_replay_duration_s": float(elapsed),
+            "painting_speed_mm_s": speed_mm_s,
             "timeline": timeline,
             "safe_connector_paths": safe_connector_paths,
             "safety_status": "SAFE",
