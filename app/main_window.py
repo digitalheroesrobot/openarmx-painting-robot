@@ -141,7 +141,7 @@ WORKFLOW_STAGES = [
         "name": "SPRAY TRAJECTORY",
         "description": (
             "Use the interactive spray nozzle to preview and record "
-            "a surface-following spray path."
+            "an operator-directed spray path."
         ),
         "action": "INTERACTIVE SPRAY PATH",
     },
