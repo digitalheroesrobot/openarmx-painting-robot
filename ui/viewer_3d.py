@@ -5506,7 +5506,7 @@ class ProductViewer(QWidget):
                 + (
                     "STAGE 2 EXCLUDED - ROUTE DISABLED"
                     if not paintable
-                    else "NO PAINT SIMULATION - PRESS FINISH TO OPTIMIZE"
+                    else "NO PAINT DEPOSITION - CTRL+Z UNDO LAST STROKE"
                 )
             )
             try:
@@ -5517,10 +5517,15 @@ class ProductViewer(QWidget):
             except (AttributeError, TypeError):
                 pass
 
-        gun_actors, _gun_geometry = self._interactive_build_gun_visual(
+        gun_actors, gun_geometry = self._interactive_build_gun_visual(
             nozzle, direction
         )
         self._interactive_spray_live_actors.extend(gun_actors)
+        # Keep non-coating tool-clearance feedback. Only coating deposition
+        # and thickness/texture rendering are disabled during route capture.
+        self._interactive_spray_gun_collision = (
+            self._interactive_check_gun_collision(gun_geometry)
+        )
         # Keep the physical spray envelope visible for operator guidance.
         # Display geometry only: no collision query, footprint integration,
         # film-thickness update, or coating texture rendering.
