@@ -1071,15 +1071,6 @@ class ProductViewer(QWidget):
             self._stop_interactive_recorded_replay
         )
         row.addWidget(self.recorded_path_stop_button)
-        self.recorded_path_export_button = QPushButton("EXPORT TRAJECTORY")
-        self.recorded_path_export_button.setToolTip(
-            "Export product-frame nozzle poses as a 9-column CSV including spray ON/OFF state, plus timing metadata JSON."
-        )
-        self.recorded_path_export_button.clicked.connect(
-            self._export_interactive_recorded_path
-        )
-        self.recorded_path_export_button.setVisible(False)
-        row.addWidget(self.recorded_path_export_button)
         self.recorded_path_status_label = QLabel("No recorded path")
         row.addWidget(self.recorded_path_status_label, 1)
         self.recorded_path_time_label = QLabel("EST. TIME: --")
@@ -1129,9 +1120,6 @@ class ProductViewer(QWidget):
         self.recorded_path_optimize_button.setVisible(route_page)
         self.recorded_path_replay_button.setVisible(not route_page)
         self.recorded_path_stop_button.setVisible(not route_page)
-        self.recorded_path_export_button.setVisible(
-            (not route_page) and has_route
-        )
         self.recorded_path_time_label.setVisible(True)
         self.interactive_recorded_path_panel.setVisible(has_route)
         if route_page and has_route:
