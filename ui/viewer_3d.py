@@ -1140,159 +1140,64 @@ class ProductViewer(QWidget):
             if hours else f"{minutes:02d}:{whole_seconds:02d}"
         )
 
-    def _build_interactive_route_timing(self, records):
-        """Estimate spray and spray-OFF travel time from configured process speeds."""
+    def _build_interactive_route_metrics(self, records):
+        """Measure spray strokes and spray-OFF connectors without speed or time assumptions."""
         if not records:
-            return {
-                "spray_distance_mm": 0.0, "travel_distance_mm": 0.0,
-                "spray_time_s": 0.0, "travel_time_s": 0.0,
-                "tool_delay_s": 0.0, "estimated_total_time_s": 0.0,
-                "timeline": [], "speed_model": "NO_RECORDS",
-            }
-
-        process = dict(DEFAULT_COATING_PROCESS)
-        process.update(self._interactive_coating_process or {})
-        base_speed = max(float(process.get("base_travel_speed_mm_s", 500.0)), 0.1)
-        minimum_speed = min(
-            max(float(process.get("min_travel_speed_mm_s", 300.0)), 0.1),
-            base_speed,
-        )
-        acceleration = max(
-            float(process.get("max_travel_acceleration_mm_s2", 1000.0)), 0.1
-        )
-        spray_on_delay = max(float(process.get("spray_on_delay_ms", 0.0)), 0.0) / 1000.0
-        spray_off_delay = max(float(process.get("spray_off_delay_ms", 0.0)), 0.0) / 1000.0
+            return {"spray_distance_mm": 0.0, "connector_distance_mm": 0.0}
         mm_factor = self._get_source_mm_factor()
         if mm_factor is None:
-            raise ValueError("A known source coordinate unit is required for route timing.")
-
+            raise ValueError("A known source coordinate unit is required for route distances.")
         points = np.asarray(
             [item["nozzle_point_product"] for item in records], dtype=np.float64
-        )
-        normals = np.asarray(
-            [item["surface_normal_product"] for item in records], dtype=np.float64
         )
         segment_ids = np.asarray(
             [item["stroke_id"] for item in records], dtype=np.int64
         )
-        from stages.stage3_spray_trajectory import _calculate_adaptive_travel_speed_profile
-        speeds, _, speed_metadata = _calculate_adaptive_travel_speed_profile(
-            nozzle_points=points,
-            surface_normals=normals,
-            segment_ids=segment_ids,
-            coordinate_unit=self.source_unit,
-            base_speed_mm_s=base_speed,
-            minimum_speed_mm_s=minimum_speed,
-            maximum_acceleration_mm_s2=acceleration,
-        )
-
-        timeline = []
-        elapsed = 0.0
         spray_distance = 0.0
-        travel_distance = 0.0
-        spray_time = 0.0
-        travel_time = 0.0
-        delay_time = 0.0
-
-        def append_edge(first, second, duration, spray_on, kind):
-            nonlocal elapsed
-            duration = max(float(duration), 0.0)
-            if duration <= 1e-9:
-                return
-            timeline.append({
-                "start_s": elapsed,
-                "end_s": elapsed + duration,
-                "start_record": first,
-                "end_record": second,
-                "spray_on": bool(spray_on),
-                "kind": str(kind),
-            })
-            elapsed += duration
-
-        starts = np.r_[0, np.flatnonzero(np.diff(segment_ids) != 0) + 1]
-        ends = np.r_[starts[1:], len(records)]
-        previous_end = None
-        for block_number, (start_index, end_index) in enumerate(zip(starts, ends)):
-            start_index, end_index = int(start_index), int(end_index)
-            first = records[start_index]
-            last = records[end_index - 1]
-
-            if previous_end is not None:
-                p0 = np.asarray(previous_end["nozzle_point_product"], dtype=float)
-                p1 = np.asarray(first["nozzle_point_product"], dtype=float)
-                distance_mm = float(np.linalg.norm(p1 - p0) * mm_factor)
-                travel_distance += distance_mm
-                duration = distance_mm / base_speed
-                if spray_off_delay > 0.0:
-                    append_edge(previous_end, previous_end, spray_off_delay, False, "SPRAY_OFF_DELAY")
-                    delay_time += spray_off_delay
-                append_edge(previous_end, first, duration, False, "TRAVEL_OFF")
-                travel_time += duration
-
-            if spray_on_delay > 0.0:
-                append_edge(first, first, spray_on_delay, False, "SPRAY_ON_DELAY")
-                delay_time += spray_on_delay
-
-            for index in range(start_index, end_index - 1):
-                first_record, second_record = records[index], records[index + 1]
-                distance_mm = float(np.linalg.norm(
-                    np.asarray(second_record["nozzle_point_product"], dtype=float)
-                    - np.asarray(first_record["nozzle_point_product"], dtype=float)
-                ) * mm_factor)
-                mean_speed = max(
-                    0.5 * (float(speeds[index]) + float(speeds[index + 1])),
-                    1e-6,
+        for segment_id in np.unique(segment_ids):
+            indices = np.flatnonzero(segment_ids == segment_id)
+            if len(indices) > 1:
+                spray_distance += float(
+                    np.sum(np.linalg.norm(np.diff(points[indices], axis=0), axis=1))
+                    * mm_factor
                 )
-                duration = distance_mm / mean_speed
-                spray_distance += distance_mm
-                spray_time += duration
-                append_edge(first_record, second_record, duration, True, "SPRAY_ON")
-
-            if spray_off_delay > 0.0 and block_number < len(starts) - 1:
-                append_edge(last, last, spray_off_delay, False, "SPRAY_OFF_DELAY")
-                delay_time += spray_off_delay
-            previous_end = last
-
+        starts = np.r_[0, np.flatnonzero(np.diff(segment_ids) != 0) + 1]
+        ends = np.r_[starts[1:], len(segment_ids)]
+        connector_distance = 0.0
+        for index in range(len(starts) - 1):
+            p0 = points[int(ends[index] - 1)]
+            p1 = points[int(starts[index + 1])]
+            connector_distance += float(np.linalg.norm(p1 - p0) * mm_factor)
         return {
             "spray_distance_mm": float(spray_distance),
-            "travel_distance_mm": float(travel_distance),
-            "spray_time_s": float(spray_time),
-            "travel_time_s": float(travel_time),
-            "tool_delay_s": float(delay_time),
-            "estimated_total_time_s": float(elapsed),
-            "spray_speed_profile": speed_metadata,
-            "travel_speed_mm_s": float(base_speed),
-            "timeline": timeline,
-            "speed_model": "STAGE3_ADAPTIVE_SPRAY_SPEED_PLUS_BASE_SPEED_OFF_TRAVEL",
-            "travel_safety": "STRAIGHT_LINE_ESTIMATE_ONLY_NOT_COLLISION_CHECKED",
+            "connector_distance_mm": float(connector_distance),
         }
 
     def _optimize_interactive_recorded_path(self):
-        """Optimize stroke order/orientation and refresh route timing and display."""
+        """Optimize stroke order/orientation and report geometry-only distances."""
         records = list(self._interactive_spray_records)
         if not records:
             self.recorded_path_status_label.setText("No recorded path")
             return False
         source_ids = np.asarray([item["stroke_id"] for item in records], dtype=np.int64)
         stroke_ids = np.unique(source_ids)
-        # Compare the same recorded strokes in their original order and in
-        # optimized order using the exact same speed/delay timing model.
-        before_timing = self._build_interactive_route_timing(records)
-        optimizer_elapsed_s = 0.0
+        before_metrics = self._build_interactive_route_metrics(records)
         if len(stroke_ids) > 1:
             from stages.spray_stroke_route_optimizer import optimize_stroke_order
             candidate = {
-                "nozzle_points": np.asarray([item["nozzle_point_product"] for item in records], dtype=float),
-                "spray_directions": np.asarray([item["spray_direction_product"] for item in records], dtype=float),
+                "nozzle_points": np.asarray(
+                    [item["nozzle_point_product"] for item in records], dtype=float
+                ),
+                "spray_directions": np.asarray(
+                    [item["spray_direction_product"] for item in records], dtype=float
+                ),
                 "segment_ids": source_ids,
             }
-            optimizer_started = time.perf_counter()
             optimized = optimize_stroke_order(
                 candidate,
                 orientation_weight_coordinate_units_per_rad=0.0,
                 max_2opt_passes=2 if len(stroke_ids) <= 30 else 0,
             )
-            optimizer_elapsed_s = time.perf_counter() - optimizer_started
             ordered = []
             for stroke in optimized["route_optimization"]["strokes"]:
                 indices = np.flatnonzero(source_ids == stroke["source_segment_id"])
@@ -1318,26 +1223,18 @@ class ProductViewer(QWidget):
                 f"Single stroke · {len(records)} poses"
             )
 
-        timing = self._build_interactive_route_timing(records)
-        self._interactive_recorded_replay_timing = timing
-        before_seconds = float(before_timing["estimated_total_time_s"])
-        after_seconds = float(timing["estimated_total_time_s"])
-        saved_seconds = before_seconds - after_seconds
+        after_metrics = self._build_interactive_route_metrics(records)
+        self._interactive_recorded_replay_timing = after_metrics
         self._interactive_route_optimization_metrics = {
-            "before_optimization_estimated_time_s": before_seconds,
-            "after_optimization_estimated_time_s": after_seconds,
-            "estimated_time_saved_s": saved_seconds,
-            "estimated_time_saved_percent": (
-                100.0 * saved_seconds / before_seconds
-                if before_seconds > 1e-9 else 0.0
-            ),
-            "optimizer_compute_time_s": float(optimizer_elapsed_s),
+            "before_spray_distance_mm": before_metrics["spray_distance_mm"],
+            "after_spray_distance_mm": after_metrics["spray_distance_mm"],
+            "before_connector_distance_mm": before_metrics["connector_distance_mm"],
+            "after_connector_distance_mm": after_metrics["connector_distance_mm"],
             "stroke_count": int(len(stroke_ids)),
         }
         self.recorded_path_time_label.setText(
-            f"EST. {self._format_route_time(timing['estimated_total_time_s'])}  |  "
-            f"SPRAY {self._format_route_time(timing['spray_time_s'])}  |  "
-            f"OFF {self._format_route_time(timing['travel_time_s'] + timing['tool_delay_s'])}"
+            f"SPRAY {after_metrics['spray_distance_mm']:.1f} mm  |  "
+            f"SPRAY-OFF CONNECTORS {after_metrics['connector_distance_mm']:.1f} mm"
         )
         self._refresh_interactive_recorded_path_actor()
         return True
@@ -6976,14 +6873,6 @@ class ProductViewer(QWidget):
                 )
             self.face_status_labels = status_labels.astype(np.uint8, copy=True)
         self.selected_patch_id = None
-        for key in ("travel_speeds_mm_s", "trajectory_time_s"):
-            if key in trajectory_data:
-                values = np.asarray(trajectory_data[key], dtype=float)
-                if values.shape != (count,) or not np.all(np.isfinite(values)):
-                    raise ValueError(f"{key} must contain {count} finite values.")
-                if key == "trajectory_time_s" and count > 1 and np.any(np.diff(values) < 0.0):
-                    raise ValueError("trajectory_time_s must be monotonic.")
-                data[key] = values.copy()
         self.trajectory_data = data
         self._correction_preview_appended = False
         self.trajectory_correction_apply_button.setEnabled(False)
@@ -7800,97 +7689,15 @@ class ProductViewer(QWidget):
 
 
     def _accumulate_film_thickness_for_path(self, path_index):
-        """Accumulate one time interval of predicted dry-film deposition."""
+        """Do not infer film thickness without an explicitly configured motion timeline."""
         cache = self._prepare_trajectory_playback_cache()
-        if cache is None or cache["deposition_readiness"] != "INPUTS_READY_UNCALIBRATED":
-            return
-        if path_index <= cache["deposition_processed_index"]:
-            return
-        process = cache["coating_process"]
-        times = cache["trajectory_time_s"]
-        if path_index <= 0:
+        if cache is not None:
             cache["deposition_processed_index"] = int(path_index)
-            return
-        dt = float(times[path_index] - times[path_index - 1])
-        spray_on = bool(cache["spray_on_mask"][path_index])
-        hit_ids = (
-            self._get_surface_sample_hits_from_spray(path_index)
-            if spray_on and dt > 0.0 else np.empty(0, dtype=np.int64)
-        )
-
-        if len(hit_ids):
-            nozzle = cache["nozzle_points"][path_index]
-            direction = cache["spray_directions"][path_index]
-            frame = cache["nozzle_frames"][path_index]
-            delta = cache["face_samples"][hit_ids] - nozzle
-            axial = delta @ direction
-            local_x = delta @ frame[:, 0]
-            local_y = delta @ frame[:, 1]
-            half_width = axial * cache["cone_tangent"]
-            half_height = half_width.copy()
-            valid = (
-                np.isfinite(half_width) & np.isfinite(half_height)
-                & (half_width > 1e-12) & (half_height > 1e-12)
-            )
-            hit_ids = hit_ids[valid]
-            half_width = half_width[valid]
-            half_height = half_height[valid]
-            local_x = local_x[valid]
-            local_y = local_y[valid]
-            if len(hit_ids):
-                normalized_xy = np.column_stack((
-                    local_x / half_width,
-                    local_y / half_height,
-                ))
-                sample_areas = cache["sample_area_mm2"][hit_ids]
-                footprint_areas = (
-                    2.0 * half_width * cache["mm_per_unit"]
-                    * 2.0 * half_height * cache["mm_per_unit"]
+            if hasattr(self, "trajectory_thickness_label"):
+                self.trajectory_thickness_label.setText(
+                    "PREDICTED DRY FILM THICKNESS | N/A — ROBOT SPEED/TIMING NOT CONFIGURED"
                 )
-                facing = np.einsum(
-                    "ij,j->i", cache["sample_normals"][hit_ids], -direction
-                )
-            else:
-                normalized_xy = np.empty((0, 2), dtype=np.float64)
-                sample_areas = np.empty(0, dtype=np.float64)
-                footprint_areas = np.empty(0, dtype=np.float64)
-                facing = np.empty(0, dtype=np.float64)
-        else:
-            hit_ids = np.empty(0, dtype=np.int64)
-            normalized_xy = np.empty((0, 2), dtype=np.float64)
-            sample_areas = np.empty(0, dtype=np.float64)
-            footprint_areas = np.empty(0, dtype=np.float64)
-            facing = np.empty(0, dtype=np.float64)
-
-        increment = accumulate_double_beta_deposition_step(
-            normalized_xy=normalized_xy,
-            sample_area_mm2=sample_areas,
-            sample_facing_cosine=facing,
-            sample_footprint_area_mm2=footprint_areas,
-            duration_s=max(dt, 0.0),
-            fluid_flow_ml_min=process["fluid_flow_ml_min"],
-            transfer_efficiency_percent=process["transfer_efficiency_percent"],
-            volume_solids_percent=process["volume_solids_percent"],
-            number_of_coats=process["number_of_coats"],
-            spray_on=spray_on and dt > 0.0,
-        )
-        if len(hit_ids):
-            cache["deposition_sample_thickness_um"][hit_ids] += (
-                increment["sample_thickness_increment_um"]
-            )
-            cache["deposition_sample_volume_mm3"][hit_ids] += (
-                increment["sample_deposited_volume_mm3"]
-            )
-        cache["deposition_input_volume_mm3"] += increment["input_dry_volume_mm3"]
-        cache["deposition_total_volume_mm3"] += increment["deposited_volume_mm3"]
-        cache["deposition_processed_index"] = int(path_index)
-        update_face_thickness_from_changed_samples(
-            sample_thickness_um=cache["deposition_sample_thickness_um"],
-            face_thickness_um=cache["deposition_face_thickness_um"],
-            target_face_ids=cache["target_face_ids"],
-            changed_sample_ids=hit_ids,
-            sample_count_per_face=cache["sample_count_per_face"],
-        )
+        return
 
     def _update_film_thickness_legend(self, target_um):
         """Show the exact reference colors and target-relative values used by the renderer."""
@@ -8497,16 +8304,10 @@ class ProductViewer(QWidget):
         self._update_current_spray_footprint(index)
         if hasattr(self, "trajectory_spray_state_label"):
             if spray_on:
-                if cache["pattern_type"] == "flat_fan" and cache["fan_thickness_units"] <= 0.0:
-                    self.trajectory_spray_state_label.setText(
-                        f"● SPRAY ON · FAN SHEET "
-                        f"({cache['footprint_width_mm']:.1f} mm width; thickness unknown)"
-                    )
-                else:
-                    self.trajectory_spray_state_label.setText(
-                        f"SPRAY: ON · {cache['footprint_width_mm']:.1f} × "
-                        f"{cache['footprint_thickness_mm']:.1f} mm"
-                    )
+                diameter_mm = cache["footprint_width_mm"]
+                self.trajectory_spray_state_label.setText(
+                    f"SPRAY: ON · ROUND CONE Ø {diameter_mm:.1f} mm"
+                )
                 self.trajectory_spray_state_label.setStyleSheet(
                     "color: #68D391; font-size: 9px; font-weight: 800; padding: 2px 5px;"
                 )
