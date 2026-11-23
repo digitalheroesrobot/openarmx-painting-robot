@@ -1327,17 +1327,175 @@ class ProductViewer(QWidget):
     @staticmethod
     def _interpolate_replay_record(first, second, fraction):
         fraction = float(np.clip(fraction, 0.0, 1.0))
+
         def vector(key):
             a = np.asarray(first[key], dtype=np.float64)
             b = np.asarray(second[key], dtype=np.float64)
             value = a + (b - a) * fraction
-            if key == "spray_direction_world":
+            if key in ("spray_direction_world", "surface_normal_world"):
                 value /= max(float(np.linalg.norm(value)), 1e-12)
             return value
+
         return {
             "nozzle_point_world": vector("nozzle_point_world"),
+            "surface_point_world": vector("surface_point_world"),
+            "surface_normal_world": vector("surface_normal_world"),
             "spray_direction_world": vector("spray_direction_world"),
+            "cell_id": int(
+                first["face_index"] if fraction < 0.5 else second["face_index"]
+            ),
         }
+
+    def _interactive_reset_coating_for_replay(self):
+        """Start the verification replay from an uncoated, neutral-gray product."""
+        if self._interactive_spray_face_thickness_um is not None:
+            self._interactive_spray_face_thickness_um.fill(0.0)
+        field = self._interactive_spray_surface_field
+        if isinstance(field, dict):
+            for face_record in field.get("faces", {}).values():
+                grid = face_record.get("thickness_grid_um")
+                if grid is not None:
+                    np.asarray(grid)[...] = 0.0
+            self._interactive_spray_dirty_face_ids = {
+                int(face_id) for face_id in field.get("faces", {})
+            }
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_last_speed_mm_s = 0.0
+        self._interactive_spray_gun_collision = False
+        self._interactive_spray_surface_excluded = False
+        self._interactive_refresh_paint_visual(render=False)
+        self.plotter.render()
+
+    def _interactive_add_replay_cone_visual(self, pose):
+        """Draw a spray cone with its apex at the nozzle and rim toward the product."""
+        nozzle = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
+        axis = np.asarray(pose["spray_direction_world"], dtype=np.float64)
+        axis /= max(float(np.linalg.norm(axis)), 1e-12)
+        half_angle = math.radians(self._interactive_spray_cone_angle_deg) * 0.5
+        height = max(float(self._interactive_spray_standoff), 1e-6)
+        radius = height * math.tan(half_angle)
+
+        reference = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        if abs(float(np.dot(reference, axis))) > 0.92:
+            reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        radial_u = np.cross(axis, reference)
+        radial_u /= max(float(np.linalg.norm(radial_u)), 1e-12)
+        radial_v = np.cross(axis, radial_u)
+        radial_v /= max(float(np.linalg.norm(radial_v)), 1e-12)
+
+        angles = np.linspace(0.0, 2.0 * math.pi, 33)[:-1]
+        rim = (
+            nozzle[None, :]
+            + axis[None, :] * height
+            + radius * (
+                np.cos(angles)[:, None] * radial_u[None, :]
+                + np.sin(angles)[:, None] * radial_v[None, :]
+            )
+        )
+        points = np.vstack((nozzle, rim))
+        faces = []
+        for index in range(len(rim)):
+            next_index = (index + 1) % len(rim)
+            faces.extend((3, 0, index + 1, next_index + 1))
+        cone = pv.PolyData(
+            points, faces=np.asarray(faces, dtype=np.int64)
+        )
+        actor = self.plotter.add_mesh(
+            cone,
+            color="#FFE082",
+            opacity=0.16,
+            style="wireframe",
+            line_width=1.4,
+            lighting=False,
+            pickable=False,
+        )
+        self._interactive_spray_live_actors.append(actor)
+
+        particle_fractions = np.asarray([0.18, 0.36, 0.54, 0.72, 0.90])
+        particle_points = (
+            nozzle[None, :]
+            + particle_fractions[:, None] * height * axis[None, :]
+        )
+        cloud = pv.PolyData(particle_points)
+        particle_actor = self.plotter.add_mesh(
+            cloud,
+            color="#FFF0C7",
+            opacity=0.48,
+            point_size=5.0,
+            render_points_as_spheres=True,
+            lighting=False,
+            pickable=False,
+        )
+        self._interactive_spray_live_actors.append(particle_actor)
+
+    def _interactive_replay_deposition_step(self, pose, dt):
+        """Apply the existing spray deposition kernel to the current replay pose."""
+        cell_id = int(pose["cell_id"])
+        excluded = self._interactive_spray_excluded_face_mask
+        if (
+            excluded is None
+            or cell_id < 0
+            or cell_id >= len(excluded)
+            or bool(excluded[cell_id])
+        ):
+            self._interactive_spray_surface_excluded = True
+            self._interactive_spray_last_deposition_timestamp = None
+            self._interactive_spray_previous_nozzle_world = None
+            return False
+
+        self._interactive_spray_surface_excluded = False
+        transform = self._interactive_spray_transform
+        inverse = np.linalg.inv(transform)
+        nozzle_local = (inverse @ np.append(
+            pose["nozzle_point_world"], 1.0
+        ))[:3]
+        direction_local = inverse[:3, :3] @ np.asarray(
+            pose["spray_direction_world"], dtype=np.float64
+        )
+        direction_local /= max(float(np.linalg.norm(direction_local)), 1e-12)
+        footprints = _build_spray_footprint_overlay(
+            self.current_mesh,
+            nozzle_local.reshape(1, 3),
+            direction_local.reshape(1, 3),
+            self._interactive_spray_paint_footprint_angle_deg,
+            rays_per_ring=8,
+            radial_rings=(0.40, 0.75, 1.0),
+            surface=self._interactive_spray_surface,
+            locator=self._interactive_spray_locator,
+        )
+        if not footprints or footprints[0][0].n_cells == 0:
+            self._interactive_spray_last_deposition_timestamp = None
+            self._interactive_spray_previous_nozzle_world = None
+            return False
+
+        patch, _ = footprints[0]
+        patch.points = (
+            np.asarray(patch.points) @ transform[:3, :3].T
+            + transform[:3, 3]
+        )
+        now = time.monotonic()
+        replay_pose = {
+            "nozzle_point_world": np.asarray(
+                pose["nozzle_point_world"], dtype=np.float64
+            ),
+            "surface_point_world": np.asarray(
+                pose["surface_point_world"], dtype=np.float64
+            ),
+            "surface_normal_world": np.asarray(
+                pose["surface_normal_world"], dtype=np.float64
+            ),
+            "spray_direction_world": np.asarray(
+                pose["spray_direction_world"], dtype=np.float64
+            ),
+            "cell_id": cell_id,
+            "paintable": True,
+            "timestamp": now,
+        }
+        self._interactive_spray_gun_collision = False
+        self._interactive_apply_paint_deposition(patch, replay_pose)
+        self._interactive_refresh_paint_visual(render=False)
+        return True
 
     def _start_interactive_recorded_replay(self):
         records = self._interactive_spray_records
@@ -1354,11 +1512,13 @@ class ProductViewer(QWidget):
 
         self._interactive_recorded_replay_timer.stop()
         self._interactive_remove_live_actors()
+        self._interactive_reset_coating_for_replay()
         self._interactive_recorded_replay_timeline = timeline
         self._interactive_recorded_replay_end_times = np.asarray(
             [edge["end_s"] for edge in timeline], dtype=np.float64
         )
         self._interactive_recorded_replay_started_at = time.monotonic()
+        self._interactive_recorded_replay_last_elapsed = 0.0
         self._interactive_recorded_replay_index = 0
         self.recorded_path_replay_button.setEnabled(False)
         self.recorded_path_stop_button.setEnabled(True)
@@ -1392,43 +1552,26 @@ class ProductViewer(QWidget):
         )
 
         self._interactive_remove_live_actors()
-        gun_actors, _ = self._interactive_build_gun_visual(
+        gun_actors, gun_polydata = self._interactive_build_gun_visual(
             pose["nozzle_point_world"], pose["spray_direction_world"]
         )
         self._interactive_spray_live_actors.extend(gun_actors)
         if edge["spray_on"]:
-            nozzle = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
-            direction = np.asarray(pose["spray_direction_world"], dtype=np.float64)
-            half_angle = math.radians(self._interactive_spray_cone_angle_deg) * 0.5
-            plume_height = max(float(self._interactive_spray_standoff), 1e-6)
-            plume_radius = max(
-                plume_height * math.tan(half_angle), plume_height * 0.01
+            self._interactive_add_replay_cone_visual(pose)
+            self._interactive_spray_gun_collision = (
+                self._interactive_check_gun_collision(gun_polydata)
             )
-            plume = pv.Cone(
-                center=nozzle + direction * (0.5 * plume_height),
-                direction=direction,
-                height=plume_height,
-                radius=plume_radius,
-                resolution=20,
-                capping=False,
-            )
-            plume_actor = self.plotter.add_mesh(
-                plume, color="#FFDDA0", opacity=0.13,
-                lighting=False, pickable=False,
-            )
-            self._interactive_spray_live_actors.append(plume_actor)
-            particle_fractions = np.asarray([0.20, 0.40, 0.60, 0.80], dtype=float)
-            particle_points = (
-                nozzle[None, :]
-                + particle_fractions[:, None] * plume_height * direction[None, :]
-            )
-            particle_cloud = pv.PolyData(particle_points)
-            particle_actor = self.plotter.add_mesh(
-                particle_cloud, color="#FFF0C7", opacity=0.45,
-                point_size=5.0, render_points_as_spheres=True,
-                lighting=False, pickable=False,
-            )
-            self._interactive_spray_live_actors.append(particle_actor)
+            self._interactive_replay_deposition_step(pose, min(
+                max(float(elapsed) - float(getattr(
+                    self, "_interactive_recorded_replay_last_elapsed", elapsed
+                )), 0.0),
+                0.10,
+            ))
+        else:
+            self._interactive_spray_last_deposition_timestamp = None
+            self._interactive_spray_previous_nozzle_world = None
+            self._interactive_spray_last_speed_mm_s = 0.0
+        self._interactive_recorded_replay_last_elapsed = float(elapsed)
 
         if self._interactive_recorded_replay_actor is not None:
             try:
@@ -1454,6 +1597,10 @@ class ProductViewer(QWidget):
         self._interactive_recorded_replay_timeline = []
         self._interactive_recorded_replay_end_times = np.empty(0, dtype=np.float64)
         self._interactive_recorded_replay_started_at = None
+        self._interactive_recorded_replay_last_elapsed = 0.0
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+        self._interactive_refresh_paint_visual(render=False)
         if completed:
             self.recorded_path_status_label.setText(
                 f"Replay complete · {len(self._interactive_spray_records)} poses"
