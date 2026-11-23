@@ -1657,6 +1657,11 @@ class ProductViewer(QWidget):
         self._interactive_recorded_replay_timer.stop()
         self._interactive_remove_live_actors()
 
+        # Build expensive per-Face UV coating actors only when simulation
+        # starts, never while the operator is manually drawing a route.
+        if not self._interactive_spray_texture_actors:
+            self._interactive_build_brep_texture_actors()
+
         # Snapshot the actual route coating before verification resets the
         # product to an unpainted state. This snapshot is used only when the
         # operator goes back to route editing.
@@ -3293,9 +3298,8 @@ class ProductViewer(QWidget):
     ):
         """Start a spray session, optionally continuing the existing coated route.
 
-        When resume_existing is true, the previously recorded route and
-        accumulated coating field are preserved. The operator can inspect the
-        already-painted surface and add new strokes without starting over.
+        When resume_existing is true, existing route records are preserved.
+        Route editing never deposits paint; coating is evaluated in Stage 4.
         """
         if self.current_mesh is None:
             raise RuntimeError("Load a product before starting an interactive spray path.")
@@ -3311,9 +3315,8 @@ class ProductViewer(QWidget):
         if self._interactive_spray_active:
             return
 
-        # Route editing is additive. Preserve the optimized route and the
-        # accumulated wet-film state so the operator can see what has already
-        # been sprayed and add only the missing coverage.
+        # Route editing is additive. Preserve existing route records;
+        # coating deposition is disabled until Stage 4 verification replay.
         preserve_existing = bool(resume_existing)
         existing_records = list(self._interactive_spray_records) if preserve_existing else []
         existing_thickness = (
@@ -3395,9 +3398,8 @@ class ProductViewer(QWidget):
                 "target_dry_film_thickness_um"
             ]
         self._render_product(reset_camera=False)
-        # STEP models render coating as per-Face UV textures. The original
-        # mesh actor remains available for cell picking and occlusion.
-        self._interactive_build_brep_texture_actors()
+        # Coating UV actors are deferred until Stage 4 verification replay.
+        # Stage 3 route drawing keeps only the original product and path actors.
         self._interactive_build_excluded_face_overlay()
 
         self._interactive_spray_standoff = float(standoff)
@@ -3471,9 +3473,9 @@ class ProductViewer(QWidget):
         self._interactive_spray_live_actors = []
         self._interactive_spray_active = True
 
-        # The route editor must reopen with the accumulated wet-film state.
-        if preserve_existing and existing_thickness is not None:
-            self._interactive_refresh_paint_visual(render=False)
+        # Route editing is geometry-only; prior simulation coating is not
+        # displayed or modified while the operator records additional strokes.
+        if preserve_existing:
             self._refresh_interactive_recorded_path_actor()
 
         # Cursor motion only previews the nozzle. Paint deposition and pose
