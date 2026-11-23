@@ -4006,13 +4006,33 @@ class ProductViewer(QWidget):
         if hit_world.shape != (3,) or not np.all(np.isfinite(hit_world)):
             return None
 
-        nozzle_world = hit_world + normal_world * self._interactive_spray_standoff
-        spray_direction_world = -normal_world
-
-        spray_direction_world = self._interactive_rotate_spray_direction(
-            spray_direction_world, self._interactive_spray_angle_y_deg,
-            self._interactive_spray_angle_x_deg,
+        if (
+            self._interactive_spray_work_plane_origin_world is None
+            or self._interactive_spray_work_plane_normal_world is None
+        ):
+            initial_direction = self._interactive_rotate_spray_direction(
+                -normal_world,
+                self._interactive_spray_angle_y_deg,
+                self._interactive_spray_angle_x_deg,
+            )
+            plane_normal = -initial_direction
+            plane_normal /= max(float(np.linalg.norm(plane_normal)), 1e-12)
+            self._interactive_spray_work_plane_normal_world = plane_normal
+            self._interactive_spray_work_plane_origin_world = (
+                hit_world - initial_direction * float(self._interactive_spray_standoff)
+            )
+        plane_normal = np.asarray(
+            self._interactive_spray_work_plane_normal_world, dtype=np.float64
         )
+        plane_normal /= max(float(np.linalg.norm(plane_normal)), 1e-12)
+        nozzle_world = self._interactive_intersect_display_ray_with_work_plane(
+            int(x), int(y),
+            self._interactive_spray_work_plane_origin_world,
+            plane_normal,
+        )
+        if nozzle_world is None:
+            return None
+        spray_direction_world = -plane_normal
         return {
             "surface_point_world": hit_world,
             "surface_normal_world": normal_world,
@@ -4022,6 +4042,39 @@ class ProductViewer(QWidget):
             "paintable": not surface_excluded,
             "timestamp": time.monotonic(),
         }
+
+    def _interactive_intersect_display_ray_with_work_plane(
+        self, x, y, plane_origin, plane_normal
+    ):
+        """Project a display cursor ray onto the fixed nozzle work plane."""
+        renderer = self.plotter.renderer
+        world_points = []
+        for depth in (0.0, 1.0):
+            renderer.SetDisplayPoint(float(x), float(y), depth)
+            renderer.DisplayToWorld()
+            homogeneous = np.asarray(renderer.GetWorldPoint(), dtype=np.float64)
+            if homogeneous.shape != (4,) or not np.all(np.isfinite(homogeneous)):
+                return None
+            if abs(float(homogeneous[3])) <= 1e-12:
+                return None
+            world_points.append(homogeneous[:3] / homogeneous[3])
+        ray_origin = world_points[0]
+        ray_direction = world_points[1] - world_points[0]
+        ray_length = float(np.linalg.norm(ray_direction))
+        if not np.isfinite(ray_length) or ray_length <= 1e-12:
+            return None
+        ray_direction /= ray_length
+        denominator = float(np.dot(ray_direction, plane_normal))
+        if abs(denominator) <= 1e-9:
+            return None
+        distance = float(
+            np.dot(np.asarray(plane_origin, dtype=np.float64) - ray_origin, plane_normal)
+            / denominator
+        )
+        if not np.isfinite(distance) or distance < 0.0:
+            return None
+        point = ray_origin + distance * ray_direction
+        return point if np.all(np.isfinite(point)) else None
 
     @staticmethod
     def _interactive_pose_quaternion_from_direction(direction_product):
@@ -5829,15 +5882,9 @@ class ProductViewer(QWidget):
             key: (value.copy() if isinstance(value, np.ndarray) else value)
             for key, value in pose.items()
         }
-        surface_point = np.asarray(
-            updated["surface_point_world"], dtype=np.float64
-        )
-        # Keep the picked surface point on the cone centerline at the current
-        # working distance, without changing the locked spray orientation.
+        # Nozzle position is already projected onto the active work plane.
+        # Recomputing it from the picked surface would pull the route into holes.
         updated["spray_direction_world"] = direction
-        updated["nozzle_point_world"] = (
-            surface_point - direction * float(self._interactive_spray_standoff)
-        )
         updated["timestamp"] = time.monotonic()
         return updated
 
