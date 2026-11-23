@@ -96,6 +96,7 @@ STAGE_PRODUCT_SETUP = 0
 STAGE_GEOMETRY_INSPECTION = 1
 STAGE_SURFACE_IDENTIFICATION = 2
 STAGE_SPRAY_TRAJECTORY = 3
+STAGE_SPRAY_SIMULATION = 4
 
 FACE_EXCLUDED = 0
 FACE_PAINTABLE_CANDIDATE = 1
@@ -138,12 +139,20 @@ WORKFLOW_STAGES = [
         "action": "IDENTIFY PAINTABLE SURFACES",
     },
     {
-        "name": "SPRAY TRAJECTORY",
+        "name": "ROUTE GENERATION",
         "description": (
-            "Use the interactive spray nozzle to preview and record "
-            "an operator-directed spray path."
+            "Record spray strokes, optimize their order and direction, "
+            "and review the proposed route."
         ),
-        "action": "INTERACTIVE SPRAY PATH",
+        "action": "RECORD SPRAY ROUTE",
+    },
+    {
+        "name": "SPRAY SIMULATION",
+        "description": (
+            "Replay the saved route from a bare product and visually "
+            "verify progressive coating coverage."
+        ),
+        "action": "SIMULATE SPRAY ROUTE",
     },
 ]
 
@@ -361,6 +370,7 @@ class MainWindow(QMainWindow):
         self.current_report = None
         self.current_stage2_result = None
         self.current_stage3_result = None
+        self.interactive_spray_path = None
 
         self.source_unit_from_stl = "unknown"
         self.coordinate_unit = "unknown"
@@ -397,6 +407,7 @@ class MainWindow(QMainWindow):
             STAGE_GEOMETRY_INSPECTION: False,
             STAGE_SURFACE_IDENTIFICATION: False,
             STAGE_SPRAY_TRAJECTORY: False,
+            STAGE_SPRAY_SIMULATION: False,
         }
 
         self._build_ui()
@@ -1305,6 +1316,31 @@ class MainWindow(QMainWindow):
         )
         self.interactive_paint_color_button.hide()
         layout.addWidget(self.interactive_paint_color_button)
+
+        self.route_next_button = QPushButton("NEXT: SPRAY SIMULATION")
+        self.route_next_button.setObjectName("PrimaryButton")
+        self.route_next_button.clicked.connect(
+            lambda: self._select_workflow_stage(STAGE_SPRAY_SIMULATION)
+        )
+        self.route_next_button.hide()
+        layout.addWidget(self.route_next_button)
+
+        self.route_edit_button = QPushButton("RE-RECORD / EDIT ROUTE")
+        self.route_edit_button.setObjectName("SecondaryButton")
+        self.route_edit_button.setToolTip(
+            "Start a fresh route-recording session so the spray strokes can be revised."
+        )
+        self.route_edit_button.clicked.connect(self._restart_interactive_spray_path)
+        self.route_edit_button.hide()
+        layout.addWidget(self.route_edit_button)
+
+        self.simulation_back_button = QPushButton("BACK TO ROUTE GENERATION")
+        self.simulation_back_button.setObjectName("SecondaryButton")
+        self.simulation_back_button.clicked.connect(
+            lambda: self._select_workflow_stage(STAGE_SPRAY_TRAJECTORY)
+        )
+        self.simulation_back_button.hide()
+        layout.addWidget(self.simulation_back_button)
 
         # ----------------------------------------------------
         # OPERATION PROGRESS
@@ -2590,6 +2626,13 @@ class MainWindow(QMainWindow):
                 and all_patches_inspected
             )
 
+        if stage_index == STAGE_SPRAY_SIMULATION:
+            return (
+                self._stage_available(STAGE_SPRAY_TRAJECTORY)
+                and self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
+                and self.interactive_spray_path is not None
+            )
+
         return False
 
 
@@ -2615,19 +2658,22 @@ class MainWindow(QMainWindow):
                 self._show_analysis_summary(self.current_report)
 
         elif stage_index == STAGE_SPRAY_TRAJECTORY:
-            if self.current_stage3_result is None:
+            self.viewer.set_recorded_path_page("route")
+            if self.interactive_spray_path is None:
                 self._show_stage3_ready_summary()
-            elif self._stage3_parameters_match():
-                self._show_spray_trajectory_summary()
-                self._display_current_trajectory()
             else:
-                self._show_stage3_outdated_summary()
-                self._display_current_trajectory()
+                self._show_interactive_route_summary(self.interactive_spray_path)
 
-        # Start exactly once on entry, not on every UI refresh.
+        elif stage_index == STAGE_SPRAY_SIMULATION:
+            self.viewer.set_recorded_path_page("simulation")
+            self._show_spray_simulation_summary()
+
+        # Start recording only when entering route generation without an
+        # existing route. Returning from simulation preserves the route.
         if (
             stage_index == STAGE_SPRAY_TRAJECTORY
             and previous_stage != STAGE_SPRAY_TRAJECTORY
+            and self.interactive_spray_path is None
         ):
             self._start_interactive_spray_path()
 
@@ -2635,7 +2681,9 @@ class MainWindow(QMainWindow):
     
     def _refresh_workflow_ui(self):
         self.start_analysis_button.setVisible(
-            self.active_stage != STAGE_SPRAY_TRAJECTORY
+            self.active_stage not in (
+                STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION
+            )
         )
 
         stage = WORKFLOW_STAGES[self.active_stage]
@@ -2771,8 +2819,9 @@ class MainWindow(QMainWindow):
 
                 self.start_analysis_button.setEnabled(False)
 
-        elif self.active_stage == STAGE_SPRAY_TRAJECTORY:
-            # The final stage is dedicated exclusively to interactive spraying.
+        elif self.active_stage in (
+            STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION
+        ):
             self.start_analysis_button.setVisible(False)
 
         else:
@@ -2784,23 +2833,35 @@ class MainWindow(QMainWindow):
             self.start_analysis_button.setEnabled(False)
 
         if hasattr(self, "interactive_spray_path_button"):
-            interactive_available = (
-                self.active_stage == STAGE_SPRAY_TRAJECTORY
-                and self._stage_available(STAGE_SPRAY_TRAJECTORY)
-            )
-            self.interactive_spray_path_button.setVisible(interactive_available)
+            route_page = self.active_stage == STAGE_SPRAY_TRAJECTORY
+            simulation_page = self.active_stage == STAGE_SPRAY_SIMULATION
+            route_exists = self.interactive_spray_path is not None
+            recording = bool(self.viewer._interactive_spray_active)
+            self.interactive_spray_path_button.setVisible(route_page and recording)
             self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
             self.interactive_spray_path_button.setEnabled(
-                interactive_available
-                and self.viewer._interactive_spray_active
-                and not self._operation_running
+                route_page and recording and not self._operation_running
             )
-            self.interactive_paint_color_button.setVisible(interactive_available)
+            self.interactive_paint_color_button.setVisible(route_page)
             self.interactive_paint_color_button.setEnabled(
-                interactive_available and not self._operation_running
+                route_page and not self._operation_running
+            )
+            self.route_next_button.setVisible(route_page and route_exists and not recording)
+            self.route_next_button.setEnabled(
+                route_page and route_exists and not recording and not self._operation_running
+            )
+            self.route_edit_button.setVisible(route_page and route_exists and not recording)
+            self.route_edit_button.setEnabled(
+                route_page and route_exists and not recording and not self._operation_running
+            )
+            self.simulation_back_button.setVisible(simulation_page)
+            self.simulation_back_button.setEnabled(
+                simulation_page and not self._operation_running
             )
 
-        if self.active_stage == STAGE_SPRAY_TRAJECTORY:
+        if self.active_stage in (
+            STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION
+        ):
             self.operation_panel.hide()
             self.results_path_label.hide()
         else:
@@ -2834,8 +2895,15 @@ class MainWindow(QMainWindow):
         elif self.active_stage == STAGE_SPRAY_TRAJECTORY:
 
             self._set_workflow_status(
-                "STATUS: READY FOR INTERACTIVE SPRAY PATH",
+                "STATUS: ROUTE GENERATION",
                 "#00E5FF",
+            )
+
+        elif self.active_stage == STAGE_SPRAY_SIMULATION:
+
+            self._set_workflow_status(
+                "STATUS: SPRAY ROUTE SIMULATION",
+                "#00E676",
             )
 
         elif (
@@ -4133,6 +4201,11 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("INTERACTIVE SPRAY PATH CANCELLED")
             return
 
+        self.stage_completed[STAGE_SPRAY_TRAJECTORY] = True
+        self.stage_completed[STAGE_SPRAY_SIMULATION] = False
+        self.viewer.set_recorded_path_page("route")
+        self._refresh_workflow_ui()
+
         nozzle_points = np.asarray(result["nozzle_points_product"], dtype=float)
         path_length = float(result.get("route_length_product_units", 0.0))
         spray_distance = float(result.get("spray_length_mm", 0.0))
@@ -4173,9 +4246,62 @@ class MainWindow(QMainWindow):
             "Press SIMULATE to visually verify the optimized spray route."
         )
         self.status_bar.showMessage(
-            f"ROUTE OPTIMIZED | ESTIMATED COMPLETION {format_time(total_time)} | "
+            f"ROUTE GENERATED | ESTIMATED COMPLETION {format_time(total_time)} | "
             f"{len(np.unique(result.get('stroke_ids', [])))} STROKES"
         )
+        self.route_next_button.setVisible(True)
+        self.route_next_button.setEnabled(True)
+        self.route_edit_button.setVisible(True)
+        self.route_edit_button.setEnabled(True)
+        self._show_interactive_route_summary(result)
+        self._refresh_workflow_ui()
+
+    def _show_interactive_route_summary(self, result):
+        """Summarize route generation without starting the simulation."""
+        if not isinstance(result, dict):
+            return
+        format_time = self.viewer._format_route_time
+        route_info = result.get("route_optimization") or {}
+        self.summary_chart.hide()
+        self.summary_section.setText("ROUTE GENERATION")
+        self.analysis_summary.setStyleSheet("color: #00E676;")
+        self.analysis_summary.setText(
+            "SPRAY ROUTE READY FOR SIMULATION\\n\\n"
+            f"RECORDED POSES: {len(result.get('nozzle_points_product', [])):,}\\n"
+            f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\\n"
+            f"ROUTE LENGTH: {float(result.get('route_length_product_units', 0.0)):.2f} {self.coordinate_unit}\\n"
+            f"ESTIMATED COMPLETION: {format_time(result.get('estimated_duration_s', 0.0))}\\n"
+            f"ROUTING: {route_info.get('algorithm', 'STROKE ORDER RETAINED')}\\n\\n"
+            "Review the optimized route in the 3D view.\\n"
+            "Select NEXT: SPRAY SIMULATION to verify the coating process."
+        )
+
+    def _show_spray_simulation_summary(self):
+        result = self.interactive_spray_path or {}
+        format_time = self.viewer._format_route_time
+        self.summary_chart.hide()
+        self.summary_section.setText("SPRAY SIMULATION")
+        self.analysis_summary.setStyleSheet("color: #D8E5ED;")
+        self.analysis_summary.setText(
+            "SPRAY ROUTE SIMULATION\\n\\n"
+            f"ESTIMATED COMPLETION: {format_time(result.get('estimated_duration_s', 0.0))}\\n\\n"
+            "The product starts in its unpainted state.\\n"
+            "Only the surface reached during SPRAY ON is coated.\\n"
+            "SPRAY OFF connectors move between strokes without deposition.\\n\\n"
+            "Press SIMULATE in the 3D view to verify the result.\\n"
+            "If the coverage is unsatisfactory, return to ROUTE GENERATION."
+        )
+
+    def _restart_interactive_spray_path(self):
+        """Discard the current route and begin a fresh route-recording session."""
+        if self._operation_running or self.active_stage != STAGE_SPRAY_TRAJECTORY:
+            return
+        self.interactive_spray_path = None
+        self.stage_completed[STAGE_SPRAY_TRAJECTORY] = False
+        self.stage_completed[STAGE_SPRAY_SIMULATION] = False
+        self.viewer.set_recorded_path_page("route")
+        self._start_interactive_spray_path()
+        self._refresh_workflow_ui()
 
     def _display_current_trajectory(self):
         if self.current_stage3_result is None:
