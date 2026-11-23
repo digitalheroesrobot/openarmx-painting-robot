@@ -36,16 +36,27 @@ def test_export_time_is_cumulative_distance_over_robot_speed():
         spray_on_delay_s=0.02,
         spray_off_delay_s=0.03,
     )
-    assert trajectory.shape == (3, 8)
-    np.testing.assert_allclose(trajectory[:, 0], [0.0, 0.1, 0.35])
+    assert trajectory.shape == (5, 9)
+    np.testing.assert_allclose(
+        trajectory[:, 0], [0.0, 0.1, 0.13, 0.33, 0.35]
+    )
     np.testing.assert_allclose(trajectory[:, 1:4], [
         [0.0, 0.0, 0.0],
         [10.0, 0.0, 0.0],
+        [10.0, 0.0, 0.0],
+        [30.0, 0.0, 0.0],
         [30.0, 0.0, 0.0],
     ])
+    np.testing.assert_array_equal(trajectory[:, 8], [1, 1, 0, 0, 1])
+    assert metadata["columns"] == [
+        "t", "x", "y", "z", "qx", "qy", "qz", "qw", "on_off"
+    ]
     assert metadata["segment_spray_on"] == [True, False]
     assert metadata["duration_s"] == 0.35
     assert metadata["quaternion_order"] == "XYZW"
+    assert metadata["transitions"][0]["off_state_row"] == 2
+    assert metadata["transitions"][0]["off_travel_destination_row"] == 3
+    assert metadata["transitions"][0]["on_state_row"] == 4
 
 
 def test_controller_frequency_does_not_change_spatial_waypoints_or_time():
@@ -67,6 +78,8 @@ def test_export_time_is_monotonic_and_ends_at_last_pose():
         {"base_travel_speed_mm_s": 250.0, "robot_control_frequency_hz": 100.0},
         mm_per_unit=0.001,
     )
-    assert np.all(np.diff(trajectory[:, 0]) > 0.0)
+    assert np.all(np.diff(trajectory[:, 0]) >= 0.0)
     assert trajectory[0, 0] == 0.0
     assert trajectory[-1, 0] == metadata["duration_s"]
+    assert trajectory.shape[1] == 9
+    assert np.all(np.isin(trajectory[:, 8], [0.0, 1.0]))
