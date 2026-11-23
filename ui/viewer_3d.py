@@ -5453,11 +5453,12 @@ class ProductViewer(QWidget):
         self._interactive_spray_surface_excluded = surface_excluded
         spray_blocked = collision or surface_excluded
         if spray_blocked:
-            # Do not carry elapsed spray time or the previous nozzle position
-            # across a collision. Otherwise the first clear frame could apply
-            # a delayed deposition interval that spans the blocked movement.
+            # A blocked interval breaks both deposition continuity and the
+            # fixed-distance sampler. Never interpolate a route across it.
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
+            self._interactive_spray_sampling_previous_pose = None
+            self._interactive_spray_sampling_distance_accumulator = 0.0
             self._interactive_spray_last_speed_mm_s = 0.0
 
         local_pose = self._interactive_pose_to_product_frame(pose)
@@ -5524,6 +5525,13 @@ class ProductViewer(QWidget):
             recorded_new_pose = bool(recorded_samples)
         else:
             recorded_new_pose = False
+            if self._interactive_spray_recording:
+                # A missing footprint is a real discontinuity; do not bridge
+                # the invalid area with a later interpolated spray segment.
+                self._interactive_spray_sampling_previous_pose = None
+                self._interactive_spray_sampling_distance_accumulator = 0.0
+                self._interactive_spray_last_deposition_timestamp = None
+                self._interactive_spray_previous_nozzle_world = None
 
         # Keep full-rate trajectory/deposition sampling above, but cap only
         # actor rebuilding and rendering to 30 Hz for interactive responsiveness.
