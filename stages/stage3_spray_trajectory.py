@@ -4254,9 +4254,6 @@ def generate_spray_trajectory(
     legacy_profile = sprayer_profile if isinstance(sprayer_profile, dict) else {}
     if coating_process is None:
         coating_process = {
-            "base_travel_speed_mm_s": legacy_profile.get("travel_speed_mm_s", 150.0),
-            "min_travel_speed_mm_s": legacy_profile.get("min_travel_speed_mm_s", 40.0),
-            "max_travel_acceleration_mm_s2": legacy_profile.get("max_travel_acceleration_mm_s2", 500.0),
             "fluid_flow_ml_min": legacy_profile.get("fluid_flow_ml_min", 0.0),
         }
     coating_process_data = validate_coating_process(coating_process)
@@ -4673,22 +4670,22 @@ def generate_spray_trajectory(
         if isinstance(sprayer_profile, dict)
         else {}
     )
-    base_travel_speed = coating_process_data["base_travel_speed_mm_s"]
-    minimum_travel_speed = coating_process_data["min_travel_speed_mm_s"]
-    maximum_acceleration = coating_process_data["max_travel_acceleration_mm_s2"]
-    if minimum_travel_speed > base_travel_speed:
-        minimum_travel_speed = base_travel_speed
-    travel_speeds_mm_s, trajectory_time_s, adaptive_speed_analysis = (
-        _calculate_adaptive_travel_speed_profile(
-            nozzle_points=ordered["nozzle_points"],
-            surface_normals=ordered["surface_normals"],
-            segment_ids=ordered["segment_ids"],
-            coordinate_unit=source_unit,
-            base_speed_mm_s=base_travel_speed,
-            minimum_speed_mm_s=minimum_travel_speed,
-            maximum_acceleration_mm_s2=maximum_acceleration,
-        )
+    base_travel_speed = float(coating_process_data["base_travel_speed_mm_s"])
+    travel_speeds_mm_s = np.full(
+        len(ordered["nozzle_points"]), base_travel_speed, dtype=np.float64
     )
+    trajectory_time_s = np.zeros(len(ordered["nozzle_points"]), dtype=np.float64)
+    for segment_id in np.unique(ordered["segment_ids"]):
+        indices = np.flatnonzero(ordered["segment_ids"] == segment_id)
+        if len(indices) > 1:
+            distances_mm = np.linalg.norm(
+                np.diff(ordered["nozzle_points"][indices], axis=0), axis=1
+            ) * MM_PER_UNIT[source_unit]
+            trajectory_time_s[indices[1:]] = np.cumsum(distances_mm / base_travel_speed)
+    adaptive_speed_analysis = {
+        "method": "constant_robot_painting_speed",
+        "base_speed_mm_s": base_travel_speed,
+    }
     inter_segment_travel_plan = _build_inter_segment_travel_plan(
         nozzle_points=ordered["nozzle_points"],
         segment_ids=ordered["segment_ids"],
