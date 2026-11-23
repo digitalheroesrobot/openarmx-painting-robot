@@ -52,9 +52,9 @@ from stages.spray_footprint_optimizer import optimize_redundant_spray_points
 # Configuration
 # ------------------------------------------------------------
 
-DEFAULT_STANDOFF_MM = 200.0
+DEFAULT_STANDOFF_MM = 100.0
 DEFAULT_SAMPLING_SPACING_MM = 20.0
-DEFAULT_SPRAY_ANGLE_DEG = 0.0
+DEFAULT_SPRAY_ANGLE_DEG = 50.0
 
 MIN_STANDOFF_MM = 50.0
 MAX_STANDOFF_MM = 500.0
@@ -4168,14 +4168,9 @@ def generate_spray_trajectory(
     )
 
     if path_spray_width_mm > 0.0 and path_track_spacing_mm > 0.0:
-        # For a circular footprint, use the overlap-derived pitch in both
-        # surface-lattice dimensions. A half-diameter cap is a conservative
-        # geometric sampling interval. The legacy user spacing is retained
-        # only as a fallback when no physical footprint can be calculated.
-        coverage_spacing_mm = min(
-            path_track_spacing_mm,
-            0.5 * path_spray_width_mm,
-        )
+        # The overlap-derived pitch is used consistently in both surface
+        # directions, including the along-lane sample interval.
+        coverage_spacing_mm = path_track_spacing_mm
         coverage_spacing_basis = "SPRAY_FOOTPRINT_AND_OVERLAP"
     else:
         # A zero cone angle has no defined footprint. Retain the user spacing,
