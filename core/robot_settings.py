@@ -35,7 +35,7 @@ def validate_robot_settings(parameters: dict) -> dict:
     if not values["robot_name"] or not values["product_name"]:
         raise ValueError("Robot name and product name are required.")
     values["name"] = f"{values['robot_name']}_{values['product_name']}"
-    return values
+    return {key: values[key] for key in DEFAULT_ROBOT_SETTINGS}
 
 
 def load_robot_settings(config_path: str | Path, legacy_process: dict | None = None) -> dict:
