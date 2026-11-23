@@ -25,17 +25,9 @@ class CoatingProcessTests(unittest.TestCase):
         self.assertEqual(missing, [])
         self.assertEqual(DEFAULT_COATING_PROCESS["target_dry_film_thickness_um"], 50.0)
         self.assertEqual(DEFAULT_COATING_PROCESS["fluid_flow_ml_min"], 300.0)
-        self.assertEqual(DEFAULT_COATING_PROCESS["transfer_efficiency_percent"], 50.0)
-        self.assertEqual(DEFAULT_COATING_PROCESS["volume_solids_percent"], 50.0)
-        process = validate_coating_process(DEFAULT_COATING_PROCESS)
-        for key in (
-            "base_travel_speed_mm_s", "robot_control_frequency_hz",
-            "min_travel_speed_mm_s", "max_travel_acceleration_mm_s2",
-            "max_linear_speed_mm_s", "max_angular_speed_deg_s",
-        ):
-            self.assertNotIn(key, process)
+        self.assertNotIn("base_travel_speed_mm_s", DEFAULT_COATING_PROCESS)
 
-    def test_legacy_robot_fields_are_discarded_not_validated_as_process_inputs(self):
+    def test_legacy_robot_motion_fields_are_discarded(self):
         values = dict(DEFAULT_COATING_PROCESS)
         values.update({
             "base_travel_speed_mm_s": 125.0,
@@ -103,7 +95,7 @@ class CoatingProcessTests(unittest.TestCase):
             self.assertNotIn("base_travel_speed_mm_s", loaded)
             self.assertNotIn("min_travel_speed_mm_s", loaded)
 
-    def test_legacy_sprayer_flow_is_migrated_but_robot_settings_are_not(self):
+    def test_legacy_sprayer_flow_is_migrated_but_robot_values_are_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "coating_process.json"
             legacy = {
