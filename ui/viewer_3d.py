@@ -1069,7 +1069,7 @@ class ProductViewer(QWidget):
         row.addWidget(self.recorded_path_stop_button)
         self.recorded_path_export_button = QPushButton("EXPORT TRAJECTORY")
         self.recorded_path_export_button.setToolTip(
-            "Export product-frame nozzle poses as an 8-column CSV plus timing/state metadata JSON."
+            "Export product-frame nozzle poses as a 9-column CSV including spray ON/OFF state, plus timing metadata JSON."
         )
         self.recorded_path_export_button.clicked.connect(
             self._export_interactive_recorded_path
