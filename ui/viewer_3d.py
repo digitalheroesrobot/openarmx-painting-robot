@@ -33,7 +33,7 @@ from vtkmodules.vtkFiltersGeneral import vtkOBBTree
 from vtkmodules.vtkFiltersModeling import vtkCollisionDetectionFilter
 
 from PySide6.QtCore import QEvent, Qt, Signal, QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -512,10 +512,16 @@ class ProductViewer(QWidget):
             self._on_interactive_spray_left_double_click,
             4.0,
         )
-        self._interactive_spray_space_key_observer_id = interactor.AddObserver(
-            "KeyPressEvent",
-            self._on_interactive_spray_space_key,
-            4.0,
+        # Qt shortcut is more reliable than VTK KeyPressEvent when the
+        # camera interactor style has taken keyboard focus.
+        self._interactive_spray_space_shortcut = QShortcut(
+            QKeySequence(Qt.Key_Space), self
+        )
+        self._interactive_spray_space_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self._interactive_spray_space_shortcut.activated.connect(
+            self._return_to_interactive_spray_mode
         )
         self._interactive_spray_middle_press_observer_id = interactor.AddObserver(
             "MiddleButtonPressEvent", self._on_interactive_spray_middle_press, 3.0
@@ -5169,16 +5175,6 @@ class ProductViewer(QWidget):
         pose = self._interactive_apply_locked_spray_direction(pose)
         self._interactive_begin_spray_stroke()
         self._interactive_update_cursor(pose)
-
-    def _on_interactive_spray_space_key(self, interactor, event):
-        """Return to spray input when Space is pressed in camera view."""
-        if not self._interactive_spray_active:
-            return
-        key_sym = str(interactor.GetKeySym() or "").strip().lower()
-        if key_sym not in ("space", "spacebar"):
-            return
-        # Defer until the camera style finishes processing the key event.
-        QTimer.singleShot(0, self._return_to_interactive_spray_mode)
 
     def _return_to_interactive_spray_mode(self):
         """Restore spray input after VTK has switched to camera navigation."""
