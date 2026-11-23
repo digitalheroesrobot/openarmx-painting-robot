@@ -4067,7 +4067,6 @@ class MainWindow(QMainWindow):
             stage1_report=self.current_report,
             coordinate_unit=self.coordinate_unit,
             standoff_mm=parameters["standoff_mm"],
-            sampling_spacing_mm=1.0,
             spray_angle_deg=parameters["spray_angle_deg"],
             sprayer_profile=parameters["sprayer_profile"],
             coating_process=parameters["coating_process"],
