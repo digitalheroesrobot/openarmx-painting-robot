@@ -220,6 +220,12 @@ MM_PER_UNIT = {
 
 DISPLAY_UNITS = ("mm", "cm", "m", "in", "ft")
 
+# Interactive spray working-distance limits controlled by the mouse wheel.
+# The distance is always represented in millimetres in the UI.
+INTERACTIVE_SPRAY_MIN_STANDOFF_MM = 10.0
+INTERACTIVE_SPRAY_MAX_STANDOFF_MM = 500.0
+INTERACTIVE_SPRAY_WHEEL_STEP_MM = 5.0
+
 FACE_EXCLUDED = 0
 FACE_PAINTABLE_CANDIDATE = 1
 FACE_REQUIRES_INSPECTION = 2
@@ -947,8 +953,13 @@ class ProductViewer(QWidget):
 
         self.working_distance_label = QLabel("WORK DIST")
         self.working_distance_spin = QDoubleSpinBox()
-        self.working_distance_spin.setRange(10.0, 500.0)
-        self.working_distance_spin.setSingleStep(5.0)
+        self.working_distance_spin.setRange(
+            INTERACTIVE_SPRAY_MIN_STANDOFF_MM,
+            INTERACTIVE_SPRAY_MAX_STANDOFF_MM,
+        )
+        self.working_distance_spin.setSingleStep(
+            INTERACTIVE_SPRAY_WHEEL_STEP_MM
+        )
         self.working_distance_spin.setValue(120.0)
         self.working_distance_spin.setSuffix(" mm")
         self.working_distance_spin.setEnabled(False)
@@ -3203,6 +3214,13 @@ class ProductViewer(QWidget):
             return
 
         self._interactive_spray_standoff = distance_source
+
+        # Changing the working distance is a discontinuous nozzle motion.
+        if self._interactive_spray_recording:
+            self._interactive_spray_last_deposition_timestamp = None
+            self._interactive_spray_previous_nozzle_world = None
+            self._interactive_spray_last_speed_mm_s = 0.0
+
         pose = self._interactive_spray_latest_pose
         if pose is None:
             return
@@ -5144,17 +5162,52 @@ class ProductViewer(QWidget):
         self._interactive_spray_camera_last_position = None
 
     def _on_interactive_spray_wheel(self, interactor, event):
-        """Keep wheel zoom available while the camera style is replaced."""
+        """Adjust spray working distance instead of zooming during SPRAY mode.
+
+        Wheel up increases the nozzle-to-surface distance and wheel down
+        decreases it. The value is clamped to the configured minimum and
+        maximum limits. The current cursor pose is recomputed immediately,
+        so the nozzle moves even when the mouse cursor itself is stationary.
+        """
         if (
             not self._interactive_spray_active
             or self._interactive_view_mode != "spray"
         ):
             return
+
         event_name = str(event)
-        factor = 1.1 if "Forward" in event_name else (1.0 / 1.1)
-        self.plotter.camera.Zoom(factor)
-        self.plotter.reset_camera_clipping_range()
-        self.plotter.render()
+        if "Forward" in event_name:
+            delta_mm = INTERACTIVE_SPRAY_WHEEL_STEP_MM
+        elif "Backward" in event_name:
+            delta_mm = -INTERACTIVE_SPRAY_WHEEL_STEP_MM
+        else:
+            return
+
+        current_mm = float(self.working_distance_spin.value())
+        target_mm = float(np.clip(
+            current_mm + delta_mm,
+            INTERACTIVE_SPRAY_MIN_STANDOFF_MM,
+            INTERACTIVE_SPRAY_MAX_STANDOFF_MM,
+        ))
+
+        if abs(target_mm - current_mm) <= 1e-9:
+            return
+
+        self.working_distance_spin.setValue(target_mm)
+
+        # A distance change is a deliberate discontinuity in nozzle position.
+        # Do not integrate the interval before/after the wheel movement as one
+        # continuous paint-deposition step.
+        if self._interactive_spray_recording:
+            self._interactive_spray_last_deposition_timestamp = None
+            self._interactive_spray_previous_nozzle_world = None
+            self._interactive_spray_last_speed_mm_s = 0.0
+
+        pose = self._interactive_spray_latest_pose
+        if pose is not None:
+            self._interactive_update_cursor(dict(pose))
+        else:
+            self.plotter.render()
 
     def _rotate_camera_from_spray_drag(self, interactor):
         current = tuple(int(value) for value in interactor.GetEventPosition())
