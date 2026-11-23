@@ -5247,12 +5247,16 @@ class ProductViewer(QWidget):
             "SPRAY MODE · HOLD LEFT TO PAINT"
         )
         if self._interactive_hud_actor is not None:
-            self._interactive_hud_actor.SetInput(
+            hud_text = (
                 f"SPRAY MODE  |  WORK DIST "
                 f"{self._interactive_spray_standoff * (self._get_source_mm_factor() or 1.0):.1f} mm "
                 f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
                 "MOVE: PREVIEW  |  LEFT: PAINT  |  MIDDLE: ANGLE"
             )
+            try:
+                self._interactive_hud_actor.SetText(2, hud_text)
+            except (AttributeError, TypeError):
+                pass
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y)
         if pose is not None:
