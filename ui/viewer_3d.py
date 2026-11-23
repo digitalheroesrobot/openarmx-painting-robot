@@ -448,6 +448,7 @@ class ProductViewer(QWidget):
         # Raw surface-following control poses are collected during a mouse drag.
         # Final route poses are generated only after the mouse button is released.
         self._interactive_spray_stroke_input_poses = []
+        self._interactive_spray_stroke_preview_actor = None
         self._interactive_spray_display_mode = "thickness"
         self._interactive_recorded_replay_index = 0
         self._interactive_recorded_replay_actor = None
@@ -5561,6 +5562,8 @@ class ProductViewer(QWidget):
         self._interactive_spray_last_cursor_update_time = now
         self._interactive_remove_live_actors()
         self._interactive_spray_live_actors.extend(gun_actors)
+        if getattr(self, "_interactive_route_generation_only", False) and self._interactive_spray_recording:
+            self._interactive_refresh_stroke_preview()
         if recorded_new_pose:
             if not getattr(self, "_interactive_route_generation_only", False):
                 self._interactive_refresh_paint_visual(render=False)
@@ -6205,6 +6208,62 @@ class ProductViewer(QWidget):
         # face normal. Only the target point translates with the cursor.
         self._interactive_update_cursor(pose)
 
+    def _interactive_remove_stroke_preview(self):
+        actor = getattr(self, "_interactive_spray_stroke_preview_actor", None)
+        if actor is not None:
+            try:
+                self.plotter.remove_actor(actor, render=False)
+            except Exception:
+                pass
+        self._interactive_spray_stroke_preview_actor = None
+
+    def _interactive_refresh_stroke_preview(self):
+        """Show the same smoothed surface curve that will be sampled on release."""
+        self._interactive_remove_stroke_preview()
+        raw = getattr(self, "_interactive_spray_stroke_input_poses", [])
+        if not getattr(self, "_interactive_route_generation_only", False) or len(raw) < 2:
+            return
+        control = [
+            np.asarray(item["surface_point_world"], dtype=np.float64)
+            for item in raw
+        ]
+        curve_points = []
+        spacing = max(float(self._interactive_spray_sampling_spacing), 1e-6)
+        for index in range(len(control) - 1):
+            p1 = control[index]
+            p2 = control[index + 1]
+            p0 = control[max(index - 1, 0)]
+            p3 = control[min(index + 2, len(control) - 1)]
+            count = int(np.clip(
+                math.ceil(np.linalg.norm(p2 - p1) / max(spacing * 0.5, 1e-4)),
+                8, 48,
+            ))
+            for step in range(count):
+                t = float(step) / float(count)
+                candidate = self._interactive_catmull_rom_point(
+                    p0, p1, p2, p3, t
+                )
+                projected = self._interactive_project_smoothed_surface_point(
+                    candidate
+                )
+                if projected is not None and projected["paintable"]:
+                    curve_points.append(projected["surface_point_world"])
+        projected_end = self._interactive_project_smoothed_surface_point(control[-1])
+        if projected_end is not None and projected_end["paintable"]:
+            curve_points.append(projected_end["surface_point_world"])
+        if len(curve_points) < 2:
+            return
+        points = np.asarray(curve_points, dtype=np.float64)
+        path = pv.PolyData(points)
+        path.lines = np.asarray([len(points), *range(len(points))], dtype=np.int64)
+        self._interactive_spray_stroke_preview_actor = self.plotter.add_mesh(
+            path,
+            color="#7CFFB2",
+            line_width=4.0,
+            lighting=False,
+            pickable=False,
+        )
+
     def _interactive_project_smoothed_surface_point(self, point_world):
         """Project a smoothed world-space curve point back onto the CAD surface."""
         if self._interactive_spray_surface is None or self.current_mesh is None:
@@ -6269,6 +6328,7 @@ class ProductViewer(QWidget):
         """Smooth one captured mouse stroke, project it to CAD, then arc-resample."""
         raw = list(getattr(self, "_interactive_spray_stroke_input_poses", []))
         self._interactive_spray_stroke_input_poses = []
+        self._interactive_remove_stroke_preview()
         if not raw:
             return 0
 
@@ -6474,6 +6534,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_sampling_previous_pose = None
         self._interactive_spray_sampling_distance_accumulator = 0.0
         self._interactive_spray_stroke_input_poses = []
+        self._interactive_remove_stroke_preview()
 
     def _on_interactive_spray_left_press(self, interactor, event):
         if (
@@ -6625,6 +6686,8 @@ class ProductViewer(QWidget):
         if not self._interactive_spray_active:
             return
         self._interactive_spray_recording = False
+        if getattr(self, "_interactive_route_generation_only", False):
+            self._interactive_finalize_smoothed_spray_stroke()
 
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
