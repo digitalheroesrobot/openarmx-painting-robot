@@ -4266,6 +4266,27 @@ class MainWindow(QMainWindow):
             speed_info.get("maximum_generated_speed_mm_s", 0.0)
         )
         travel_speed = float(route_timing.get("travel_speed_mm_s", 0.0))
+        optimization_metrics = result.get("route_optimization_metrics") or {}
+        before_optimization_time = float(
+            optimization_metrics.get(
+                "before_optimization_estimated_time_s", total_time
+            )
+        )
+        after_optimization_time = float(
+            optimization_metrics.get(
+                "after_optimization_estimated_time_s", total_time
+            )
+        )
+        time_saved = float(
+            optimization_metrics.get("estimated_time_saved_s", 0.0)
+        )
+        time_saved_percent = float(
+            optimization_metrics.get("estimated_time_saved_percent", 0.0)
+        )
+        optimizer_compute_time = float(
+            optimization_metrics.get("optimizer_compute_time_s", 0.0)
+        )
+        recording_elapsed = float(result.get("recording_elapsed_s", 0.0))
         self.analysis_summary.setText(
             "OPTIMIZED INTERACTIVE SPRAY ROUTE\n\n"
             f"RECORDED POSES: {len(nozzle_points):,}\n"
@@ -4277,6 +4298,12 @@ class MainWindow(QMainWindow):
             f"TRAVEL TIME: {format_time(travel_time)}\n"
             f"TOOL DELAYS: {format_time(tool_delay)}\n"
             f"ESTIMATED COMPLETION: {format_time(total_time)}\n"
+            f"RECORDING ELAPSED: {format_time(recording_elapsed)}\n\n"
+            "ROUTE OPTIMIZATION TIME COMPARISON\n"
+            f"BEFORE OPTIMIZATION: {format_time(before_optimization_time)}\n"
+            f"AFTER OPTIMIZATION: {format_time(after_optimization_time)}\n"
+            f"ESTIMATED TIME SAVED: {format_time(time_saved)} ({time_saved_percent:.1f}%)\n"
+            f"OPTIMIZER COMPUTE TIME: {optimizer_compute_time:.3f} s\n\n"
             f"SPRAY SPEED: {generated_min_speed:.0f}-{generated_max_speed:.0f} mm/s\n"
             f"SPRAY-OFF TRAVEL SPEED: {travel_speed:.0f} mm/s\n\n"
             f"ROUTING: {route_algorithm}\n"
@@ -4302,6 +4329,29 @@ class MainWindow(QMainWindow):
             return
         format_time = self.viewer._format_route_time
         route_info = result.get("route_optimization") or {}
+        optimization_metrics = result.get("route_optimization_metrics") or {}
+        before_time = float(
+            optimization_metrics.get(
+                "before_optimization_estimated_time_s",
+                result.get("estimated_duration_s", 0.0),
+            )
+        )
+        after_time = float(
+            optimization_metrics.get(
+                "after_optimization_estimated_time_s",
+                result.get("estimated_duration_s", 0.0),
+            )
+        )
+        saved_time = float(
+            optimization_metrics.get("estimated_time_saved_s", 0.0)
+        )
+        saved_percent = float(
+            optimization_metrics.get("estimated_time_saved_percent", 0.0)
+        )
+        optimizer_seconds = float(
+            optimization_metrics.get("optimizer_compute_time_s", 0.0)
+        )
+        recording_seconds = float(result.get("recording_elapsed_s", 0.0))
         self.summary_chart.hide()
         self.summary_section.setText("ROUTE GENERATION")
         self.analysis_summary.setStyleSheet("color: #00E676;")
@@ -4311,6 +4361,12 @@ class MainWindow(QMainWindow):
             f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\\n"
             f"ROUTE LENGTH: {float(result.get('route_length_product_units', 0.0)):.2f} {self.coordinate_unit}\\n"
             f"ESTIMATED COMPLETION: {format_time(result.get('estimated_duration_s', 0.0))}\\n"
+            f"RECORDING ELAPSED: {format_time(recording_seconds)}\\n\\n"
+            "ROUTE OPTIMIZATION TIME COMPARISON\\n"
+            f"BEFORE: {format_time(before_time)}\\n"
+            f"AFTER: {format_time(after_time)}\\n"
+            f"TIME SAVED: {format_time(saved_time)} ({saved_percent:.1f}%)\\n"
+            f"OPTIMIZER COMPUTE: {optimizer_seconds:.3f} s\\n"
             f"ROUTING: {route_info.get('algorithm', 'STROKE ORDER RETAINED')}\\n\\n"
             "Review the optimized route in the 3D view.\\n"
             "Select NEXT: SPRAY SIMULATION to verify the coating process."
