@@ -100,8 +100,9 @@ class CoatingProcessSettingsDialog(QDialog):
                 self.readiness_label.setStyleSheet("color:#FFD740;")
             else:
                 self.readiness_label.setText(
-                    "MATERIAL INPUTS READY. FILM-THICKNESS SIMULATION REMAINS N/A "
-                    "UNTIL ROBOT MOTION TIMING IS IMPLEMENTED."
+                    "MATERIAL INPUTS READY. AUTOMATIC TRAJECTORY FILM-THICKNESS "
+                    "PREVIEW REMAINS N/A UNTIL ROBOT TIMING IS IMPLEMENTED. "
+                    "Interactive recorded paths use their captured sample intervals."
                 )
                 self.readiness_label.setStyleSheet("color:#00E5FF;")
         except (ValueError, TypeError) as exc:
