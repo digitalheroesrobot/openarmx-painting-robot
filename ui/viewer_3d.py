@@ -535,6 +535,17 @@ class ProductViewer(QWidget):
         self._interactive_spray_space_shortcut.activated.connect(
             self._return_to_interactive_spray_mode
         )
+
+        # Exact orthographic-style views of the four principal bounding-box
+        # faces. Mouse orbit/pan/zoom remain available as before.
+        self._box_face_view_shortcuts = {}
+        for key in (Qt.Key_W, Qt.Key_A, Qt.Key_S, Qt.Key_D):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(
+                lambda view_key=key: self.set_box_face_camera_view(view_key)
+            )
+            self._box_face_view_shortcuts[key] = shortcut
         self._interactive_spray_middle_press_observer_id = interactor.AddObserver(
             "MiddleButtonPressEvent", self._on_interactive_spray_middle_press, 3.0
         )
@@ -707,6 +718,61 @@ class ProductViewer(QWidget):
         self.hook_compatible_count_label = QLabel("0 compatible holes")
         row.addWidget(self.hook_compatible_count_label)
         return panel
+
+    def set_box_face_camera_view(self, key):
+        """Aim the camera square-on at one principal face of the product box.
+
+        W/S select the top/bottom faces (+Z/-Z); A/D select the left/right
+        faces (-X/+X). The camera target stays at the visible scene centre.
+        """
+        if self.current_mesh is None:
+            return
+
+        view_directions = {
+            Qt.Key_W: np.array([0.0, 0.0, 1.0], dtype=np.float64),
+            Qt.Key_S: np.array([0.0, 0.0, -1.0], dtype=np.float64),
+            Qt.Key_A: np.array([-1.0, 0.0, 0.0], dtype=np.float64),
+            Qt.Key_D: np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        }
+        direction = view_directions.get(key)
+        if direction is None:
+            return
+
+        # Use visible actor bounds so the view remains correct after the
+        # product has been translated or rotated in the reference-pose stage.
+        bounds = np.asarray(
+            self.plotter.renderer.GetVisiblePropBounds(), dtype=np.float64
+        )
+        if bounds.shape != (6,) or not np.all(np.isfinite(bounds)):
+            bounds = np.asarray(self.current_mesh.bounds, dtype=np.float64).reshape(6)
+        minimum = bounds[[0, 2, 4]]
+        maximum = bounds[[1, 3, 5]]
+        center = 0.5 * (minimum + maximum)
+        diagonal = float(np.linalg.norm(maximum - minimum))
+        if not np.isfinite(diagonal) or diagonal <= 1e-9:
+            return
+
+        camera = self.plotter.camera
+        current_distance = float(np.linalg.norm(
+            np.asarray(camera.position, dtype=np.float64)
+            - np.asarray(camera.focal_point, dtype=np.float64)
+        ))
+        # Keep the current zoom level where possible, but guarantee enough
+        # clearance for a complete view of the product bounding box.
+        distance = max(current_distance, diagonal * 1.8, 1e-3)
+        camera.position = center + direction * distance
+        camera.focal_point = center
+
+        # A vertical camera view needs a horizontal up vector to avoid the
+        # undefined/rolled orientation that occurs when view direction and
+        # view-up are parallel.
+        if abs(float(direction[2])) > 0.9:
+            camera.up = (0.0, 1.0, 0.0)
+        else:
+            camera.up = (0.0, 0.0, 1.0)
+
+        self.plotter.renderer.ResetCameraClippingRange()
+        self.plotter.render()
 
     def _on_hook_diameter_changed(self, value):
         self.hook_diameter_mm = float(value)
