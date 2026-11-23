@@ -512,9 +512,9 @@ class ProductViewer(QWidget):
             self._on_interactive_spray_left_double_click,
             4.0,
         )
-        self._interactive_spray_right_double_click_observer_id = interactor.AddObserver(
-            "RightButtonDoubleClickEvent",
-            self._on_interactive_spray_right_double_click,
+        self._interactive_spray_space_key_observer_id = interactor.AddObserver(
+            "KeyPressEvent",
+            self._on_interactive_spray_space_key,
             4.0,
         )
         self._interactive_spray_middle_press_observer_id = interactor.AddObserver(
@@ -959,7 +959,7 @@ class ProductViewer(QWidget):
 
         self.return_to_paint_button = QPushButton("PAINT MODE")
         self.return_to_paint_button.setToolTip(
-            "Return to spray preview after VTK switches to camera navigation."
+            "Return to spray preview. You can also press Space."
         )
         self.return_to_paint_button.clicked.connect(
             self._return_to_interactive_spray_mode
@@ -2733,7 +2733,7 @@ class ProductViewer(QWidget):
             self.working_distance_spin.setValue(float(standoff) * float(factor))
             self.working_distance_spin.blockSignals(False)
         # Keep the original camera-navigation style detached during spray.
-        # Right-drag camera orbit is implemented by dedicated spray observers.
+        # A Space key event restores this spray input style after camera view.
         interactor.SetInteractorStyle(self._interactive_spray_input_style)
         self._interactive_spray_input_style.SetEnabled(1)
         self.interaction_mode_status.setText(
@@ -2744,7 +2744,7 @@ class ProductViewer(QWidget):
             (
                 f"SPRAY CURSOR ACTIVE  |  WORK DIST {self._interactive_spray_standoff * (self._get_source_mm_factor() or 1.0):.1f} mm "
                 f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
-                "MOVE: PREVIEW  |  LEFT: PAINT  |  MIDDLE: ANGLE  |  RIGHT DOUBLE-CLICK: SPRAY MODE"
+                "MOVE: PREVIEW  |  LEFT: PAINT  |  MIDDLE: ANGLE  |  SPACE: SPRAY MODE"
             ),
             position="upper_left",
             font_size=10,
@@ -5170,12 +5170,14 @@ class ProductViewer(QWidget):
         self._interactive_begin_spray_stroke()
         self._interactive_update_cursor(pose)
 
-    def _on_interactive_spray_right_double_click(self, interactor, event):
-        """Return to spray input after the camera style processes right double-click."""
+    def _on_interactive_spray_space_key(self, interactor, event):
+        """Return to spray input when Space is pressed in camera view."""
         if not self._interactive_spray_active:
             return
-        # Run after the current VTK event completes so any camera-style
-        # double-click transition is applied first, then restore spray input.
+        key_sym = str(interactor.GetKeySym() or "").strip().lower()
+        if key_sym not in ("space", "spacebar"):
+            return
+        # Defer until the camera style finishes processing the key event.
         QTimer.singleShot(0, self._return_to_interactive_spray_mode)
 
     def _return_to_interactive_spray_mode(self):
