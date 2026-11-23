@@ -1556,7 +1556,7 @@ class ProductViewer(QWidget):
         if self._interactive_spray_gun_collision:
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
-                return False
+            return False
         self._interactive_apply_paint_deposition(
             patch, replay_pose, duration_s=float(dt)
         )
