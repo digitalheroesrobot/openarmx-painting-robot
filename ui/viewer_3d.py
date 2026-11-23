@@ -464,14 +464,6 @@ class ProductViewer(QWidget):
         self._robot_motion_settings = {"painting_speed_mm_s": 150.0, "control_frequency_hz": 100.0}
         self._interactive_spray_path_actor = None
         self._interactive_spray_route_actors = []
-        self._interactive_endpoint_marker_actors = []
-        self._interactive_endpoint_pick_targets = []
-        self._interactive_manual_connector_mode = False
-        self._interactive_manual_connector_required = True
-        self._interactive_manual_connector_selection = []
-        self._interactive_manual_connector_saved_style = None
-        self._interactive_manual_connector_input_style = None
-        self._interactive_precomputed_connector_paths = {}
         self._interactive_recorded_replay_timer = QTimer(self)
         self._interactive_recorded_replay_timer.setInterval(40)
         self._interactive_recorded_replay_timer.timeout.connect(
@@ -1226,19 +1218,9 @@ class ProductViewer(QWidget):
         row.setContentsMargins(8, 4, 8, 4)
         row.setSpacing(7)
         row.addWidget(QLabel("RECORDED SPRAY PATH"))
-        self.recorded_path_connect_button = QPushButton("CONNECT ENDPOINTS")
-        self.recorded_path_connect_button.setCheckable(True)
-        self.recorded_path_connect_button.setToolTip(
-            "Click a stroke end point, then the next stroke start point. "
-            "The connector follows the product surface at the configured spray distance."
-        )
-        self.recorded_path_connect_button.toggled.connect(
-            self._toggle_manual_connector_mode
-        )
-        row.addWidget(self.recorded_path_connect_button)
-        self.recorded_path_optimize_button = QPushButton("CHECK ROUTE")
+        self.recorded_path_optimize_button = QPushButton("FINALIZE SPRAY ROUTE")
         self.recorded_path_optimize_button.setToolTip(
-            "Validate the user-defined stroke order and all manually drawn connectors."
+            "Finalize spray strokes only. MoveIt2 plans transfers between strokes."
         )
         self.recorded_path_optimize_button.clicked.connect(
             self._optimize_interactive_recorded_path
@@ -1257,7 +1239,7 @@ class ProductViewer(QWidget):
         row.addWidget(self.recorded_path_stop_button)
         self.recorded_path_export_button = QPushButton("EXPORT CSV")
         self.recorded_path_export_button.setToolTip(
-            "Export the complete timed robot trajectory, including spray-OFF safe connectors."
+            "Export timed spray poses; spray-OFF rows mark transfers for MoveIt2."
         )
         self.recorded_path_export_button.clicked.connect(
             self._export_interactive_trajectory_csv
@@ -1314,12 +1296,6 @@ class ProductViewer(QWidget):
             raise ValueError("Recorded path page must be 'route' or 'simulation'.")
         route_page = page == "route"
         self._interactive_route_generation_only = route_page
-        connect_button = getattr(self, "recorded_path_connect_button", None)
-        if connect_button is not None:
-            connect_button.setVisible(route_page)
-        if not route_page:
-            self._toggle_manual_connector_mode(False)
-
         # Verification replay intentionally uses a temporary bare-product
         # coating field. When the operator returns to route generation, restore
         # the saved route coating so ADD / EDIT starts from the actual recorded
@@ -1405,7 +1381,7 @@ class ProductViewer(QWidget):
             if not self._optimize_interactive_recorded_path():
                 QMessageBox.warning(
                     self, "Export trajectory",
-                    "The route cannot be exported because a safe exterior connector route could not be validated."
+                    "The spray route could not be finalized."
                 )
                 return False
             timing = self._interactive_recorded_replay_timing
@@ -1692,9 +1668,8 @@ class ProductViewer(QWidget):
                 ) * mm_factor for i in range(1, len(records))
             ])),
             "spray_distance_mm": 0.0,
-            "connector_distance_mm": 0.0,
+            
         }
-        self._interactive_precomputed_connector_paths = {}
         self._interactive_spray_route_optimization = {
             "algorithm": "IMPORTED_TIME_PARAMETERIZED_CSV",
             "stroke_count": stroke_id + 1,
@@ -1762,604 +1737,104 @@ class ProductViewer(QWidget):
             if hours else f"{minutes:02d}:{whole_seconds:02d}"
         )
 
-    def _interactive_build_safe_connector_path(self, start_record, end_record):
-        """Build a conservative, collision-checked exterior spray-OFF route."""
-        self._interactive_last_connector_failure_reason = None
-
-        def blocked(reason):
-            self._interactive_last_connector_failure_reason = str(reason)
-            return None
-
-        if self.current_mesh is None or self._interactive_spray_surface is None:
-            return blocked("CAD surface or mesh is unavailable")
-        mm_factor = self._get_source_mm_factor()
-        if mm_factor is None or mm_factor <= 0.0:
-            return blocked("source coordinate unit is unknown")
-
-        profile = self._interactive_sprayer_profile or {}
-
-        def profile_mm(key, default):
-            try:
-                value = float(profile.get(key, default))
-            except (TypeError, ValueError):
-                value = float(default)
-            return max(value, 0.0)
-
-        standoff = max(float(self._interactive_spray_standoff), 1e-6)
-        body_length = profile_mm("gun_body_length_mm", 220.0) / mm_factor
-        nozzle_length = profile_mm("nozzle_length_mm", 25.0) / mm_factor
-        body_radius = 0.5 * profile_mm("gun_body_diameter_mm", 45.0) / mm_factor
-        nozzle_radius = 0.5 * max(
-            profile_mm("nozzle_orifice_mm", 1.4) * 2.0,
-            profile_mm("gun_body_diameter_mm", 45.0) * 0.18,
-        ) / mm_factor
-        clearance = profile_mm("gun_collision_clearance_mm", 2.0) / mm_factor
-
-        # Expand by the complete gun length, not only its radius. This keeps
-        # the entire tool envelope outside the product while travelling around
-        # the exterior box, including during orientation changes at corners.
-        margin = (
-            body_length + nozzle_length + max(body_radius, nozzle_radius)
-            + clearance + max(1e-3, standoff * 0.01)
-        )
-        bounds = np.asarray(self.current_mesh.bounds, dtype=np.float64)
-        if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
-            return blocked("product bounds are invalid")
-        low = bounds[0] - margin
-        high = bounds[1] + margin
-        box_center = 0.5 * (low + high)
-
-        transform = np.asarray(self._interactive_spray_transform, dtype=np.float64)
-        rotation = transform[:3, :3]
-        translation = transform[:3, 3]
-
-        # Surface collision tests alone are insufficient for products with
-        # through-holes: a complete tool can pass through the empty opening
-        # without intersecting any triangles. Build a convex envelope and
-        # require the complete sprayer centerline, expanded by its radius,
-        # to remain outside that envelope for every connector pose.
-        try:
-            from scipy.spatial import ConvexHull
-            cache_key = (
-                id(self.current_mesh),
-                len(self.current_mesh.vertices),
-                len(self.current_mesh.faces),
-            )
-            cached_hull = getattr(
-                self, "_interactive_connector_convex_hull_cache", None
-            )
-            if cached_hull is None or cached_hull[0] != cache_key:
-                hull = ConvexHull(
-                    np.asarray(self.current_mesh.vertices, dtype=np.float64)
-                )
-                hull_equations = np.asarray(hull.equations, dtype=np.float64)
-                if (
-                    hull_equations.ndim != 2
-                    or hull_equations.shape[1] != 4
-                    or not np.all(np.isfinite(hull_equations))
-                ):
-                    return blocked("could not construct a valid product exterior envelope")
-                self._interactive_connector_convex_hull_cache = (
-                    cache_key, hull_equations
-                )
-            else:
-                hull_equations = cached_hull[1]
-        except Exception as exc:
-            return blocked(
-                "could not construct the conservative product exterior envelope "
-                f"({type(exc).__name__})"
-            )
-
-        def unit(vector):
-            vector = np.asarray(vector, dtype=np.float64)
-            length = float(np.linalg.norm(vector))
-            if not np.isfinite(length) or length <= 1e-12:
-                return None
-            return vector / length
-
-        def record_vector(record, key):
-            try:
-                return unit(np.asarray(record[key], dtype=np.float64))
-            except (KeyError, TypeError, ValueError):
-                return None
-
-        start_surface = np.asarray(start_record["surface_point_product"], dtype=np.float64)
-        end_surface = np.asarray(end_record["surface_point_product"], dtype=np.float64)
-        start_normal = record_vector(start_record, "surface_normal_product")
-        end_normal = record_vector(end_record, "surface_normal_product")
-        start_direction = record_vector(start_record, "spray_direction_product")
-        end_direction = record_vector(end_record, "spray_direction_product")
-        if any(value is None for value in (
-            start_normal, end_normal, start_direction, end_direction
-        )):
-            return blocked("stroke endpoint has an invalid surface normal or spray direction")
-
-        # The outward normal must agree with the direction from the surface
-        # back toward the nozzle. This also handles inconsistent mesh winding.
-        start_outward = unit(-start_direction)
-        end_outward = unit(-end_direction)
-        if np.dot(start_normal, start_outward) < 0.0:
-            start_normal = -start_normal
-        if np.dot(end_normal, end_outward) < 0.0:
-            end_normal = -end_normal
-
-        def exit_point(surface, outward):
-            distances = []
-            for axis in range(3):
-                if outward[axis] > 1e-10:
-                    distances.append((high[axis] - surface[axis]) / outward[axis])
-                elif outward[axis] < -1e-10:
-                    distances.append((low[axis] - surface[axis]) / outward[axis])
-            positive = [
-                value for value in distances
-                if np.isfinite(value) and value >= 0.0
-            ]
-            if not positive:
-                return None
-            distance = min(positive) + max(1e-3, margin * 1e-3)
-            return surface + outward * distance
-
-        start_nozzle = np.asarray(
-            start_record["nozzle_point_product"], dtype=np.float64
-        )
-        end_nozzle = np.asarray(
-            end_record["nozzle_point_product"], dtype=np.float64
-        )
-        start_exit = exit_point(start_surface, start_normal)
-        end_exit = exit_point(end_surface, end_normal)
-        if start_exit is None or end_exit is None:
-            return blocked("could not project a normal retreat to the exterior box")
-
-        corners = np.asarray([
-            [
-                high[0] if (mask & 1) else low[0],
-                high[1] if (mask & 2) else low[1],
-                high[2] if (mask & 4) else low[2],
-            ]
-            for mask in range(8)
-        ], dtype=np.float64)
-        start_corner = int(np.argmin(np.linalg.norm(corners - start_exit, axis=1)))
-        end_corner = int(np.argmin(np.linalg.norm(corners - end_exit, axis=1)))
-
-        corner_indices = [start_corner]
-        current = start_corner
-        for bit in (1, 2, 4):
-            if (current & bit) != (end_corner & bit):
-                current ^= bit
-                corner_indices.append(current)
-
-        radial_start = unit(start_exit - box_center)
-        radial_end = unit(end_exit - box_center)
-        radial_corners = [unit(corners[index] - box_center) for index in corner_indices]
-        if radial_start is None or radial_end is None or any(
-            value is None for value in radial_corners
-        ):
-            return blocked("could not determine exterior travel orientation")
-
-        # Duplicate the exit nodes intentionally: they provide zero-translation
-        # orientation changes only after the complete gun has cleared the part.
-        nodes = [start_nozzle, start_exit, start_exit]
-        nodes.extend(corners[index] for index in corner_indices)
-        nodes.extend([end_exit, end_exit, end_nozzle])
-
-        outward_nodes = [start_outward, start_normal, radial_start]
-        outward_nodes.extend(radial_corners)
-        outward_nodes.extend([radial_end, end_normal, end_outward])
-        if len(nodes) != len(outward_nodes):
-            return blocked("internal connector waypoint mismatch")
-
-        sample_step = max(
-            min(max(body_radius, 1e-3) * 0.20, standoff * 0.05),
-            1e-3,
-        )
-        sampled = []
-        for segment_index in range(len(nodes) - 1):
-            p0, p1 = nodes[segment_index], nodes[segment_index + 1]
-            o0, o1 = outward_nodes[segment_index], outward_nodes[segment_index + 1]
-            length = float(np.linalg.norm(p1 - p0))
-            if not np.isfinite(length):
-                return blocked("connector contains a non-finite segment")
-            steps = max(1, int(math.ceil(length / sample_step)))
-            first_step = 0 if segment_index == 0 else 1
-            for step_index in range(first_step, steps + 1):
-                fraction = float(step_index) / float(steps)
-                point_product = p0 * (1.0 - fraction) + p1 * fraction
-                outward = unit(o0 * (1.0 - fraction) + o1 * fraction)
-                if outward is None:
-                    return blocked("connector orientation interpolation failed")
-                direction_product = -outward
-                point_world = rotation @ point_product + translation
-                direction_world = unit(rotation @ direction_product)
-                if direction_world is None:
-                    return blocked("connector produced an invalid world direction")
-
-                # The convex envelope deliberately fills all holes and
-                # concavities. A connector is accepted only when the complete
-                # sprayer body can stay on the true exterior side of that
-                # conservative envelope; an empty CAD hole is never treated
-                # as a robot passage.
-                tool_axis_radius = max(body_radius, nozzle_radius)
-                tool_clearance = tool_axis_radius + clearance
-                tool_axis_step = max(
-                    min(tool_axis_radius * 0.20, standoff * 0.025),
-                    1e-3,
-                )
-                tool_axis_length = nozzle_length + body_length
-                tool_axis_count = max(
-                    1, int(math.ceil(tool_axis_length / tool_axis_step))
-                )
-                axis_fractions = np.linspace(
-                    0.0, 1.0, tool_axis_count + 1, dtype=np.float64
-                )
-                axis_points = (
-                    point_product[None, :]
-                    + np.outer(
-                        axis_fractions * tool_axis_length, outward
-                    )
-                )
-                signed_plane_distances = (
-                    axis_points @ hull_equations[:, :3].T
-                    + hull_equations[None, :, 3]
-                )
-                # One supporting half-space must contain the entire
-                # clearance-radius ball around every centerline sample.
-                # This is a sufficient, intentionally conservative test.
-                if np.any(
-                    np.max(signed_plane_distances, axis=1) < tool_clearance
-                ):
-                    return blocked(
-                        "sprayer would enter a product hole, recess, or "
-                        "interior region; connector must remain outside "
-                        "the product's convex envelope"
-                    )
-
-                _, gun_polydata = self._interactive_build_gun_visual(
-                    point_world, direction_world, render=False
-                )
-                if self._interactive_check_gun_collision(gun_polydata):
-                    return blocked(
-                        f"sprayer envelope collides near connector segment {segment_index + 1}"
-                    )
-
-                if not sampled and segment_index == 0 and step_index == 0:
-                    sampled.append(start_record)
-                    continue
-                is_final = (
-                    segment_index == len(nodes) - 2 and step_index == steps
-                )
-                if is_final:
-                    sampled.append(end_record)
-                    continue
-
-                sampled.append({
-                    "nozzle_point_product": point_product.copy(),
-                    "surface_point_product": (
-                        point_product + direction_product * standoff
-                    ),
-                    "surface_normal_product": outward.copy(),
-                    "spray_direction_product": direction_product.copy(),
-                    "nozzle_point_world": point_world.copy(),
-                    "surface_point_world": (
-                        point_world + direction_world * standoff
-                    ),
-                    "surface_normal_world": unit(rotation @ outward),
-                    "spray_direction_world": direction_world.copy(),
-                    "face_index": int(
-                        start_record["face_index"]
-                        if segment_index < len(nodes) // 2
-                        else end_record["face_index"]
-                    ),
-                    "stroke_id": -1,
-                    "timestamp": 0.0,
-                })
-
-        if len(sampled) < 2:
-            return blocked("connector produced fewer than two waypoints")
-        return sampled
-
     def _build_interactive_route_metrics(self, records):
-        """Build safe spray-OFF connectors and time every route segment at robot speed."""
+        """Time spray strokes only; MoveIt2 owns inter-stroke transfer planning."""
         if not records:
-            return {
-                "spray_distance_mm": 0.0,
-                "connector_distance_mm": 0.0,
-                "total_route_distance_mm": 0.0,
-                "estimated_duration_s": 0.0,
-                "recorded_replay_duration_s": 0.0,
-                "timeline": [],
-                "safe_connector_paths": [],
-                "safety_status": "NO_ROUTE",
-            }
+            return {"spray_distance_mm": 0.0, 
+                    "total_route_distance_mm": 0.0, "estimated_duration_s": 0.0,
+                    "recorded_replay_duration_s": 0.0, "timeline": [],
+                    "safety_status": "NO_ROUTE"}
         mm_factor = self._get_source_mm_factor()
-        if mm_factor is None or mm_factor <= 0.0:
+        if mm_factor is None or not np.isfinite(mm_factor) or mm_factor <= 0.0:
             raise ValueError("A known source coordinate unit is required for route distances.")
-        speed_mm_s = float(
-            getattr(self, "_robot_motion_settings", {}).get("painting_speed_mm_s", 150.0)
-        )
-        if not np.isfinite(speed_mm_s) or speed_mm_s <= 0.0:
+        settings = getattr(self, "_robot_motion_settings", {})
+        speed = float(settings.get("painting_speed_mm_s", 150.0))
+        frequency = float(settings.get("control_frequency_hz", 100.0))
+        if not np.isfinite(speed) or speed <= 0.0:
             raise ValueError("Robot painting speed must be greater than zero.")
-
-        points = np.asarray(
-            [item["nozzle_point_product"] for item in records], dtype=np.float64
-        )
-        segment_ids = np.asarray(
-            [item["stroke_id"] for item in records], dtype=np.int64
-        )
+        if not np.isfinite(frequency) or frequency <= 0.0:
+            raise ValueError("Robot control frequency must be greater than zero.")
+        points = np.asarray([r["nozzle_point_product"] for r in records], dtype=np.float64)
+        stroke_ids = np.asarray([r["stroke_id"] for r in records], dtype=np.int64)
         spray_distance = 0.0
-        for segment_id in np.unique(segment_ids):
-            indices = np.flatnonzero(segment_ids == segment_id)
-            if len(indices) > 1:
-                spray_distance += float(
-                    np.sum(np.linalg.norm(np.diff(points[indices], axis=0), axis=1))
-                    * mm_factor
-                )
-
-        timeline = []
-        safe_connector_paths = []
-        connector_distance = 0.0
-        elapsed = 0.0
-        for index in range(1, len(records)):
-            spray_on = bool(segment_ids[index] == segment_ids[index - 1])
-            if spray_on:
-                p0 = np.asarray(records[index - 1]["nozzle_point_product"], dtype=np.float64)
-                p1 = np.asarray(records[index]["nozzle_point_product"], dtype=np.float64)
-                distance_mm = float(np.linalg.norm(p1 - p0)) * mm_factor
-                if distance_mm <= 1e-12:
-                    continue
-                duration = distance_mm / speed_mm_s
-                timeline.append({
-                    "start_s": elapsed,
-                    "end_s": elapsed + duration,
-                    "start_record": records[index - 1],
-                    "end_record": records[index],
-                    "spray_on": True,
-                    "kind": "SPRAY_ON_ROBOT_SPEED",
-                })
-                elapsed += duration
+        for stroke_id in dict.fromkeys(stroke_ids.tolist()):
+            ids = np.flatnonzero(stroke_ids == stroke_id)
+            if len(ids) > 1:
+                spray_distance += float(np.sum(np.linalg.norm(np.diff(points[ids], axis=0), axis=1)) * mm_factor)
+        timeline, elapsed = [], 0.0
+        off_tick = 1.0 / frequency
+        for i in range(1, len(records)):
+            first, second = records[i - 1], records[i]
+            if int(first["stroke_id"]) != int(second["stroke_id"]):
+                # OFF is a controller-state marker only. MoveIt2 plans the transfer.
+                timeline.append({"start_s": elapsed, "end_s": elapsed + off_tick,
+                                 "start_record": first, "end_record": first,
+                                 "spray_on": False, "kind": "SPRAY_OFF_MOVEIT2_TRANSFER_MARKER"})
+                elapsed += off_tick
                 continue
-
-            connector_cache = getattr(self, "_interactive_precomputed_connector_paths", {})
-            connector_key = (id(records[index - 1]), id(records[index]))
-            connector_records = connector_cache.get(connector_key)
-            if connector_records is None and not getattr(
-                self, "_interactive_manual_connector_required", False
-            ):
-                connector_records = self._interactive_build_safe_connector_path(
-                    records[index - 1], records[index]
-                )
-            if connector_records is None:
-                return {
-                    "spray_distance_mm": float(spray_distance),
-                    "connector_distance_mm": float(connector_distance),
-                    "total_route_distance_mm": float(spray_distance + connector_distance),
-                    "estimated_duration_s": 0.0,
-                    "recorded_replay_duration_s": float(elapsed),
-                    "timeline": [],
-                    "safe_connector_paths": safe_connector_paths,
-                    "safety_status": "BLOCKED_NO_COLLISION_FREE_CONNECTOR",
-                    "blocked_transition": int(index),
-                    "safety_reason": (
-                        "Manual connector not defined: select the previous stroke end "
-                        "and the next stroke start"
-                        if getattr(self, "_interactive_manual_connector_required", False)
-                        else getattr(
-                            self, "_interactive_last_connector_failure_reason",
-                            "connector planning failed",
-                        )
-                    ),
-                }
-            safe_connector_paths.append(connector_records)
-            connector_points = np.asarray(
-                [item["nozzle_point_product"] for item in connector_records],
-                dtype=np.float64,
-            )
-            lengths = np.linalg.norm(np.diff(connector_points, axis=0), axis=1)
-            total_length = float(np.sum(lengths))
-            connector_distance += total_length * mm_factor
-            if total_length <= 1e-12:
-                return {
-                    "spray_distance_mm": float(spray_distance),
-                    "connector_distance_mm": float(connector_distance),
-                    "total_route_distance_mm": float(spray_distance + connector_distance),
-                    "estimated_duration_s": 0.0,
-                    "recorded_replay_duration_s": float(elapsed),
-                    "timeline": [],
-                    "safe_connector_paths": safe_connector_paths,
-                    "safety_status": "BLOCKED_DEGENERATE_CONNECTOR",
-                    "blocked_transition": int(index),
-                }
-            for path_index, length in enumerate(lengths):
-                distance_mm = float(length) * mm_factor
-                if distance_mm <= 1e-12:
-                    continue
-                segment_duration = distance_mm / speed_mm_s
-                timeline.append({
-                    "start_s": elapsed,
-                    "end_s": elapsed + segment_duration,
-                    "start_record": connector_records[path_index],
-                    "end_record": connector_records[path_index + 1],
-                    "spray_on": False,
-                    "kind": "SAFE_SPRAY_OFF_EXTERIOR_MOVE",
-                })
-                elapsed += segment_duration
-
-        total_distance = float(spray_distance + connector_distance)
-        expected_duration = total_distance / speed_mm_s
-        return {
-            "spray_distance_mm": float(spray_distance),
-            "connector_distance_mm": float(connector_distance),
-            "total_route_distance_mm": total_distance,
-            "estimated_duration_s": float(expected_duration),
-            "recorded_replay_duration_s": float(elapsed),
-            "painting_speed_mm_s": speed_mm_s,
-            "timeline": timeline,
-            "safe_connector_paths": safe_connector_paths,
-            "safety_status": "SAFE",
-        }
+            distance = float(np.linalg.norm(
+                np.asarray(second["nozzle_point_product"], dtype=np.float64)
+                - np.asarray(first["nozzle_point_product"], dtype=np.float64)
+            )) * mm_factor
+            if distance <= 1e-12:
+                continue
+            duration = distance / speed
+            timeline.append({"start_s": elapsed, "end_s": elapsed + duration,
+                             "start_record": first, "end_record": second,
+                             "spray_on": True, "kind": "SPRAY_ON_ROBOT_SPEED"})
+            elapsed += duration
+        return {"spray_distance_mm": float(spray_distance), 
+                "total_route_distance_mm": float(spray_distance),
+                "estimated_duration_s": float(elapsed), "recorded_replay_duration_s": float(elapsed),
+                "painting_speed_mm_s": speed, "timeline": timeline,
+                "safety_status": "SAFE",
+                "transfer_planning": "DELEGATED_TO_MOVEIT2"}
 
     def _optimize_interactive_recorded_path(self):
-        """Preserve the exact user-drawn stroke order and add safe OFF connectors.
-
-        Stroke order and direction are operator intent. This method must never
-        reorder strokes or reverse an individual stroke; it only plans the
-        transfer between each consecutive pair.
-        """
+        """Finalize spray strokes only; never construct inter-stroke transfer paths."""
         records = list(self._interactive_spray_records)
-        if not records:
-            self.recorded_path_status_label.setText("No recorded path")
+        if len(records) < 2:
+            self.recorded_path_status_label.setText("DRAW AT LEAST TWO SPRAY POINTS")
             self.recorded_path_replay_button.setEnabled(False)
+            self.recorded_path_export_button.setEnabled(False)
             self.route_readiness_changed.emit(False)
             return False
-
-        mm_factor = self._get_source_mm_factor()
-        if mm_factor is None or mm_factor <= 0.0:
-            self.recorded_path_status_label.setText(
-                "ROUTE BLOCKED · UNKNOWN SOURCE UNIT"
-            )
-            self.recorded_path_replay_button.setEnabled(False)
-            self.route_readiness_changed.emit(False)
-            return False
-
-        # Split only at actual stroke-ID transitions. Do not sort IDs: the
-        # input sequence is the authoritative order drawn by the operator.
-        strokes = []
-        current_stroke = []
-        current_stroke_id = None
-        completed_stroke_ids = set()
+        seen, previous, stroke_count = set(), None, 0
         for record in records:
-            stroke_id = int(record["stroke_id"])
-            if current_stroke_id is None:
-                current_stroke_id = stroke_id
-            if stroke_id != current_stroke_id:
-                strokes.append(current_stroke)
-                completed_stroke_ids.add(current_stroke_id)
-                if stroke_id in completed_stroke_ids:
-                    self.recorded_path_status_label.setText(
-                        "ROUTE BLOCKED · NON-CONTIGUOUS STROKE DATA"
-                    )
+            sid = int(record["stroke_id"])
+            if sid != previous:
+                if sid in seen:
+                    self.recorded_path_status_label.setText("ROUTE BLOCKED · NON-CONTIGUOUS STROKE DATA")
                     self.recorded_path_replay_button.setEnabled(False)
+                    self.recorded_path_export_button.setEnabled(False)
+                    self.route_readiness_changed.emit(False)
                     return False
-                current_stroke = []
-                current_stroke_id = stroke_id
-            current_stroke.append(record)
-        if current_stroke:
-            strokes.append(current_stroke)
-
-        if not getattr(self, "_interactive_manual_connector_required", False):
-            self._interactive_precomputed_connector_paths = {}
-        else:
-            self._interactive_precomputed_connector_paths = dict(
-                getattr(self, "_interactive_precomputed_connector_paths", {})
-            )
-        safe_connector_paths = []
-        for stroke_index in range(1, len(strokes)):
-            previous_stroke = strokes[stroke_index - 1]
-            next_stroke = strokes[stroke_index]
-            previous_end = previous_stroke[-1]
-            next_start = next_stroke[0]
-
-            connector = self._interactive_precomputed_connector_paths.get(
-                (id(previous_end), id(next_start))
-            )
-            if connector is None and not getattr(
-                self, "_interactive_manual_connector_required", False
-            ):
-                connector = self._interactive_build_safe_connector_path(
-                    previous_end, next_start
-                )
-            if connector is None:
-                reason = (
-                    "Manual connector not defined: select the previous stroke end "
-                    "and the next stroke start"
-                    if getattr(self, "_interactive_manual_connector_required", False)
-                    else str(getattr(
-                        self,
-                        "_interactive_last_connector_failure_reason",
-                        "No collision-free exterior connector exists",
-                    ))
-                )
-                self._interactive_spray_route_optimization = {
-                    "algorithm": "USER_DRAWN_ORDER_WITH_MANUAL_STANDOFF_CONNECTORS",
-                    "stroke_count": len(strokes),
-                    "stroke_order": "PRESERVED",
-                    "stroke_directions": "PRESERVED",
-                    "status": "BLOCKED",
-                }
-                self._interactive_recorded_replay_timing = {
-                    "safety_status": "BLOCKED_NO_COLLISION_FREE_CONNECTOR",
-                    "safety_reason": reason,
-                    "blocked_transition": stroke_index,
-                    "timeline": [],
-                    "safe_connector_paths": safe_connector_paths,
-                }
-                self._interactive_safe_connector_paths = safe_connector_paths
-                self.recorded_path_replay_button.setEnabled(False)
-                self.recorded_path_export_button.setEnabled(False)
-                self.route_readiness_changed.emit(False)
-                self.recorded_path_status_label.setText(
-                    "ROUTE BLOCKED · " + reason[:100]
-                )
-                self._interactive_spray_route_actors = []
-                self._refresh_interactive_recorded_path_actor()
-                return False
-
-            self._interactive_precomputed_connector_paths[
-                (id(previous_end), id(next_start))
-            ] = connector
-            safe_connector_paths.append(connector)
-
-        # Keep the original record list byte-for-byte in its original order.
+                seen.add(sid)
+                previous = sid
+                stroke_count += 1
         self._interactive_spray_records = records
-        self._interactive_spray_route_optimization = {
-            "algorithm": "USER_DRAWN_ORDER_WITH_MANUAL_STANDOFF_CONNECTORS",
-            "stroke_count": len(strokes),
-            "stroke_order": "PRESERVED",
-            "stroke_directions": "PRESERVED",
-            "connector_cost_basis": "COLLISION_CHECKED_FULL_GUN_ENVELOPE_PATH",
-        }
-
         metrics = self._build_interactive_route_metrics(records)
         self._interactive_recorded_replay_timing = metrics
-        self._interactive_safe_connector_paths = metrics.get(
-            "safe_connector_paths", []
-        )
-        route_safe = metrics.get("safety_status") == "SAFE"
-        self.recorded_path_replay_button.setEnabled(
-            route_safe and len(metrics.get("timeline", [])) > 0
-        )
-        self.recorded_path_export_button.setEnabled(route_safe)
-
-        speed = float(
-            self._robot_motion_settings.get("painting_speed_mm_s", 150.0)
-        )
-        total_distance = float(metrics.get("total_route_distance_mm", 0.0))
-        total_time = float(metrics.get("estimated_duration_s", 0.0))
-        self.recorded_path_time_label.setText(
-            f"TOTAL {total_distance:.1f} mm  |  "
-            f"TIME {self._format_route_time(total_time)}  |  "
-            f"{speed:.1f} mm/s"
-        )
-
-        if not route_safe:
-            reason = str(metrics.get(
-                "safety_reason",
-                "No collision-free exterior connector",
-            ))
-            self.recorded_path_status_label.setText(
-                "ROUTE BLOCKED · " + reason[:100]
-            )
-        else:
-            self.recorded_path_status_label.setText(
-                f"{len(strokes)} strokes · USER ORDER PRESERVED · SAFE CONNECTORS"
-            )
-
-        self._interactive_route_optimization_metrics = {
-            "stroke_count": int(len(strokes)),
-            "safe_connector_count": int(len(self._interactive_safe_connector_paths)),
+        self._interactive_spray_route_optimization = {
+            "algorithm": "USER_DRAWN_SPRAY_STROKES_ONLY",
+            "stroke_count": stroke_count, "stroke_order": "PRESERVED",
+            "stroke_directions": "PRESERVED", "transfer_planning": "DELEGATED_TO_MOVEIT2",
         }
+        ready = metrics["safety_status"] == "SAFE" and any(e["spray_on"] for e in metrics["timeline"])
+        self.recorded_path_replay_button.setEnabled(ready)
+        self.recorded_path_export_button.setEnabled(ready)
+        speed = float(self._robot_motion_settings.get("painting_speed_mm_s", 150.0))
+        self.recorded_path_time_label.setText(
+            f"SPRAY {metrics['spray_distance_mm']:.1f} mm  |  "
+            f"SPRAY TIME {self._format_route_time(metrics['estimated_duration_s'])}  |  {speed:.1f} mm/s"
+        )
+        self.recorded_path_status_label.setText(
+            f"{stroke_count} SPRAY STROKES · ORDER PRESERVED · MOVEIT2 GENERATES TRANSFERS"
+        )
+        self._interactive_route_optimization_metrics = {"stroke_count": stroke_count}
         self._refresh_interactive_recorded_path_actor()
-        self.route_readiness_changed.emit(bool(route_safe))
-        return route_safe
+        self.route_readiness_changed.emit(bool(ready))
+        return bool(ready)
 
     def _interactive_stroke_ranges(self):
         """Return contiguous stroke ranges in the exact recorded drawing order."""
@@ -2387,462 +1862,6 @@ class ProductViewer(QWidget):
             "records": records[start:],
         })
         return ranges
-
-    def _toggle_manual_connector_mode(self, enabled):
-        """Enable click-to-connect selection for consecutive stroke endpoints."""
-        enabled = bool(enabled)
-        if enabled and len(self._interactive_stroke_ranges()) < 2:
-            enabled = False
-            button = getattr(self, "recorded_path_connect_button", None)
-            if button is not None:
-                button.blockSignals(True)
-                button.setChecked(False)
-                button.blockSignals(False)
-            self.recorded_path_status_label.setText(
-                "DRAW AT LEAST TWO SPRAY STROKES FIRST"
-            )
-        self._interactive_manual_connector_mode = enabled
-        self._interactive_manual_connector_selection = []
-        button = getattr(self, "recorded_path_connect_button", None)
-        if button is not None and button.isChecked() != enabled:
-            button.blockSignals(True)
-            button.setChecked(enabled)
-            button.blockSignals(False)
-        interactor = self.plotter.iren.interactor
-        if enabled:
-            if self._interactive_manual_connector_input_style is None:
-                self._interactive_manual_connector_saved_style = (
-                    interactor.GetInteractorStyle()
-                )
-                self._interactive_manual_connector_input_style = vtkInteractorStyleUser()
-            interactor.SetInteractorStyle(
-                self._interactive_manual_connector_input_style
-            )
-            self._interactive_manual_connector_input_style.SetEnabled(1)
-            self.recorded_path_status_label.setText(
-                "CONNECT: CLICK THE END OF STROKE 1, THEN THE START OF STROKE 2"
-            )
-        else:
-            if self._interactive_manual_connector_saved_style is not None:
-                interactor.SetInteractorStyle(
-                    self._interactive_manual_connector_saved_style
-                )
-                self._interactive_manual_connector_saved_style = None
-                self._interactive_manual_connector_input_style = None
-            if getattr(self, "_interactive_spray_records", None):
-                self.recorded_path_status_label.setText(
-                    "MANUAL CONNECT MODE OFF"
-                )
-        self._refresh_interactive_endpoint_markers()
-        return enabled
-
-    def _refresh_interactive_endpoint_markers(self):
-        """Show unmistakably different, labelled start and end endpoint markers."""
-        for actor in getattr(self, "_interactive_endpoint_marker_actors", []):
-            try:
-                self.plotter.remove_actor(actor, render=False)
-            except Exception:
-                pass
-        self._interactive_endpoint_marker_actors = []
-        self._interactive_endpoint_pick_targets = []
-        ranges = self._interactive_stroke_ranges()
-        if not ranges or not getattr(self, "_interactive_manual_connector_mode", False):
-            return
-
-        all_points = np.asarray([
-            record["nozzle_point_world"]
-            for item in ranges
-            for record in (item["records"][0], item["records"][-1])
-        ], dtype=np.float64)
-        extent = float(np.linalg.norm(np.ptp(all_points, axis=0))) if len(all_points) else 1.0
-        radius = max(extent * 0.014, 2.0)
-        selected = list(getattr(self, "_interactive_manual_connector_selection", []))
-        selected_key = None
-        if selected:
-            selected_key = (
-                int(selected[0]["stroke_index"]),
-                str(selected[0]["kind"]),
-            )
-
-        label_points = []
-        label_text = []
-        label_colors = []
-        for stroke_index, item in enumerate(ranges):
-            endpoints = (
-                ("start", item["records"][0], "#00DFFF", "S"),
-                ("end", item["records"][-1], "#FF8C00", "E"),
-            )
-            for kind, record, base_color, prefix in endpoints:
-                point = np.asarray(record["nozzle_point_world"], dtype=np.float64)
-                is_selected = selected_key == (stroke_index, kind)
-                color = "#FFFFFF" if is_selected else base_color
-                marker = pv.Sphere(
-                    radius=radius * (1.30 if is_selected else 1.0),
-                    center=point,
-                    theta_resolution=24,
-                    phi_resolution=24,
-                )
-                actor = self.plotter.add_mesh(
-                    marker,
-                    color=color,
-                    opacity=1.0,
-                    ambient=1.0,
-                    diffuse=0.0,
-                    specular=0.0,
-                    smooth_shading=False,
-                    lighting=False,
-                    pickable=False,
-                )
-                self._interactive_endpoint_marker_actors.append(actor)
-                self._interactive_endpoint_pick_targets.append({
-                    "point": point,
-                    "stroke_index": int(stroke_index),
-                    "stroke_id": int(item["stroke_id"]),
-                    "kind": kind,
-                    "record": record,
-                })
-                # Screen-facing labels make endpoint identity readable even
-                # when two 3-D markers overlap from the current camera angle.
-                label_points.append(point + np.array([0.0, 0.0, radius * 1.8]))
-                label_text.append(f"{prefix}{stroke_index + 1}")
-                label_colors.append(color)
-
-        if label_points:
-            labels = self.plotter.add_point_labels(
-                np.asarray(label_points, dtype=np.float64),
-                label_text,
-                font_size=14,
-                text_color="#FFFFFF",
-                shape="rounded_rect",
-                shape_color="#10212B",
-                shape_opacity=0.96,
-                always_visible=True,
-                show_points=False,
-                margin=4,
-                pickable=False,
-            )
-            self._interactive_endpoint_marker_actors.append(labels)
-        self.plotter.render()
-
-    def _interactive_pick_route_endpoint(self, x, y, tolerance_px=30.0):
-        """Pick only the endpoint type expected by the current connection step."""
-        renderer = self.plotter.renderer
-        selection = list(getattr(self, "_interactive_manual_connector_selection", []))
-        expected_kind = "start" if selection else "end"
-        expected_stroke = (
-            int(selection[0]["stroke_index"]) + 1 if selection else None
-        )
-        best = None
-        best_distance = float(tolerance_px)
-        for target in self._interactive_endpoint_pick_targets:
-            if target["kind"] != expected_kind:
-                continue
-            if expected_stroke is not None and int(target["stroke_index"]) != expected_stroke:
-                continue
-            point = target["point"]
-            renderer.SetWorldPoint(
-                float(point[0]), float(point[1]), float(point[2]), 1.0
-            )
-            renderer.WorldToDisplay()
-            display = renderer.GetDisplayPoint()
-            distance = math.hypot(float(display[0]) - float(x), float(display[1]) - float(y))
-            if distance <= best_distance:
-                best_distance = distance
-                best = target
-        return best
-
-    @staticmethod
-    def _interactive_unit_vector(value):
-        vector = np.asarray(value, dtype=np.float64)
-        length = float(np.linalg.norm(vector))
-        if not np.isfinite(length) or length <= 1e-12:
-            return None
-        return vector / length
-
-    def _interactive_build_manual_offset_connector(self, start_record, end_record):
-        """Build a user-requested connector at the configured nozzle stand-off.
-
-        The centerline is sampled over the CAD surface, projected back to the
-        nearest surface cells, offset by the working distance, and rejected
-        unless the complete sprayer envelope clears the conservative product
-        hull and the CAD collision test.
-        """
-        self._interactive_last_connector_failure_reason = None
-
-        def blocked(reason):
-            self._interactive_last_connector_failure_reason = str(reason)
-            return None
-
-        if self.current_mesh is None or self._interactive_spray_surface is None:
-            return blocked("CAD surface is unavailable")
-        mm_factor = self._get_source_mm_factor()
-        if mm_factor is None or mm_factor <= 0.0:
-            return blocked("source coordinate unit is unknown")
-
-        transform = np.asarray(self._interactive_spray_transform, dtype=np.float64)
-        rotation = transform[:3, :3]
-        translation = transform[:3, 3]
-        standoff = max(float(self._interactive_spray_standoff), 1e-6)
-        start_surface = np.asarray(start_record["surface_point_product"], dtype=np.float64)
-        end_surface = np.asarray(end_record["surface_point_product"], dtype=np.float64)
-        # The nozzle is positioned along the CAD surface normal even when
-        # the operator has tilted the spray axis. Use that geometric normal
-        # for the stand-off offset; connector travel itself is normal to the
-        # surface and must not inherit a tilted spray direction.
-        start_outward = self._interactive_unit_vector(
-            np.asarray(start_record["surface_normal_product"], dtype=np.float64)
-        )
-        end_outward = self._interactive_unit_vector(
-            np.asarray(end_record["surface_normal_product"], dtype=np.float64)
-        )
-        if start_outward is None or end_outward is None:
-            return blocked("selected endpoint has an invalid surface normal")
-        start_offset = (
-            np.asarray(start_record["nozzle_point_product"], dtype=np.float64)
-            - start_surface
-        )
-        end_offset = (
-            np.asarray(end_record["nozzle_point_product"], dtype=np.float64)
-            - end_surface
-        )
-        if float(np.dot(start_outward, start_offset)) < 0.0:
-            start_outward = -start_outward
-        if float(np.dot(end_outward, end_offset)) < 0.0:
-            end_outward = -end_outward
-
-        profile = self._interactive_sprayer_profile or {}
-        def profile_mm(key, default):
-            try:
-                return max(float(profile.get(key, default)), 0.0)
-            except (TypeError, ValueError):
-                return float(default)
-
-        body_length = profile_mm("gun_body_length_mm", 220.0) / mm_factor
-        nozzle_length = profile_mm("nozzle_length_mm", 25.0) / mm_factor
-        body_radius = 0.5 * profile_mm("gun_body_diameter_mm", 45.0) / mm_factor
-        nozzle_radius = 0.5 * max(
-            profile_mm("nozzle_orifice_mm", 1.4) * 2.0,
-            profile_mm("gun_body_diameter_mm", 45.0) * 0.18,
-        ) / mm_factor
-        clearance = profile_mm("gun_collision_clearance_mm", 2.0) / mm_factor
-        tool_radius = max(body_radius, nozzle_radius) + clearance
-        tool_axis_length = body_length + nozzle_length
-
-        try:
-            from scipy.spatial import ConvexHull
-            hull = ConvexHull(np.asarray(self.current_mesh.vertices, dtype=np.float64))
-            hull_equations = np.asarray(hull.equations, dtype=np.float64)
-            if hull_equations.ndim != 2 or hull_equations.shape[1] != 4:
-                return blocked("could not construct the product exterior envelope")
-        except Exception as exc:
-            return blocked(
-                "could not construct the conservative product envelope "
-                f"({type(exc).__name__})"
-            )
-
-        source_distance = float(np.linalg.norm(end_surface - start_surface))
-        sample_step = max(
-            min(
-                max(body_radius, 1e-3) * 0.20,
-                standoff * 0.05,
-                max(float(self._interactive_spray_sampling_spacing), 1e-3) * 0.35,
-            ),
-            1e-3,
-        )
-        sample_count = int(np.clip(math.ceil(source_distance / sample_step), 8, 600))
-        path = [start_record]
-        projection_tolerance = max(
-            float(self._interactive_spray_sampling_spacing) * 0.65,
-            standoff * 0.20,
-            1e-3,
-        )
-
-        for sample_index in range(1, sample_count):
-            fraction = float(sample_index) / float(sample_count)
-            query = start_surface * (1.0 - fraction) + end_surface * fraction
-            try:
-                cell_id, closest_point = self._interactive_spray_surface.find_closest_cell(
-                    query, return_closest_point=True
-                )
-                cell_id = int(cell_id)
-                closest_point = np.asarray(closest_point, dtype=np.float64).reshape(3)
-            except Exception as exc:
-                return blocked(f"CAD surface projection failed ({type(exc).__name__})")
-            if cell_id < 0 or not np.all(np.isfinite(closest_point)):
-                return blocked("connector could not be projected onto the CAD surface")
-            if float(np.linalg.norm(closest_point - query)) > projection_tolerance:
-                return blocked(
-                    "connector crosses a gap or hole; choose another pair of endpoints"
-                )
-
-            cell = self._interactive_spray_surface.GetCell(cell_id)
-            if cell is None or cell.GetNumberOfPoints() < 3:
-                return blocked("connector projection returned an invalid CAD face")
-            triangle = np.asarray([
-                cell.GetPoints().GetPoint(point_index)
-                for point_index in range(3)
-            ], dtype=np.float64)
-            normal = self._interactive_unit_vector(
-                np.cross(triangle[1] - triangle[0], triangle[2] - triangle[0])
-            )
-            outward_hint = self._interactive_unit_vector(
-                start_outward * (1.0 - fraction) + end_outward * fraction
-            )
-            if normal is None or outward_hint is None:
-                return blocked("connector surface normal is undefined")
-            if float(np.dot(normal, outward_hint)) < 0.0:
-                normal = -normal
-
-            nozzle_product = closest_point + normal * standoff
-            direction_product = -normal
-            nozzle_world = rotation @ nozzle_product + translation
-            direction_world = self._interactive_unit_vector(rotation @ direction_product)
-            if direction_world is None:
-                return blocked("connector orientation is invalid")
-
-            axis_fractions = np.linspace(0.0, 1.0, max(
-                2, int(math.ceil(tool_axis_length / max(sample_step, 1e-3))) + 1
-            ))
-            axis_points = (
-                nozzle_product[None, :]
-                + np.outer(axis_fractions * tool_axis_length, normal)
-            )
-            signed_distances = (
-                axis_points @ hull_equations[:, :3].T
-                + hull_equations[None, :, 3]
-            )
-            if np.any(np.max(signed_distances, axis=1) < tool_radius):
-                return blocked(
-                    "sprayer would enter a product hole, recess, or interior region"
-                )
-
-            _, gun_polydata = self._interactive_build_gun_visual(
-                nozzle_world, direction_world, render=False
-            )
-            if self._interactive_check_gun_collision(gun_polydata):
-                return blocked(
-                    f"sprayer collision detected at connector sample {sample_index}"
-                )
-
-            quaternion = self._interactive_pose_quaternion_from_direction(
-                direction_product
-            )
-            face_index = int(
-                start_record["face_index"]
-                if fraction < 0.5 else end_record["face_index"]
-            )
-            surface_world = rotation @ closest_point + translation
-            normal_world = self._interactive_unit_vector(rotation @ normal)
-            path.append({
-                "nozzle_point_product": nozzle_product.copy(),
-                "surface_point_product": closest_point.copy(),
-                "surface_normal_product": normal.copy(),
-                "spray_direction_product": direction_product.copy(),
-                "quaternion_product_xyzw": quaternion,
-                "nozzle_point_world": nozzle_world.copy(),
-                "surface_point_world": surface_world.copy(),
-                "surface_normal_world": normal_world.copy(),
-                "spray_direction_world": direction_world.copy(),
-                "face_index": face_index,
-                "stroke_id": -1,
-                "timestamp": float(start_record.get("timestamp", 0.0))
-                    * (1.0 - fraction)
-                    + float(end_record.get("timestamp", 0.0)) * fraction,
-                "t_product_s": fraction,
-            })
-
-            if sample_index % 24 == 0:
-                QApplication.processEvents()
-
-        path.append(end_record)
-        if len(path) < 3:
-            return blocked("manual connector contains too few validated samples")
-        return path
-
-    def _handle_manual_connector_click(self, x, y):
-        """Select a stroke end followed by the next stroke start."""
-        target = self._interactive_pick_route_endpoint(x, y)
-        if target is None:
-            self.recorded_path_status_label.setText(
-                "CLICK DIRECTLY ON A HIGHLIGHTED STROKE ENDPOINT"
-            )
-            return False
-
-        selection = list(self._interactive_manual_connector_selection)
-        if not selection:
-            if target["kind"] != "end":
-                self.recorded_path_status_label.setText(
-                    "FIRST SELECT THE END POINT OF THE PREVIOUS STROKE"
-                )
-                return False
-            ranges = self._interactive_stroke_ranges()
-            if target["stroke_index"] >= len(ranges) - 1:
-                self.recorded_path_status_label.setText(
-                    "THE LAST STROKE HAS NO FOLLOWING STROKE"
-                )
-                return False
-            self._interactive_manual_connector_selection = [target]
-            self.recorded_path_status_label.setText(
-                f"STROKE {target['stroke_index'] + 1} END SELECTED · "
-                f"NOW CLICK STROKE {target['stroke_index'] + 2} START"
-            )
-            return True
-
-        first = selection[0]
-        if (
-            target["kind"] != "start"
-            or target["stroke_index"] != first["stroke_index"] + 1
-        ):
-            self.recorded_path_status_label.setText(
-                "SELECT THE START POINT OF THE NEXT STROKE IN DRAWING ORDER"
-            )
-            return False
-
-        connector = self._interactive_build_manual_offset_connector(
-            first["record"], target["record"]
-        )
-        if connector is None:
-            reason = str(getattr(
-                self, "_interactive_last_connector_failure_reason",
-                "Manual connector validation failed",
-            ))
-            self.recorded_path_status_label.setText(
-                "CONNECTOR REJECTED · " + reason[:100]
-            )
-            self._interactive_manual_connector_selection = []
-            return False
-
-        self._interactive_precomputed_connector_paths[
-            (id(first["record"]), id(target["record"]))
-        ] = connector
-        self._interactive_manual_connector_selection = []
-        self._optimize_interactive_recorded_path()
-
-        ranges = self._interactive_stroke_ranges()
-        complete = all(
-            (
-                id(ranges[index]["records"][-1]),
-                id(ranges[index + 1]["records"][0]),
-            ) in self._interactive_precomputed_connector_paths
-            for index in range(max(0, len(ranges) - 1))
-        )
-        if complete:
-            button = getattr(self, "recorded_path_connect_button", None)
-            if button is not None:
-                button.blockSignals(True)
-                button.setChecked(False)
-                button.blockSignals(False)
-            self._toggle_manual_connector_mode(False)
-            self.recorded_path_status_label.setText(
-                "ALL MANUAL CONNECTORS VALIDATED · ROUTE READY"
-            )
-        else:
-            self.recorded_path_status_label.setText(
-                f"CONNECTOR {first['stroke_index'] + 1} → "
-                f"{target['stroke_index'] + 1} ACCEPTED · SELECT NEXT PAIR"
-            )
-        self._refresh_interactive_endpoint_markers()
-        return True
 
     def _refresh_interactive_recorded_path_actor(self):
         for actor in getattr(self, "_interactive_spray_route_actors", []):
@@ -2968,30 +1987,6 @@ class ProductViewer(QWidget):
                 )
                 self._interactive_spray_route_actors.append(actor)
 
-        connector_paths = getattr(self, "_interactive_safe_connector_paths", None)
-        if connector_paths is None:
-            route_metrics = self._build_interactive_route_metrics(records)
-            connector_paths = route_metrics.get("safe_connector_paths", [])
-            self._interactive_safe_connector_paths = connector_paths
-        for connector_records in connector_paths:
-            connector_points = np.asarray([
-                item["nozzle_point_world"] for item in connector_records
-            ], dtype=np.float64)
-            if len(connector_points) < 2:
-                continue
-            connector = pv.PolyData(connector_points)
-            connector.lines = np.asarray([
-                len(connector_points), *range(len(connector_points))
-            ], dtype=np.int64)
-            actor = self.plotter.add_mesh(
-                connector, color="#91C9F2", opacity=0.38, line_width=2.4,
-                lighting=False, pickable=False,
-            )
-            self._interactive_spray_route_actors.append(actor)
-
-        if self._interactive_spray_route_actors:
-            self._interactive_spray_path_actor = self._interactive_spray_route_actors[0]
-        self._refresh_interactive_endpoint_markers()
         self.plotter.render()
 
     @staticmethod
@@ -3198,7 +2193,7 @@ class ProductViewer(QWidget):
         timing = self._interactive_recorded_replay_timing
         if timing and timing.get("safety_status") not in (None, "SAFE"):
             reason = str(timing.get(
-                "safety_reason", "No collision-free exterior connector"
+                "safety_reason", "Spray route timing is unavailable"
             ))
             self.recorded_path_status_label.setText(
                 "REPLAY BLOCKED · " + reason[:100]
@@ -4880,14 +3875,8 @@ class ProductViewer(QWidget):
         # been sprayed and add only the missing coverage.
         preserve_existing = bool(resume_existing)
         existing_records = list(self._interactive_spray_records) if preserve_existing else []
-        if getattr(self, "_interactive_manual_connector_mode", False):
-            self._toggle_manual_connector_mode(False)
-        self._interactive_manual_connector_required = True
-        self._interactive_manual_connector_mode = False
-        self._interactive_manual_connector_selection = []
         if not preserve_existing:
-            self._interactive_precomputed_connector_paths = {}
-        connect_button = getattr(self, "recorded_path_connect_button", None)
+            connect_button = getattr(self, "recorded_path_connect_button", None)
         if connect_button is not None:
             connect_button.blockSignals(True)
             connect_button.setChecked(False)
@@ -5025,7 +4014,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_records = list(existing_records)
         self._interactive_pending_spray_strokes = []
         self._interactive_spray_stroke_input_poses = []
-        self._interactive_safe_connector_paths = None
         if existing_records:
             # Continue stroke IDs after the existing route.
             existing_stroke_ids = [
@@ -8335,7 +7323,6 @@ class ProductViewer(QWidget):
             int(self._interactive_spray_stroke_id), next_stroke_id - 1
         )
         if stored_count:
-            self._interactive_safe_connector_paths = None
             self._interactive_recorded_replay_timing = None
             self.recorded_path_replay_button.setEnabled(
                 len(self._interactive_spray_records) >= 2
@@ -8359,10 +7346,6 @@ class ProductViewer(QWidget):
         self._interactive_remove_stroke_preview()
 
     def _on_interactive_spray_left_press(self, interactor, event):
-        if getattr(self, "_interactive_manual_connector_mode", False):
-            x, y = interactor.GetEventPosition()
-            self._handle_manual_connector_click(x, y)
-            return
         if (
             not self._interactive_spray_active
             or self._interactive_spray_mode != "spray"
@@ -8573,7 +7556,7 @@ class ProductViewer(QWidget):
         self._interactive_update_surface_angle_indicator(None)
 
     def finish_interactive_spray_path(self):
-        """Finalize queued strokes, optimize their safe connectors, and return the route."""
+        """Finalize queued spray strokes; MoveIt2 generates all inter-stroke transfers."""
         if not self._interactive_spray_active:
             return None
         self._interactive_spray_recording = False
@@ -8651,7 +7634,6 @@ class ProductViewer(QWidget):
         if records:
             self._interactive_spray_records = list(records)
             if len(records) >= 2:
-                self._interactive_manual_connector_required = True
                 self.interactive_recorded_path_panel.show()
                 self.recorded_path_replay_button.setEnabled(True)
                 self._optimize_interactive_recorded_path()
@@ -8664,10 +7646,7 @@ class ProductViewer(QWidget):
                 )
                 if route_timing:
                     mm_factor = float(self._get_source_mm_factor() or 1.0)
-                    route_length = (
-                        float(route_timing["spray_distance_mm"])
-                        + float(route_timing["connector_distance_mm"])
-                    ) / mm_factor
+                    route_length = float(route_timing["spray_distance_mm"]) / mm_factor
             self._refresh_interactive_recorded_path_actor()
 
         result = {
@@ -8720,9 +7699,6 @@ class ProductViewer(QWidget):
             "spray_length_mm": (
                 float(route_timing["spray_distance_mm"]) if route_timing else 0.0
             ),
-            "travel_length_mm": (
-                float(route_timing["connector_distance_mm"]) if route_timing else 0.0
-            ),
             "total_route_distance_mm": (
                 float(route_timing["total_route_distance_mm"]) if route_timing else 0.0
             ),
@@ -8766,7 +7742,8 @@ class ProductViewer(QWidget):
             if route_timing:
                 self.recorded_path_time_label.setText(
                     f"SPRAY {route_timing['spray_distance_mm']:.1f} mm  |  "
-                    f"CONNECTORS {route_timing['connector_distance_mm']:.1f} mm"
+                    f"SPRAY TIME {self._format_route_time(route_timing['estimated_duration_s'])}  |  "
+                    "MOVEIT2 TRANSFERS"
                 )
             self._refresh_interactive_recorded_path_actor()
         self.plotter.add_text(
