@@ -1422,7 +1422,7 @@ class ProductViewer(QWidget):
             fraction = float(np.clip((t - float(edge["start_s"])) / edge_duration, 0.0, 1.0))
             spray_on = bool(edge["spray_on"])
             row = {
-                "t": f"{float(t):.6f}",
+                "t": f"{float(t):.9f}",
                 "x": "",
                 "y": "",
                 "z": "",
@@ -1547,9 +1547,6 @@ class ProductViewer(QWidget):
                     raise ValueError(f"Line {row_number}: t must be non-negative and strictly increasing.")
                 if row_number == 2 and abs(t) > 1e-9:
                     raise ValueError("The first trajectory timestamp must be 0 seconds.")
-                state_text = str(row["on/off"]).strip()
-                if state_text not in ("0", "1"):
-                    raise ValueError(f"Line {row_number}: on/off must be 0 or 1.")
                 state_text = str(row["on/off"]).strip()
                 if state_text not in ("0", "1"):
                     raise ValueError(f"Line {row_number}: on/off must be 0 or 1.")
