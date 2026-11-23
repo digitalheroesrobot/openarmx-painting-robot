@@ -4208,11 +4208,37 @@ class MainWindow(QMainWindow):
         if self._operation_running or not self.viewer._interactive_spray_active:
             return
 
-        result = self.viewer.finish_interactive_spray_path()
-        self.interactive_spray_path = result
+        # Give Qt a chance to paint the loading state before route optimization.
         self.interactive_spray_path_button.setEnabled(False)
+        self.interactive_spray_path_button.setText("GENERATING ROUTE...")
+        self.interactive_spray_path_button.setToolTip(
+            "Stopping spray recording and optimizing the stroke route. Please wait."
+        )
+        self.status_bar.showMessage(
+            "GENERATING SPRAY ROUTE... PLEASE WAIT"
+        )
+        from PySide6.QtWidgets import QApplication
+        QApplication.processEvents()
+
+        try:
+            result = self.viewer.finish_interactive_spray_path()
+        except Exception as exc:
+            self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
+            self.interactive_spray_path_button.setToolTip("")
+            self.interactive_spray_path_button.setEnabled(
+                bool(self.viewer._interactive_spray_active)
+            )
+            QMessageBox.critical(
+                self, "Spray Route Generation Error", str(exc)
+            )
+            return
+
+        self.interactive_spray_path = result
+        self.interactive_spray_path_button.setToolTip("")
         if result is None:
+            self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
             self.status_bar.showMessage("INTERACTIVE SPRAY PATH CANCELLED")
+            self._refresh_workflow_ui()
             return
 
         self.stage_completed[STAGE_SPRAY_TRAJECTORY] = True
