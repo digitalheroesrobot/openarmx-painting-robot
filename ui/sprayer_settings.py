@@ -95,19 +95,27 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
             if str(item.get("pattern_type", "round_cone")) != "round_cone":
                 merged["spray_cone_angle_deg"] = 50.0
             merged["pattern_type"] = "round_cone"
+            profile_migrated = False
             # Upgrade only the former generic defaults. Preserve non-default
             # values that may already have been measured by the user.
-            if "standoff_mm" not in item or float(item.get("standoff_mm", 180.0)) == 180.0:
+            try:
+                old_standoff = float(item.get("standoff_mm", 180.0))
+            except (TypeError, ValueError):
+                old_standoff = 180.0
+            try:
+                old_angle = float(item.get("spray_cone_angle_deg", 45.0))
+            except (TypeError, ValueError):
+                old_angle = 45.0
+            if "standoff_mm" not in item or old_standoff == 180.0:
                 merged["standoff_mm"] = 100.0
                 profile_migrated = True
-            if "spray_cone_angle_deg" not in item or float(item.get("spray_cone_angle_deg", 45.0)) == 45.0:
+            if "spray_cone_angle_deg" not in item or old_angle == 45.0:
                 merged["spray_cone_angle_deg"] = 50.0
                 profile_migrated = True
 
             # Older local profiles stored these dimensions as 0.0 ("not
             # specified"). Upgrade only missing/zero values; preserve every
             # positive user-entered measurement.
-            profile_migrated = False
             for dimension_key in (
                 "gun_body_length_mm",
                 "gun_body_diameter_mm",
