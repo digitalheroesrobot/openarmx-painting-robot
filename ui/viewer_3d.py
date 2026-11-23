@@ -943,7 +943,7 @@ class ProductViewer(QWidget):
     # =========================================================
 
     def _build_interaction_mode_controls(self):
-        """Build spray controls; camera input mode is intentionally removed."""
+        """Build controls and status for camera/spray input switching."""
         panel = QFrame()
         panel.setObjectName("ViewerInteractionModeControls")
         panel.setStyleSheet("""
@@ -3698,14 +3698,14 @@ class ProductViewer(QWidget):
         # switches the viewport to operator-controlled spray input.
         self._interactive_spray_mode = "camera"
         self.interaction_mode_status.setText(
-            "CAMERA VIEW · PRESS SPACE FOR SPRAY MODE"
+            "CAMERA MODE · NAVIGATE: MOUSE · SPACE: SPRAY MODE"
         )
 
         self._interactive_hud_actor = self.plotter.add_text(
             (
                 f"SPRAY CURSOR ACTIVE  |  WORK DIST {self._interactive_spray_standoff * (self._get_source_mm_factor() or 1.0):.1f} mm "
                 f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
-                "CAMERA VIEW  |  NAVIGATE: MOUSE  |  SPACE: SPRAY MODE"
+                "CAMERA MODE  |  NAVIGATE: MOUSE  |  SPACE: SPRAY MODE"
             ),
             position="upper_left",
             font_size=10,
@@ -6300,21 +6300,77 @@ class ProductViewer(QWidget):
         self._interactive_begin_spray_stroke()
         self._interactive_update_cursor(pose)
 
-    def _return_to_interactive_spray_mode(self):
-        """Restore spray input after VTK has switched to camera navigation."""
+    def _switch_to_interactive_camera_mode(self):
+        """Enable normal VTK camera navigation without ending route editing."""
         if not self._interactive_spray_active:
             return False
+
+        if self._interactive_spray_mode == "camera":
+            return True
+
+        # A mode switch always closes an in-progress stroke. It does not
+        # discard any already recorded route samples or coating state.
+        self._interactive_spray_recording = False
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_sampling_previous_pose = None
+        self._interactive_spray_sampling_distance_accumulator = 0.0
+        self._interactive_spray_last_speed_mm_s = 0.0
+        self._interactive_spray_angle_dragging = False
+        self._interactive_spray_angle_last_position = None
+        self._interactive_spray_angle_x_deg = 0.0
+        self._interactive_spray_angle_y_deg = 0.0
+        self._interactive_spray_angle_anchor_pose = None
+        self._interactive_spray_locked_direction_world = None
+        self._interactive_spray_latest_pose = None
+
+        interactor = self.plotter.iren.interactor
+        if self._interactive_saved_style is not None:
+            interactor.SetInteractorStyle(self._interactive_saved_style)
+            self._interactive_saved_style.SetEnabled(
+                1 if self._interactive_saved_style_enabled else 0
+            )
+
+        self._interactive_spray_mode = "camera"
+        self.interaction_mode_status.setText(
+            "CAMERA MODE · NAVIGATE: MOUSE · SPACE: SPRAY MODE"
+        )
+        self._interactive_remove_live_actors()
+        self._interactive_update_surface_angle_indicator(None)
+
+        if self._interactive_hud_actor is not None:
+            hud_text = (
+                f"CAMERA MODE  |  WORK DIST "
+                f"{self._interactive_spray_standoff * (self._get_source_mm_factor() or 1.0):.1f} mm "
+                f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
+                "NAVIGATE: MOUSE  |  SPACE: SPRAY MODE"
+            )
+            try:
+                self._interactive_hud_actor.SetText(2, hud_text)
+            except (AttributeError, TypeError):
+                pass
+
+        self.plotter.render()
+        return True
+
+    def _return_to_interactive_spray_mode(self):
+        """Switch from camera navigation to spray preview/recording input."""
+        if not self._interactive_spray_active:
+            return False
+
+        if self._interactive_spray_mode == "spray":
+            return True
 
         interactor = self.plotter.iren.interactor
         if self._interactive_spray_input_style is None:
             self._interactive_spray_input_style = vtkInteractorStyleUser()
 
-        # Reinstall the dedicated input style without ending the spray session.
+        # The dedicated user style prevents VTK's camera controls from
+        # consuming mouse drags while the operator paints a route.
         interactor.SetInteractorStyle(self._interactive_spray_input_style)
         self._interactive_spray_input_style.SetEnabled(1)
         self._interactive_spray_mode = "spray"
 
-        # Return to the standard spray orientation. Keep coating and records.
         self._interactive_spray_recording = False
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
@@ -6329,19 +6385,20 @@ class ProductViewer(QWidget):
         self._interactive_spray_locked_direction_world = None
 
         self.interaction_mode_status.setText(
-            "SPRAY MODE · HOLD LEFT TO PAINT"
+            "SPRAY MODE · MOVE: PREVIEW · HOLD LEFT: PAINT · DOUBLE-CLICK: CAMERA"
         )
         if self._interactive_hud_actor is not None:
             hud_text = (
                 f"SPRAY MODE  |  WORK DIST "
                 f"{self._interactive_spray_standoff * (self._get_source_mm_factor() or 1.0):.1f} mm "
                 f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
-                "MOVE: PREVIEW  |  LEFT: PAINT  |  MIDDLE: ANGLE"
+                "MOVE: PREVIEW  |  LEFT: PAINT  |  MIDDLE: ANGLE  |  DOUBLE-CLICK: CAMERA"
             )
             try:
                 self._interactive_hud_actor.SetText(2, hud_text)
             except (AttributeError, TypeError):
                 pass
+
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y)
         if pose is not None:
@@ -6353,42 +6410,22 @@ class ProductViewer(QWidget):
         return True
 
     def _on_interactive_spray_left_double_click(self, interactor, event):
-        """Keep a double-click from changing the active spray input mode."""
+        """A left-button double-click returns the viewport to camera mode."""
         if (
             not self._interactive_spray_active
             or self._interactive_spray_mode != "spray"
         ):
             return
 
-        # A double-click is a cursor/preview action, never a request to enter
-        # camera navigation. Reassert spray input ownership in case the
-        # platform's VTK/Qt double-click handling changed the interactor style.
-        # Reassert spray-only input ownership. No camera-mode transition
-        # exists while a spray session is active.
-        interactor.SetInteractorStyle(self._interactive_spray_input_style)
-        self._interactive_spray_input_style.SetEnabled(1)
-
+        # VTK may report the second button press before the double-click
+        # event. Close that pending stroke before restoring camera navigation.
         self._interactive_spray_recording = False
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_sampling_previous_pose = None
         self._interactive_spray_sampling_distance_accumulator = 0.0
         self._interactive_spray_last_speed_mm_s = 0.0
-        self._interactive_spray_angle_dragging = False
-        self._interactive_spray_angle_last_position = None
-        self._interactive_spray_angle_x_deg = 0.0
-        self._interactive_spray_angle_y_deg = 0.0
-        self._interactive_spray_angle_anchor_pose = None
-        self._interactive_spray_locked_direction_world = None
-
-        x, y = interactor.GetEventPosition()
-        standard_pose = self._interactive_pick_surface_pose(x, y)
-        if standard_pose is not None:
-            self._interactive_update_cursor(standard_pose)
-        else:
-            self._interactive_spray_latest_pose = None
-            self._interactive_update_surface_angle_indicator(None)
-            self.plotter.render()
+        self._switch_to_interactive_camera_mode()
 
     def _on_interactive_spray_left_release(self, interactor, event):
         if (
