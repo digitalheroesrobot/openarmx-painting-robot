@@ -2429,7 +2429,6 @@ class MainWindow(QMainWindow):
             "standoff_mm": float(profile["standoff_mm"]),
             # Stage 3's surface coverage grid uses the spray footprint and
             # overlap; this configured value remains its fallback only.
-            "sampling_spacing_mm": float(profile["sampling_spacing_mm"]),
             "spray_angle_deg": float(profile.get("spray_cone_angle_deg", 0.0)),
             "sprayer_profile": profile,
             "coating_process": coating_process,
@@ -4069,7 +4068,7 @@ class MainWindow(QMainWindow):
             stage1_report=self.current_report,
             coordinate_unit=self.coordinate_unit,
             standoff_mm=parameters["standoff_mm"],
-            sampling_spacing_mm=parameters["sampling_spacing_mm"],
+            sampling_spacing_mm=1.0,
             spray_angle_deg=parameters["spray_angle_deg"],
             sprayer_profile=parameters["sprayer_profile"],
             coating_process=parameters["coating_process"],
@@ -4133,7 +4132,7 @@ class MainWindow(QMainWindow):
                 sampling_spacing=(
                     float(footprint["nominal_track_spacing_mm"])
                     if float(footprint["nominal_track_spacing_mm"]) > 0.0
-                    else float(parameters["sampling_spacing_mm"])
+                    else 1.0
                 ) / mm_per_unit,
                 sprayer_profile=parameters["sprayer_profile"],
                 coating_process=parameters["coating_process"],
