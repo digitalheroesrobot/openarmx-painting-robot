@@ -5199,8 +5199,9 @@ class ProductViewer(QWidget):
         axis_world /= max(float(np.linalg.norm(axis_world)), 1e-12)
 
         cosine = float(np.clip(np.dot(previous_trackball, current_trackball), -1.0, 1.0))
-        angle = math.acos(cosine)
-        if angle <= 1e-10:
+        # Direct-manipulation convention: the viewed model follows the drag direction.
+        angle = -math.acos(cosine)
+        if abs(angle) <= 1e-10:
             return
 
         # Rodrigues rotation updates only the camera around its focal point.
