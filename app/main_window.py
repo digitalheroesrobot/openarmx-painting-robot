@@ -4361,8 +4361,14 @@ class MainWindow(QMainWindow):
             "Control frequency is reserved for future spray-point export."
         )
         self.status_bar.showMessage(
-            f"ROUTE GENERATED | {len(np.unique(result.get('stroke_ids', [])))} STROKES | "
-            f"SPRAY {spray_distance:.1f} mm | CONNECTORS {connector_distance:.1f} mm"
+            (
+                f"ROUTE GENERATED | {len(np.unique(result.get('stroke_ids', [])))} STROKES | "
+                f"SPRAY {spray_distance:.1f} mm | CONNECTORS {connector_distance:.1f} mm"
+            ) if route_ready else
+            (
+                f"{len(np.unique(result.get('stroke_ids', [])))} STROKES RECORDED | "
+                "CONNECT EACH ENDPOINT PAIR TO COMPLETE THE ROUTE"
+            )
         )
         self.route_next_button.setVisible(True)
         self.route_next_button.setEnabled(True)
@@ -4378,21 +4384,35 @@ class MainWindow(QMainWindow):
         route_info = result.get("route_optimization") or {}
         spray_distance = float(result.get("spray_length_mm", 0.0))
         connector_distance = float(result.get("travel_length_mm", 0.0))
+        route_timing = result.get("route_timing") or {}
+        route_ready = route_timing.get("safety_status") == "SAFE"
         self.summary_chart.hide()
         self.summary_section.setText("ROUTE GENERATION")
         self.analysis_summary.setStyleSheet("color: #00E676;")
         self.analysis_summary.setText(
-            "SPRAY ROUTE READY FOR SIMULATION\n\n"
-            f"RECORDED POSES: {len(result.get('nozzle_points_product', [])):,}\n"
-            f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\n"
-            f"TOTAL ROUTE LENGTH: {float(result.get('total_route_distance_mm', spray_distance + connector_distance)):.1f} mm\n"
-            f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
-            f"SPRAY-OFF CONNECTORS: {connector_distance:.1f} mm\n"
-            f"ESTIMATED PAINTING TIME: {self.viewer._format_route_time(float(result.get('estimated_duration_s', 0.0)))}\n"
-            f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\n"
-            f"ROUTING: {route_info.get('algorithm', 'STROKE ORDER RETAINED')}\n\n"
-            "Review the optimized route in the 3D view.\n"
-            f"Simulation duration is calculated at {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s. "
+            (
+                "SPRAY ROUTE READY FOR SIMULATION\n\n"
+                f"TOTAL ROUTE LENGTH: {float(result.get('total_route_distance_mm', spray_distance + connector_distance)):.1f} mm\n"
+                f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
+                f"SPRAY-OFF CONNECTORS: {connector_distance:.1f} mm\n"
+                f"ESTIMATED PAINTING TIME: {self.viewer._format_route_time(float(result.get('estimated_duration_s', 0.0)))}\n"
+            ) if route_ready else
+            (
+                "SPRAY STROKES RECORDED · CONNECTORS REQUIRED\n\n"
+                f"RECORDED POSES: {len(result.get('nozzle_points_product', [])):,}\n"
+                f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\n"
+                f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
+                "SPRAY-OFF CONNECTORS: PENDING MANUAL ENDPOINT CONNECTION\n"
+                "TOTAL ROUTE LENGTH / TIME: AVAILABLE AFTER SAFETY VALIDATION\n"
+            )
+            + f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\n"
+            + f"ROUTING: {route_info.get('algorithm', 'USER DRAWN ORDER PRESERVED')}\n\n"
+            + (
+                "Review the user-ordered spray strokes and connect each end to the next start in the 3D view.\n"
+                if not route_ready else
+                "Review the validated user-ordered route in the 3D view.\n"
+            )
+            + f"Simulation duration is calculated at {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s. "
             "Control frequency is stored for future spray-point export."
         )
 
