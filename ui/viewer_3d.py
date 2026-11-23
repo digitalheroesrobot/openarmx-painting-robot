@@ -512,6 +512,11 @@ class ProductViewer(QWidget):
             self._on_interactive_spray_left_double_click,
             4.0,
         )
+        self._interactive_spray_right_double_click_observer_id = interactor.AddObserver(
+            "RightButtonDoubleClickEvent",
+            self._on_interactive_spray_right_double_click,
+            4.0,
+        )
         self._interactive_spray_middle_press_observer_id = interactor.AddObserver(
             "MiddleButtonPressEvent", self._on_interactive_spray_middle_press, 3.0
         )
@@ -2739,7 +2744,7 @@ class ProductViewer(QWidget):
             (
                 f"SPRAY CURSOR ACTIVE  |  WORK DIST {self._interactive_spray_standoff * (self._get_source_mm_factor() or 1.0):.1f} mm "
                 f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
-                "MOVE: PREVIEW  |  LEFT: PAINT  |  MIDDLE: ANGLE  |  PAINT MODE: RESTORE INPUT"
+                "MOVE: PREVIEW  |  LEFT: PAINT  |  MIDDLE: ANGLE  |  RIGHT DOUBLE-CLICK: SPRAY MODE"
             ),
             position="upper_left",
             font_size=10,
@@ -5164,6 +5169,14 @@ class ProductViewer(QWidget):
         pose = self._interactive_apply_locked_spray_direction(pose)
         self._interactive_begin_spray_stroke()
         self._interactive_update_cursor(pose)
+
+    def _on_interactive_spray_right_double_click(self, interactor, event):
+        """Return to spray input after the camera style processes right double-click."""
+        if not self._interactive_spray_active:
+            return
+        # Run after the current VTK event completes so any camera-style
+        # double-click transition is applied first, then restore spray input.
+        QTimer.singleShot(0, self._return_to_interactive_spray_mode)
 
     def _return_to_interactive_spray_mode(self):
         """Restore spray input after VTK has switched to camera navigation."""
