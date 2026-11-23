@@ -4909,6 +4909,9 @@ def generate_spray_trajectory(
             "surface_sample_spacing_mm": coverage_spacing_mm,
             "robot_waypoint_spacing_mm": robot_waypoint_spacing_mm,
             "robot_waypoint_spacing_coordinate_units": robot_waypoint_spacing_coordinate_units,
+            "robot_waypoint_sampling_basis": (
+                "BASE_TRAVEL_SPEED_DIVIDED_BY_ROBOT_CONTROL_FREQUENCY"
+            ),
             "coverage_spacing_basis": coverage_spacing_basis,
             "nominal_footprint_track_spacing_mm": path_track_spacing_mm,
             "lane_spacing_coordinate_units": path_track_spacing_units,
