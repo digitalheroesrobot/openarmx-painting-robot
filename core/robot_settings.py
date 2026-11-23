@@ -12,7 +12,7 @@ DEFAULT_ROBOT_SETTINGS = {
     "robot_control_frequency_hz": 100.0,
     "min_travel_speed_mm_s": 300.0,
     "max_travel_acceleration_mm_s2": 1000.0,
-    "max_linear_speed_mm_s": 1000.0,
+    "max_linear_speed_mm_s": 2000.0,
     "max_angular_speed_deg_s": 180.0,
     "input_status": "UNVALIDATED_OPERATOR_INPUT",
 }
