@@ -1103,6 +1103,8 @@ class ProductViewer(QWidget):
         self.recorded_path_optimize_button.setVisible(route_page)
         self.recorded_path_replay_button.setVisible(not route_page)
         self.recorded_path_stop_button.setVisible(not route_page)
+        self.recorded_path_color_view_button.setVisible(not route_page)
+        self.interactive_paint_color_view_button.setVisible(not route_page)
         self.recorded_path_time_label.setVisible(True)
         has_route = len(getattr(self, "_interactive_spray_records", [])) >= 2
         self.interactive_recorded_path_panel.setVisible(has_route)
@@ -5405,6 +5407,11 @@ class ProductViewer(QWidget):
                     pose, local_pose, force=bool(force_record)
                 )
                 for sample_pose, sample_local in recorded_samples:
+                    if getattr(self, "_interactive_route_generation_only", False):
+                        # Keep the sampled nozzle pose; simulation alone builds
+                        # per-sample surface patches and computes deposition.
+                        continue
+
                     sample_footprints = _build_spray_footprint_overlay(
                         self.current_mesh,
                         sample_local["nozzle_point"].reshape(1, 3),
@@ -5420,10 +5427,6 @@ class ProductViewer(QWidget):
                         # footprint breaks deposition continuity.
                         self._interactive_spray_last_deposition_timestamp = None
                         self._interactive_spray_previous_nozzle_world = None
-                        continue
-                    if getattr(self, "_interactive_route_generation_only", False):
-                        # The route sample is retained, but coating integration
-                        # is deliberately deferred to simulation replay.
                         continue
 
                     sample_patch = sample_footprints[0][0]
