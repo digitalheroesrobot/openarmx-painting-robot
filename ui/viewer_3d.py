@@ -27,6 +27,7 @@ from core.coating_process import DEFAULT_COATING_PROCESS
 from core.trajectory_export import build_product_pose_trajectory
 from core.work_plane import (
     intersect_ray_with_plane,
+    nozzle_position_from_surface,
     spray_direction_from_surface_normal,
 )
 from core.spray_coverage_optimizer import (
@@ -1859,7 +1860,7 @@ class ProductViewer(QWidget):
                 self._interactive_spray_gun_collision = (
                     self._interactive_check_gun_collision(gun_polydata)
                 )
-                self._interactive_add_replay_cone_visual(pose)
+                self._interactive_add_replay_cone_visual(display_pose)
                 self._interactive_replay_deposition_step(
                     pose, float(sample_duration)
                 )
@@ -5426,8 +5427,11 @@ class ProductViewer(QWidget):
         basis_v /= max(float(np.linalg.norm(basis_v)), 1e-12)
 
         core_hit_segments = []
+        cone_boundary_hits = [None] * 32
         segments_by_band = [[], [], []]
-        ray_count = 8
+        # Dense outer-ring rays recover the visible cone/surface intersection
+        # curve instead of leaving only a few isolated cone-generator lines.
+        ray_count = 32
         radial_fractions = (0.50, 1.0)
         band_boundaries = (
             nominal_standoff,
@@ -5477,6 +5481,8 @@ class ProductViewer(QWidget):
                     if nearest_point is not None:
                         end_local = nearest_point
                         hit_distance = nearest_distance
+                        if radial_fraction >= 0.999:
+                            cone_boundary_hits[ray_index] = nearest_point.copy()
 
                 end_distance = float(np.linalg.norm(end_local - nozzle_local))
                 if hit_distance is not None and hit_distance <= nominal_standoff:
@@ -5525,6 +5531,46 @@ class ProductViewer(QWidget):
                     segments_by_band[band_index].append(
                         (start_point_world, end_point_world)
                     )
+
+        # Draw the actual intersection boundary where the nominal cone
+        # meets the product. Connect only neighboring successful rays so
+        # missed rays do not create artificial lines across open space.
+        boundary_segments = []
+        for ray_index in range(ray_count - 1):
+            first_hit = cone_boundary_hits[ray_index]
+            second_hit = cone_boundary_hits[ray_index + 1]
+            if first_hit is not None and second_hit is not None:
+                first_world = (
+                    self._interactive_spray_transform
+                    @ np.append(first_hit, 1.0)
+                )[:3]
+                second_world = (
+                    self._interactive_spray_transform
+                    @ np.append(second_hit, 1.0)
+                )[:3]
+                boundary_segments.append((first_world, second_world))
+        if all(hit is not None for hit in cone_boundary_hits):
+            first_world = (
+                self._interactive_spray_transform
+                @ np.append(cone_boundary_hits[-1], 1.0)
+            )[:3]
+            second_world = (
+                self._interactive_spray_transform
+                @ np.append(cone_boundary_hits[0], 1.0)
+            )[:3]
+            boundary_segments.append((first_world, second_world))
+        if boundary_segments:
+            boundary_polydata = self._build_line_polydata(boundary_segments)
+            if boundary_polydata is not None:
+                boundary_actor = self.plotter.add_mesh(
+                    boundary_polydata,
+                    color="#FFB74D",
+                    opacity=0.95,
+                    line_width=2.5,
+                    lighting=False,
+                    pickable=False,
+                )
+                self._interactive_spray_live_actors.append(boundary_actor)
 
         if core_hit_segments:
             core_polydata = self._build_line_polydata(core_hit_segments)
@@ -5643,10 +5689,22 @@ class ProductViewer(QWidget):
         self._interactive_spray_last_cursor_update_time = now
         self._interactive_remove_live_actors()
 
-        nozzle = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
-        surface_point = np.asarray(pose["surface_point_world"], dtype=np.float64)
-        direction = np.asarray(pose["spray_direction_world"], dtype=np.float64)
+        # Route samples continue to use the original fixed work-plane pose.
+        # The live gun and spray envelope are rendered from a separate
+        # surface-following pose, keeping the nozzle exactly one standoff away
+        # from the picked surface along the current spray axis.
+        display_pose = self._interactive_copy_input_pose(pose)
+        direction = np.asarray(
+            display_pose["spray_direction_world"], dtype=np.float64
+        )
         direction /= max(float(np.linalg.norm(direction)), 1e-12)
+        display_pose["nozzle_point_world"] = nozzle_position_from_surface(
+            display_pose["surface_point_world"],
+            direction,
+            self._interactive_spray_standoff,
+        )
+        nozzle = np.asarray(display_pose["nozzle_point_world"], dtype=np.float64)
+        surface_point = np.asarray(display_pose["surface_point_world"], dtype=np.float64)
 
         marker = pv.Sphere(
             radius=max(self._interactive_spray_standoff * 0.012, 0.35),
