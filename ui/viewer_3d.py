@@ -1341,20 +1341,21 @@ class ProductViewer(QWidget):
         )
 
     def _interactive_build_safe_connector_path(self, start_record, end_record):
-        """Build and collision-check an exterior spray-OFF route between strokes.
+        """Build a conservative, collision-checked exterior spray-OFF route."""
+        self._interactive_last_connector_failure_reason = None
 
-        The nozzle first retreats along the local surface normal. The retreat
-        reaches an expanded product AABB whose margin accommodates the gun
-        radius and collision clearance. The connector then follows AABB edges,
-        never a straight chord through the product.
-        """
-        if self.current_mesh is None or self._interactive_spray_surface is None:
+        def blocked(reason):
+            self._interactive_last_connector_failure_reason = str(reason)
             return None
+
+        if self.current_mesh is None or self._interactive_spray_surface is None:
+            return blocked("CAD surface or mesh is unavailable")
         mm_factor = self._get_source_mm_factor()
         if mm_factor is None or mm_factor <= 0.0:
-            return None
+            return blocked("source coordinate unit is unknown")
 
         profile = self._interactive_sprayer_profile or {}
+
         def profile_mm(key, default):
             try:
                 value = float(profile.get(key, default))
@@ -1363,20 +1364,29 @@ class ProductViewer(QWidget):
             return max(value, 0.0)
 
         standoff = max(float(self._interactive_spray_standoff), 1e-6)
+        body_length = profile_mm("gun_body_length_mm", 220.0) / mm_factor
+        nozzle_length = profile_mm("nozzle_length_mm", 25.0) / mm_factor
         body_radius = 0.5 * profile_mm("gun_body_diameter_mm", 45.0) / mm_factor
         nozzle_radius = 0.5 * max(
             profile_mm("nozzle_orifice_mm", 1.4) * 2.0,
             profile_mm("gun_body_diameter_mm", 45.0) * 0.18,
         ) / mm_factor
         clearance = profile_mm("gun_collision_clearance_mm", 2.0) / mm_factor
-        margin = max(body_radius, nozzle_radius) + clearance + max(1e-3, standoff * 0.01)
 
+        # Expand by the complete gun length, not only its radius. This keeps
+        # the entire tool envelope outside the product while travelling around
+        # the exterior box, including during orientation changes at corners.
+        margin = (
+            body_length + nozzle_length + max(body_radius, nozzle_radius)
+            + clearance + max(1e-3, standoff * 0.01)
+        )
         bounds = np.asarray(self.current_mesh.bounds, dtype=np.float64)
         if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
-            return None
+            return blocked("product bounds are invalid")
         low = bounds[0] - margin
         high = bounds[1] + margin
         box_center = 0.5 * (low + high)
+
         transform = np.asarray(self._interactive_spray_transform, dtype=np.float64)
         rotation = transform[:3, :3]
         translation = transform[:3, 3]
@@ -1388,51 +1398,70 @@ class ProductViewer(QWidget):
                 return None
             return vector / length
 
-        def product_vector(record, key):
-            value = np.asarray(record.get(key), dtype=np.float64)
-            return unit(value)
+        def record_vector(record, key):
+            try:
+                return unit(np.asarray(record[key], dtype=np.float64))
+            except (KeyError, TypeError, ValueError):
+                return None
 
         start_surface = np.asarray(start_record["surface_point_product"], dtype=np.float64)
         end_surface = np.asarray(end_record["surface_point_product"], dtype=np.float64)
-        start_normal = product_vector(start_record, "surface_normal_product")
-        end_normal = product_vector(end_record, "surface_normal_product")
-        start_direction = product_vector(start_record, "spray_direction_product")
-        end_direction = product_vector(end_record, "spray_direction_product")
+        start_normal = record_vector(start_record, "surface_normal_product")
+        end_normal = record_vector(end_record, "surface_normal_product")
+        start_direction = record_vector(start_record, "spray_direction_product")
+        end_direction = record_vector(end_record, "spray_direction_product")
         if any(value is None for value in (
             start_normal, end_normal, start_direction, end_direction
         )):
-            return None
+            return blocked("stroke endpoint has an invalid surface normal or spray direction")
 
-        def normal_exit(surface, normal):
+        # The outward normal must agree with the direction from the surface
+        # back toward the nozzle. This also handles inconsistent mesh winding.
+        start_outward = unit(-start_direction)
+        end_outward = unit(-end_direction)
+        if np.dot(start_normal, start_outward) < 0.0:
+            start_normal = -start_normal
+        if np.dot(end_normal, end_outward) < 0.0:
+            end_normal = -end_normal
+
+        def exit_point(surface, outward):
             distances = []
             for axis in range(3):
-                if normal[axis] > 1e-10:
-                    distances.append((high[axis] - surface[axis]) / normal[axis])
-                elif normal[axis] < -1e-10:
-                    distances.append((low[axis] - surface[axis]) / normal[axis])
-            positive = [value for value in distances if np.isfinite(value) and value >= 0.0]
+                if outward[axis] > 1e-10:
+                    distances.append((high[axis] - surface[axis]) / outward[axis])
+                elif outward[axis] < -1e-10:
+                    distances.append((low[axis] - surface[axis]) / outward[axis])
+            positive = [
+                value for value in distances
+                if np.isfinite(value) and value >= 0.0
+            ]
             if not positive:
                 return None
-            distance = max(standoff, min(positive) + max(1e-3, margin * 1e-3))
-            return surface + normal * distance
+            distance = min(positive) + max(1e-3, margin * 1e-3)
+            return surface + outward * distance
 
-        start_lift = start_surface + start_normal * standoff
-        end_lift = end_surface + end_normal * standoff
-        start_exit = normal_exit(start_surface, start_normal)
-        end_exit = normal_exit(end_surface, end_normal)
+        start_nozzle = np.asarray(
+            start_record["nozzle_point_product"], dtype=np.float64
+        )
+        end_nozzle = np.asarray(
+            end_record["nozzle_point_product"], dtype=np.float64
+        )
+        start_exit = exit_point(start_surface, start_normal)
+        end_exit = exit_point(end_surface, end_normal)
         if start_exit is None or end_exit is None:
-            return None
+            return blocked("could not project a normal retreat to the exterior box")
 
         corners = np.asarray([
-            [high[0] if (mask & 1) else low[0],
-             high[1] if (mask & 2) else low[1],
-             high[2] if (mask & 4) else low[2]]
+            [
+                high[0] if (mask & 1) else low[0],
+                high[1] if (mask & 2) else low[1],
+                high[2] if (mask & 4) else low[2],
+            ]
             for mask in range(8)
         ], dtype=np.float64)
         start_corner = int(np.argmin(np.linalg.norm(corners - start_exit, axis=1)))
         end_corner = int(np.argmin(np.linalg.norm(corners - end_exit, axis=1)))
 
-        # A deterministic shortest path on the 12 edges of the expanded box.
         corner_indices = [start_corner]
         current = start_corner
         for bit in (1, 2, 4):
@@ -1440,51 +1469,37 @@ class ProductViewer(QWidget):
                 current ^= bit
                 corner_indices.append(current)
 
-        nodes = [
-            np.asarray(start_record["nozzle_point_product"], dtype=np.float64),
-            start_lift,
-            start_exit,
-        ]
+        radial_start = unit(start_exit - box_center)
+        radial_end = unit(end_exit - box_center)
+        radial_corners = [unit(corners[index] - box_center) for index in corner_indices]
+        if radial_start is None or radial_end is None or any(
+            value is None for value in radial_corners
+        ):
+            return blocked("could not determine exterior travel orientation")
+
+        # Duplicate the exit nodes intentionally: they provide zero-translation
+        # orientation changes only after the complete gun has cleared the part.
+        nodes = [start_nozzle, start_exit, start_exit]
         nodes.extend(corners[index] for index in corner_indices)
-        nodes.extend([end_exit, end_lift,
-                      np.asarray(end_record["nozzle_point_product"], dtype=np.float64)])
+        nodes.extend([end_exit, end_exit, end_nozzle])
 
-        start_outward = unit(-start_direction)
-        end_outward = unit(-end_direction)
-        if start_outward is None or end_outward is None:
-            return None
-        outward_nodes = [
-            start_outward,
-            start_normal,
-            unit(start_exit - box_center),
-        ]
-        outward_nodes.extend(unit(corners[index] - box_center) for index in corner_indices)
-        outward_nodes.extend([
-            unit(end_exit - box_center),
-            end_normal,
-            end_outward,
-        ])
-        if any(value is None for value in outward_nodes):
-            return None
+        outward_nodes = [start_outward, start_normal, radial_start]
+        outward_nodes.extend(radial_corners)
+        outward_nodes.extend([radial_end, end_normal, end_outward])
+        if len(nodes) != len(outward_nodes):
+            return blocked("internal connector waypoint mismatch")
 
-        body_diameter_units = max(
-            profile_mm("gun_body_diameter_mm", 45.0) / mm_factor,
-            1e-3,
-        )
         sample_step = max(
-            min(body_diameter_units * 0.20, standoff * 0.05),
+            min(max(body_radius, 1e-3) * 0.20, standoff * 0.05),
             1e-3,
         )
         sampled = []
-        total_segments = len(nodes) - 1
-        for segment_index in range(total_segments):
-            p0 = nodes[segment_index]
-            p1 = nodes[segment_index + 1]
-            o0 = outward_nodes[segment_index]
-            o1 = outward_nodes[segment_index + 1]
+        for segment_index in range(len(nodes) - 1):
+            p0, p1 = nodes[segment_index], nodes[segment_index + 1]
+            o0, o1 = outward_nodes[segment_index], outward_nodes[segment_index + 1]
             length = float(np.linalg.norm(p1 - p0))
             if not np.isfinite(length):
-                return None
+                return blocked("connector contains a non-finite segment")
             steps = max(1, int(math.ceil(length / sample_step)))
             first_step = 0 if segment_index == 0 else 1
             for step_index in range(first_step, steps + 1):
@@ -1492,44 +1507,47 @@ class ProductViewer(QWidget):
                 point_product = p0 * (1.0 - fraction) + p1 * fraction
                 outward = unit(o0 * (1.0 - fraction) + o1 * fraction)
                 if outward is None:
-                    return None
+                    return blocked("connector orientation interpolation failed")
                 direction_product = -outward
                 point_world = rotation @ point_product + translation
                 direction_world = unit(rotation @ direction_product)
                 if direction_world is None:
-                    return None
-                gun_actors, gun_polydata = self._interactive_build_gun_visual(
+                    return blocked("connector produced an invalid world direction")
+
+                _, gun_polydata = self._interactive_build_gun_visual(
                     point_world, direction_world, render=False
                 )
-                collision = self._interactive_check_gun_collision(gun_polydata)
-                if collision:
-                    return None
+                if self._interactive_check_gun_collision(gun_polydata):
+                    return blocked(
+                        f"sprayer envelope collides near connector segment {segment_index + 1}"
+                    )
 
-                if not sampled and step_index == 0 and segment_index == 0:
+                if not sampled and segment_index == 0 and step_index == 0:
                     sampled.append(start_record)
                     continue
                 is_final = (
-                    segment_index == total_segments - 1
-                    and step_index == steps
+                    segment_index == len(nodes) - 2 and step_index == steps
                 )
                 if is_final:
                     sampled.append(end_record)
                     continue
 
-                surface_world = point_world + direction_world * standoff
-                normal_world = unit(rotation @ outward)
                 sampled.append({
                     "nozzle_point_product": point_product.copy(),
-                    "surface_point_product": point_product + direction_product * standoff,
+                    "surface_point_product": (
+                        point_product + direction_product * standoff
+                    ),
                     "surface_normal_product": outward.copy(),
                     "spray_direction_product": direction_product.copy(),
                     "nozzle_point_world": point_world.copy(),
-                    "surface_point_world": surface_world.copy(),
-                    "surface_normal_world": normal_world.copy(),
+                    "surface_point_world": (
+                        point_world + direction_world * standoff
+                    ),
+                    "surface_normal_world": unit(rotation @ outward),
                     "spray_direction_world": direction_world.copy(),
                     "face_index": int(
                         start_record["face_index"]
-                        if segment_index < total_segments // 2
+                        if segment_index < len(nodes) // 2
                         else end_record["face_index"]
                     ),
                     "stroke_id": -1,
@@ -1537,7 +1555,7 @@ class ProductViewer(QWidget):
                 })
 
         if len(sampled) < 2:
-            return None
+            return blocked("connector produced fewer than two waypoints")
         return sampled
 
     def _build_interactive_route_metrics(self, records):
@@ -1578,8 +1596,9 @@ class ProductViewer(QWidget):
         elapsed = 0.0
         for index in range(1, len(records)):
             duration = abs(float(timestamps[index] - timestamps[index - 1]))
-            if not np.isfinite(duration) or duration <= 1e-6:
-                continue
+            if not np.isfinite(duration):
+                duration = 0.0
+            duration = max(duration, 0.01)
             spray_on = bool(segment_ids[index] == segment_ids[index - 1])
             if spray_on:
                 timeline.append({
@@ -1605,6 +1624,10 @@ class ProductViewer(QWidget):
                     "safe_connector_paths": safe_connector_paths,
                     "safety_status": "BLOCKED_NO_COLLISION_FREE_CONNECTOR",
                     "blocked_transition": int(index),
+                    "safety_reason": getattr(
+                        self, "_interactive_last_connector_failure_reason",
+                        "connector planning failed",
+                    ),
                 }
             safe_connector_paths.append(connector_records)
             connector_points = np.asarray(
@@ -1707,8 +1730,11 @@ class ProductViewer(QWidget):
             route_safe and len(after_metrics.get("timeline", [])) > 0
         )
         if not route_safe:
+            reason = str(after_metrics.get(
+                "safety_reason", "No collision-free exterior connector"
+            ))
             self.recorded_path_status_label.setText(
-                "ROUTE BLOCKED · NO COLLISION-FREE EXTERIOR CONNECTOR"
+                "ROUTE BLOCKED · " + reason[:100]
             )
         self._interactive_route_optimization_metrics = {
             "before_spray_distance_mm": before_metrics["spray_distance_mm"],
@@ -2042,8 +2068,11 @@ class ProductViewer(QWidget):
             self._optimize_interactive_recorded_path()
         timing = self._interactive_recorded_replay_timing
         if timing and timing.get("safety_status") not in (None, "SAFE"):
+            reason = str(timing.get(
+                "safety_reason", "No collision-free exterior connector"
+            ))
             self.recorded_path_status_label.setText(
-                "REPLAY BLOCKED · NO SAFE CONNECTOR"
+                "REPLAY BLOCKED · " + reason[:100]
             )
             self.recorded_path_replay_button.setEnabled(False)
             return
