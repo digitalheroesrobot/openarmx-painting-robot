@@ -1141,9 +1141,17 @@ class ProductViewer(QWidget):
         )
 
     def _build_interactive_route_metrics(self, records):
-        """Measure spray strokes and spray-OFF connectors without speed or time assumptions."""
+        """Measure route geometry and replay recorded sample intervals only.
+
+        No robot speed, controller frequency, or planned motion time is inferred.
+        """
         if not records:
-            return {"spray_distance_mm": 0.0, "connector_distance_mm": 0.0}
+            return {
+                "spray_distance_mm": 0.0,
+                "connector_distance_mm": 0.0,
+                "recorded_replay_duration_s": 0.0,
+                "timeline": [],
+            }
         mm_factor = self._get_source_mm_factor()
         if mm_factor is None:
             raise ValueError("A known source coordinate unit is required for route distances.")
@@ -1152,6 +1160,9 @@ class ProductViewer(QWidget):
         )
         segment_ids = np.asarray(
             [item["stroke_id"] for item in records], dtype=np.int64
+        )
+        timestamps = np.asarray(
+            [item.get("timestamp", 0.0) for item in records], dtype=np.float64
         )
         spray_distance = 0.0
         for segment_id in np.unique(segment_ids):
@@ -1168,9 +1179,28 @@ class ProductViewer(QWidget):
             p0 = points[int(ends[index] - 1)]
             p1 = points[int(starts[index + 1])]
             connector_distance += float(np.linalg.norm(p1 - p0) * mm_factor)
+
+        timeline = []
+        elapsed = 0.0
+        for index in range(1, len(records)):
+            duration = abs(float(timestamps[index] - timestamps[index - 1]))
+            if not np.isfinite(duration) or duration <= 1e-6:
+                continue
+            spray_on = bool(segment_ids[index] == segment_ids[index - 1])
+            timeline.append({
+                "start_s": elapsed,
+                "end_s": elapsed + duration,
+                "start_record": records[index - 1],
+                "end_record": records[index],
+                "spray_on": spray_on,
+                "kind": "SPRAY_ON_RECORDED_INTERVAL" if spray_on else "SPRAY_OFF_CONNECTOR",
+            })
+            elapsed += duration
         return {
             "spray_distance_mm": float(spray_distance),
             "connector_distance_mm": float(connector_distance),
+            "recorded_replay_duration_s": float(elapsed),
+            "timeline": timeline,
         }
 
     def _optimize_interactive_recorded_path(self):
@@ -6329,7 +6359,7 @@ class ProductViewer(QWidget):
                     mm_factor = float(self._get_source_mm_factor() or 1.0)
                     route_length = (
                         float(route_timing["spray_distance_mm"])
-                        + float(route_timing["travel_distance_mm"])
+                        + float(route_timing["connector_distance_mm"])
                     ) / mm_factor
             self._refresh_interactive_recorded_path_actor()
 
@@ -6384,19 +6414,19 @@ class ProductViewer(QWidget):
                 float(route_timing["spray_distance_mm"]) if route_timing else 0.0
             ),
             "travel_length_mm": (
-                float(route_timing["travel_distance_mm"]) if route_timing else 0.0
+                float(route_timing["connector_distance_mm"]) if route_timing else 0.0
             ),
             "spray_duration_s": (
-                float(route_timing["spray_time_s"]) if route_timing else 0.0
+                float(route_timing.get("recorded_replay_duration_s", 0.0)) if route_timing else 0.0
             ),
             "travel_duration_s": (
-                float(route_timing["travel_time_s"]) if route_timing else 0.0
+                0.0 if route_timing else 0.0
             ),
             "tool_delay_s": (
-                float(route_timing["tool_delay_s"]) if route_timing else 0.0
+                0.0 if route_timing else 0.0
             ),
             "estimated_duration_s": (
-                float(route_timing["estimated_total_time_s"]) if route_timing else 0.0
+                float(route_timing.get("recorded_replay_duration_s", 0.0)) if route_timing else 0.0
             ),
             "route_timing": (
                 {key: value for key, value in route_timing.items() if key != "timeline"}
