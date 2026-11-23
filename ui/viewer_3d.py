@@ -3981,7 +3981,7 @@ class ProductViewer(QWidget):
         ):
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
-                return
+            return
         if self.current_mesh is None:
             return
         ids = patch.cell_data.get("InteractiveOriginalCellId")
