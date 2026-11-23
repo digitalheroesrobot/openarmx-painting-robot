@@ -2217,6 +2217,23 @@ class ProductViewer(QWidget):
         self._interactive_spray_gun_collision = (
             self._interactive_check_gun_collision(gun_polydata)
         )
+        if self._interactive_spray_gun_collision:
+            # A failed runtime safety check must stop the replay immediately;
+            # never continue moving a colliding gun through the product.
+            self._interactive_recorded_replay_timer.stop()
+            self.recorded_path_replay_button.setEnabled(False)
+            self.recorded_path_stop_button.setEnabled(False)
+            self._interactive_remove_live_actors()
+            self._interactive_recorded_replay_timeline = []
+            self._interactive_recorded_replay_end_times = np.empty(
+                0, dtype=np.float64
+            )
+            self._interactive_recorded_replay_started_at = None
+            self.recorded_path_status_label.setText(
+                "REPLAY HALTED · GUN COLLISION DETECTED"
+            )
+            self.plotter.render()
+            return
         if edge["spray_on"]:
             self._interactive_add_replay_cone_visual(pose)
         else:
