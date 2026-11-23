@@ -465,6 +465,11 @@ class ProductViewer(QWidget):
         self._interactive_spray_painted_actors = []
         self._interactive_spray_face_thickness_um = None
         self._interactive_spray_surface_field = None
+        # Preserve the saved route coating separately from verification replay.
+        # Simulation starts from bare metal, but returning to route editing must
+        # restore the coating state that belongs to the recorded route.
+        self._interactive_saved_route_face_thickness_um = None
+        self._interactive_saved_route_surface_field = None
         self._interactive_spray_texture_actors = {}
         self._interactive_spray_texture_layout = {}
         self._interactive_spray_texture_objects = {}
@@ -1059,6 +1064,25 @@ class ProductViewer(QWidget):
         if page not in ("route", "simulation"):
             raise ValueError("Recorded path page must be 'route' or 'simulation'.")
         route_page = page == "route"
+
+        # Verification replay intentionally uses a temporary bare-product
+        # coating field. When the operator returns to route generation, restore
+        # the saved route coating so ADD / EDIT starts from the actual recorded
+        # state rather than from the replay result or an interrupted replay.
+        if route_page and self._interactive_saved_route_face_thickness_um is not None:
+            self._interactive_spray_face_thickness_um = (
+                self._interactive_saved_route_face_thickness_um.copy()
+            )
+            self._interactive_spray_surface_field = copy.deepcopy(
+                self._interactive_saved_route_surface_field
+            )
+            self._interactive_spray_dirty_face_ids = set()
+            self._interactive_spray_last_deposition_timestamp = None
+            self._interactive_spray_previous_nozzle_world = None
+            self._interactive_spray_last_speed_mm_s = 0.0
+            self._interactive_saved_route_face_thickness_um = None
+            self._interactive_saved_route_surface_field = None
+            self._interactive_refresh_paint_visual(render=False)
         self.recorded_path_optimize_button.setVisible(route_page)
         self.recorded_path_replay_button.setVisible(not route_page)
         self.recorded_path_stop_button.setVisible(not route_page)
@@ -1623,6 +1647,20 @@ class ProductViewer(QWidget):
 
         self._interactive_recorded_replay_timer.stop()
         self._interactive_remove_live_actors()
+
+        # Snapshot the actual route coating before verification resets the
+        # product to an unpainted state. This snapshot is used only when the
+        # operator goes back to route editing.
+        self._interactive_saved_route_face_thickness_um = (
+            self._interactive_spray_face_thickness_um.copy()
+            if self._interactive_spray_face_thickness_um is not None
+            else None
+        )
+        self._interactive_saved_route_surface_field = (
+            copy.deepcopy(self._interactive_spray_surface_field)
+            if isinstance(self._interactive_spray_surface_field, dict)
+            else None
+        )
         self._interactive_reset_coating_for_replay()
         self._interactive_recorded_replay_timeline = timeline
         self._interactive_recorded_replay_end_times = np.asarray(
