@@ -5536,8 +5536,8 @@ class ProductViewer(QWidget):
             self._interactive_check_gun_collision(gun_geometry)
         )
         # Keep the physical spray envelope visible for operator guidance.
-        # Display geometry only: no collision query, footprint integration,
-        # film-thickness update, or coating texture rendering.
+        # This is display geometry only; no deposition or film-thickness
+        # calculation and no coating texture refresh occur during route capture.
         self._interactive_add_replay_cone_visual(pose)
 
         if recorded_samples:
