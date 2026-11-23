@@ -2717,9 +2717,13 @@ class MainWindow(QMainWindow):
     
     
     def _refresh_workflow_ui(self):
+        # Product loading remains available from the top-level LOAD button.
+        # Do not show a redundant LOAD STL PRODUCT action in the right sidebar.
         self.start_analysis_button.setVisible(
             self.active_stage not in (
-                STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION
+                STAGE_PRODUCT_SETUP,
+                STAGE_SPRAY_TRAJECTORY,
+                STAGE_SPRAY_SIMULATION,
             )
         )
 
@@ -2791,13 +2795,9 @@ class MainWindow(QMainWindow):
 
         if self.active_stage == STAGE_PRODUCT_SETUP:
 
-            self.start_analysis_button.setText(
-                "LOAD STL PRODUCT"
-            )
-
-            self.start_analysis_button.setEnabled(
-                not self._operation_running
-            )
+            # Product import is handled by the persistent top-level LOAD button.
+            self.start_analysis_button.setVisible(False)
+            self.start_analysis_button.setEnabled(False)
 
         elif self.active_stage == STAGE_GEOMETRY_INSPECTION:
 
@@ -3045,9 +3045,7 @@ class MainWindow(QMainWindow):
         if self.current_stage2_result is None:
             self.patch_inspection_status_label.hide()
 
-            self.start_analysis_button.setVisible(
-                True
-            )
+            self.start_analysis_button.setVisible(False)
 
             return
 
