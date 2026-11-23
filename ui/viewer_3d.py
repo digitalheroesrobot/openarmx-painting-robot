@@ -2118,7 +2118,9 @@ class ProductViewer(QWidget):
             connector_cache = getattr(self, "_interactive_precomputed_connector_paths", {})
             connector_key = (id(records[index - 1]), id(records[index]))
             connector_records = connector_cache.get(connector_key)
-            if connector_records is None:
+            if connector_records is None and not getattr(
+                self, "_interactive_manual_connector_required", False
+            ):
                 connector_records = self._interactive_build_safe_connector_path(
                     records[index - 1], records[index]
                 )
@@ -2233,7 +2235,12 @@ class ProductViewer(QWidget):
         if current_stroke:
             strokes.append(current_stroke)
 
-        self._interactive_precomputed_connector_paths = {}
+        if not getattr(self, "_interactive_manual_connector_required", False):
+            self._interactive_precomputed_connector_paths = {}
+        else:
+            self._interactive_precomputed_connector_paths = dict(
+                getattr(self, "_interactive_precomputed_connector_paths", {})
+            )
         safe_connector_paths = []
         for stroke_index in range(1, len(strokes)):
             previous_stroke = strokes[stroke_index - 1]
@@ -2241,17 +2248,28 @@ class ProductViewer(QWidget):
             previous_end = previous_stroke[-1]
             next_start = next_stroke[0]
 
-            connector = self._interactive_build_safe_connector_path(
-                previous_end, next_start
+            connector = self._interactive_precomputed_connector_paths.get(
+                (id(previous_end), id(next_start))
             )
+            if connector is None and not getattr(
+                self, "_interactive_manual_connector_required", False
+            ):
+                connector = self._interactive_build_safe_connector_path(
+                    previous_end, next_start
+                )
             if connector is None:
-                reason = str(getattr(
-                    self,
-                    "_interactive_last_connector_failure_reason",
-                    "No collision-free exterior connector exists",
-                ))
+                reason = (
+                    "Manual connector not defined: select the previous stroke end "
+                    "and the next stroke start"
+                    if getattr(self, "_interactive_manual_connector_required", False)
+                    else str(getattr(
+                        self,
+                        "_interactive_last_connector_failure_reason",
+                        "No collision-free exterior connector exists",
+                    ))
+                )
                 self._interactive_spray_route_optimization = {
-                    "algorithm": "USER_DRAWN_ORDER_WITH_SAFE_CONNECTORS",
+                    "algorithm": "USER_DRAWN_ORDER_WITH_MANUAL_STANDOFF_CONNECTORS",
                     "stroke_count": len(strokes),
                     "stroke_order": "PRESERVED",
                     "stroke_directions": "PRESERVED",
@@ -2281,7 +2299,7 @@ class ProductViewer(QWidget):
         # Keep the original record list byte-for-byte in its original order.
         self._interactive_spray_records = records
         self._interactive_spray_route_optimization = {
-            "algorithm": "USER_DRAWN_ORDER_WITH_COLLISION_CHECKED_CONNECTORS",
+            "algorithm": "USER_DRAWN_ORDER_WITH_MANUAL_STANDOFF_CONNECTORS",
             "stroke_count": len(strokes),
             "stroke_order": "PRESERVED",
             "stroke_directions": "PRESERVED",
