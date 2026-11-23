@@ -2457,7 +2457,7 @@ class MainWindow(QMainWindow):
         spray_width_mm = float(footprint.get("width_mm", 0.0))
         track_pitch_mm = float(footprint.get("nominal_track_spacing_mm", 0.0))
         if spray_width_mm > 0.0 and track_pitch_mm > 0.0:
-            point_spacing_mm = min(track_pitch_mm, 0.5 * spray_width_mm)
+            point_spacing_mm = track_pitch_mm
         else:
             point_spacing_mm = float(profile["sampling_spacing_mm"])
         return {
