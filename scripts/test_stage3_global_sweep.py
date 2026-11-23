@@ -38,7 +38,6 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             face_status_labels=self.status.copy(),
             patch_labels=np.asarray(patch_labels, dtype=np.int64),
             standoff_mm=100.0,
-            spray_angle_deg=45.0,
             coordinate_unit="mm",
             sprayer_profile=self.profile.copy(),
         )
@@ -131,7 +130,6 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             "face_status_labels": self.status.copy(),
             "patch_labels": np.asarray([7, 9], dtype=np.int64),
             "standoff_mm": 100.0,
-            "sampling_spacing_mm": 20.0,
             "spray_angle_deg": 45.0,
             "coordinate_unit": "mm",
         }
@@ -207,7 +205,6 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             face_status_labels=self.status.copy(),
             patch_labels=np.asarray([7, 9], dtype=np.int64),
             standoff_mm=100.0,
-            spray_angle_deg=45.0,
             coordinate_unit="mm",
             sprayer_profile=self.profile.copy(),
         )
