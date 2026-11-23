@@ -449,6 +449,7 @@ class ProductViewer(QWidget):
         # Final route poses are generated only after the mouse button is released.
         self._interactive_spray_stroke_input_poses = []
         self._interactive_spray_stroke_preview_actor = None
+        self._interactive_completed_stroke_preview_actors = []
         self._interactive_spray_display_mode = "thickness"
         self._interactive_recorded_replay_index = 0
         self._interactive_recorded_replay_actor = None
@@ -4053,6 +4054,14 @@ class ProductViewer(QWidget):
         self._interactive_spray_locator.SetDataSet(self._interactive_spray_surface)
         self._interactive_spray_locator.BuildLocator()
         self._interactive_spray_latest_pose = None
+        for preview_actor in getattr(
+            self, "_interactive_completed_stroke_preview_actors", []
+        ):
+            try:
+                self.plotter.remove_actor(preview_actor, render=False)
+            except Exception:
+                pass
+        self._interactive_completed_stroke_preview_actors = []
         self._interactive_spray_records = list(existing_records)
         self._interactive_pending_spray_strokes = []
         self._interactive_spray_stroke_input_poses = []
@@ -6961,7 +6970,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_stroke_preview_actor = None
 
     def _interactive_refresh_stroke_preview(self):
-        """Preview the smoothed curve, bridging holes but splitting excluded faces."""
+        """Draw a lightweight smoothed preview without expensive CAD projection."""
         self._interactive_remove_stroke_preview()
         raw = getattr(self, "_interactive_spray_stroke_input_poses", [])
         if not getattr(self, "_interactive_route_generation_only", False) or len(raw) < 2:
@@ -6971,76 +6980,44 @@ class ProductViewer(QWidget):
         current_raw = []
         for item in raw:
             if item.get("_stroke_break", False):
-                if current_raw:
+                if len(current_raw) >= 2:
                     raw_segments.append(current_raw)
-                    current_raw = []
+                current_raw = []
                 continue
             current_raw.append(item)
-        if current_raw:
+        if len(current_raw) >= 2:
             raw_segments.append(current_raw)
 
         curve_segments = []
-        spacing = max(float(self._interactive_spray_sampling_spacing), 1e-6)
-        hole_tolerance = max(spacing * 0.02, 1e-5)
-
         for raw_segment in raw_segments:
-            if len(raw_segment) < 2:
-                continue
             control = [
                 np.asarray(item["surface_point_world"], dtype=np.float64)
                 for item in raw_segment
             ]
-            current_segment = []
-
-            def append_preview_point(candidate):
-                projected = self._interactive_project_smoothed_surface_point(candidate)
-                if projected is None:
-                    current_segment.append(np.asarray(candidate, dtype=np.float64))
-                    return
-                projected_point = np.asarray(
-                    projected["surface_point_world"], dtype=np.float64
-                )
-                projection_distance = float(np.linalg.norm(
-                    projected_point - candidate
-                ))
-                if projection_distance > hole_tolerance:
-                    # Preserve the smoothed route point through the hole.
-                    current_segment.append(np.asarray(candidate, dtype=np.float64))
-                    return
-                if not projected["paintable"]:
-                    if len(current_segment) >= 2:
-                        curve_segments.append(list(current_segment))
-                    current_segment.clear()
-                    return
-                current_segment.append(projected_point)
-
+            curve = []
             for index in range(len(control) - 1):
+                p0 = control[max(index - 1, 0)]
                 p1 = control[index]
                 p2 = control[index + 1]
-                p0 = control[max(index - 1, 0)]
                 p3 = control[min(index + 2, len(control) - 1)]
+                # Keep preview computation bounded; final CAD projection and
+                # exact fixed-spacing sampling happen only on FINISH.
                 count = int(np.clip(
-                    math.ceil(
-                        np.linalg.norm(p2 - p1) / max(spacing * 0.5, 1e-4)
-                    ),
-                    8, 48,
+                    math.ceil(np.linalg.norm(p2 - p1) /
+                              max(float(self._interactive_spray_sampling_spacing), 1e-4)),
+                    4, 12,
                 ))
                 for step in range(count):
-                    t = float(step) / float(count)
-                    candidate = self._interactive_catmull_rom_point(
-                        p0, p1, p2, p3, t
-                    )
-                    append_preview_point(candidate)
-            append_preview_point(control[-1])
-            if len(current_segment) >= 2:
-                curve_segments.append(list(current_segment))
+                    curve.append(self._interactive_catmull_rom_point(
+                        p0, p1, p2, p3, float(step) / float(count)
+                    ))
+            curve.append(control[-1])
+            if len(curve) >= 2:
+                curve_segments.append(np.asarray(curve, dtype=np.float64))
 
         if not curve_segments:
             return
-        points = np.vstack([
-            np.asarray(segment, dtype=np.float64)
-            for segment in curve_segments
-        ])
+        points = np.vstack(curve_segments)
         line_cells = []
         offset = 0
         for segment in curve_segments:
@@ -7056,7 +7033,6 @@ class ProductViewer(QWidget):
             lighting=False,
             pickable=False,
         )
-
 
     def _interactive_project_smoothed_surface_point(self, point_world):
         """Project a smoothed world-space curve point back onto the CAD surface."""
@@ -7533,22 +7509,35 @@ class ProductViewer(QWidget):
         ):
             return
         x, y = interactor.GetEventPosition()
-        # Capture the mouse-up location before closing the stroke. Without this
-        # final sample, the last cursor movement between the final move event
-        # and button release was omitted from the recorded route.
+        route_only = bool(getattr(self, "_interactive_route_generation_only", False))
+
         if self._interactive_spray_recording:
             final_pose = self._interactive_pick_surface_pose(x, y)
             if final_pose is not None and bool(final_pose.get("paintable", True)):
                 final_pose = self._interactive_apply_locked_spray_direction(
                     final_pose
                 )
-                self._interactive_update_cursor(final_pose, force_record=True)
+                if route_only:
+                    # Store the final raw control pose directly. Calling
+                    # _interactive_update_cursor here would rebuild the whole
+                    # gun, collision envelope, spray footprint and cone on
+                    # mouse-up, causing a visible UI stall.
+                    raw = getattr(self, "_interactive_spray_stroke_input_poses", [])
+                    final_point = np.asarray(
+                        final_pose["surface_point_world"], dtype=np.float64
+                    )
+                    if not raw or raw[-1].get("_stroke_break", False) or (
+                        np.linalg.norm(
+                            np.asarray(raw[-1]["surface_point_world"], dtype=np.float64)
+                            - final_point
+                        ) > 1e-8
+                    ):
+                        raw.append(self._interactive_copy_input_pose(final_pose))
+                else:
+                    self._interactive_update_cursor(final_pose, force_record=True)
 
         self._interactive_spray_recording = False
-        if getattr(self, "_interactive_route_generation_only", False):
-            # Mouse-up only queues the raw stroke. Spline projection, fixed-
-            # spacing sampling, full-gun collision checks and connector
-            # optimization are intentionally deferred until FINISH SPRAY PATH.
+        if route_only:
             raw_stroke = list(
                 getattr(self, "_interactive_spray_stroke_input_poses", [])
             )
@@ -7559,23 +7548,43 @@ class ProductViewer(QWidget):
                     self._interactive_pending_spray_strokes = pending
                 pending.append(raw_stroke)
             self._interactive_spray_stroke_input_poses = []
+
+            # Promote the current live preview to a completed preview. It stays
+            # visible while the operator draws subsequent independent strokes.
+            preview_actor = getattr(
+                self, "_interactive_spray_stroke_preview_actor", None
+            )
+            if preview_actor is not None:
+                completed = getattr(
+                    self, "_interactive_completed_stroke_preview_actors", None
+                )
+                if completed is None:
+                    completed = []
+                    self._interactive_completed_stroke_preview_actors = completed
+                completed.append(preview_actor)
+                self._interactive_spray_stroke_preview_actor = None
+
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_sampling_previous_pose = None
         self._interactive_spray_sampling_distance_accumulator = 0.0
-
-        # One angle adjustment applies to exactly one completed paint stroke.
-        # Restore the standard cone direction immediately after the stroke.
         self._interactive_spray_angle_x_deg = 0.0
         self._interactive_spray_angle_y_deg = 0.0
         self._interactive_spray_angle_anchor_pose = None
         self._interactive_spray_locked_direction_world = None
         self._interactive_spray_latest_pose = None
-        standard_pose = self._interactive_pick_surface_pose(x, y)
-        if standard_pose is not None:
-            self._interactive_update_cursor(standard_pose)
-        else:
+
+        if route_only:
+            # Avoid the second expensive cursor/cone rebuild on mouse-up.
+            self._interactive_remove_live_actors()
+            self._interactive_update_surface_angle_indicator(None)
             self.plotter.render()
+        else:
+            standard_pose = self._interactive_pick_surface_pose(x, y)
+            if standard_pose is not None:
+                self._interactive_update_cursor(standard_pose)
+            else:
+                self.plotter.render()
 
     def _on_interactive_spray_leave(self, interactor, event):
         # Never keep spraying after the pointer leaves the 3D viewport.
@@ -7623,6 +7632,18 @@ class ProductViewer(QWidget):
             )
         if finalized_sample_count:
             self._refresh_interactive_recorded_path_actor()
+
+        # Temporary per-stroke previews are replaced by the exact finalized
+        # spray-point route once FINISH has completed its projection step.
+        for preview_actor in getattr(
+            self, "_interactive_completed_stroke_preview_actors", []
+        ):
+            try:
+                self.plotter.remove_actor(preview_actor, render=False)
+            except Exception:
+                pass
+        self._interactive_completed_stroke_preview_actors = []
+        self._interactive_remove_stroke_preview()
 
         self._interactive_spray_active = False
         self._interactive_spray_last_deposition_timestamp = None
