@@ -92,10 +92,11 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
             merged.update(deepcopy(item))
             # This simplified workflow supports circular cone spray only.
             # A legacy flat-fan angle is not a measured cone angle.
+            profile_migrated = False
             if str(item.get("pattern_type", "round_cone")) != "round_cone":
                 merged["spray_cone_angle_deg"] = 50.0
+                profile_migrated = True
             merged["pattern_type"] = "round_cone"
-            profile_migrated = False
             # Upgrade only the former generic defaults. Preserve non-default
             # values that may already have been measured by the user.
             try:
@@ -116,6 +117,7 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
             # Older local profiles stored these dimensions as 0.0 ("not
             # specified"). Upgrade only missing/zero values; preserve every
             # positive user-entered measurement.
+            dimensions_migrated = False
             for dimension_key in (
                 "gun_body_length_mm",
                 "gun_body_diameter_mm",
@@ -131,11 +133,14 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
                     )
                     migrated = True
                     profile_migrated = True
+                    dimensions_migrated = True
 
-            if profile_migrated and (
+            if dimensions_migrated and (
                 not item.get("gun_body_dimensions_are_estimate", False)
             ):
                 merged["gun_body_dimensions_are_estimate"] = True
+            if profile_migrated:
+                migrated = True
             valid.append(merged)
 
         if not any(
