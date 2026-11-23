@@ -88,21 +88,27 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
             # This application supports circular-cone spray only.
             # Preserve the operator-entered angle when migrating older profiles.
             merged["pattern_type"] = "round_cone"
-            legacy_keys = (
-                "fan_reference_distance_mm",
-                "fan_thickness_at_reference_mm",
-                "fan_air_pressure_bar",
-                "sampling_spacing_mm",
-                "travel_speed_mm_s",
-                "min_travel_speed_mm_s",
-                "max_travel_acceleration_mm_s2",
-            )
-            if item.get("pattern_type") != "round_cone" or any(
-                key in item for key in legacy_keys
+            # This application has one supported spray geometry:
+            # a circular cone. Strip obsolete fan-pattern and motion-spacing
+            # fields from imported profiles; neither can affect Stage 3.
+            obsolete_profile_keys = [
+                key for key in merged
+                if key.startswith("fan_")
+                or key in {
+                    "sampling_spacing_mm",
+                    "travel_speed_mm_s",
+                    "min_travel_speed_mm_s",
+                    "max_travel_acceleration_mm_s2",
+                }
+            ]
+            if (
+                item.get("pattern_type") != "round_cone"
+                or obsolete_profile_keys
             ):
                 migrated = True
-            for key in legacy_keys:
+            for key in obsolete_profile_keys:
                 merged.pop(key, None)
+            merged["pattern_type"] = "round_cone"
 
             # Older local profiles stored these dimensions as 0.0 ("not
             # specified"). Upgrade only missing/zero values; preserve every
