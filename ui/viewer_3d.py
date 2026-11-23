@@ -1343,10 +1343,10 @@ class ProductViewer(QWidget):
             return
         QMessageBox.information(
             self, "Trajectory exported",
-            "Product-frame trajectory exported successfully.\\n\\n"
-            f"CSV: {csv_path}\\n"
-            f"Manifest: {csv_path.with_suffix('.json')}\\n"
-            f"Rows: {len(trajectory)}\\n"
+            "Product-frame trajectory exported successfully.\n\n"
+            f"CSV: {csv_path}\n"
+            f"Manifest: {csv_path.with_suffix('.json')}\n"
+            f"Rows: {len(trajectory)}\n"
             f"Planned duration: {self._format_route_time(metadata['duration_s'])}",
         )
         self.recorded_path_status_label.setText(
