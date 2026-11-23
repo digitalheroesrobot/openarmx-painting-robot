@@ -319,6 +319,7 @@ class ProductViewer(QWidget):
 
     pose_confirmed = Signal(dict)
     patch_selected = Signal(int)
+    route_readiness_changed = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2207,6 +2208,7 @@ class ProductViewer(QWidget):
         if not records:
             self.recorded_path_status_label.setText("No recorded path")
             self.recorded_path_replay_button.setEnabled(False)
+            self.route_readiness_changed.emit(False)
             return False
 
         mm_factor = self._get_source_mm_factor()
@@ -2215,6 +2217,7 @@ class ProductViewer(QWidget):
                 "ROUTE BLOCKED · UNKNOWN SOURCE UNIT"
             )
             self.recorded_path_replay_button.setEnabled(False)
+            self.route_readiness_changed.emit(False)
             return False
 
         # Split only at actual stroke-ID transitions. Do not sort IDs: the
@@ -2291,6 +2294,7 @@ class ProductViewer(QWidget):
                 }
                 self._interactive_safe_connector_paths = safe_connector_paths
                 self.recorded_path_replay_button.setEnabled(False)
+                self.route_readiness_changed.emit(False)
                 self.recorded_path_status_label.setText(
                     "ROUTE BLOCKED · " + reason[:100]
                 )
@@ -2352,6 +2356,7 @@ class ProductViewer(QWidget):
             "safe_connector_count": int(len(self._interactive_safe_connector_paths)),
         }
         self._refresh_interactive_recorded_path_actor()
+        self.route_readiness_changed.emit(bool(route_safe))
         return route_safe
 
     def _interactive_stroke_ranges(self):
