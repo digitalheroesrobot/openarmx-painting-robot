@@ -53,7 +53,6 @@ from stages.spray_footprint_optimizer import optimize_redundant_spray_points
 # ------------------------------------------------------------
 
 DEFAULT_STANDOFF_MM = 200.0
-DEFAULT_SPRAY_ANGLE_DEG = 0.0
 
 MIN_STANDOFF_MM = 50.0
 MAX_STANDOFF_MM = 500.0
@@ -61,7 +60,6 @@ MAX_STANDOFF_MM = 500.0
 MAX_TOTAL_SAMPLES = 250_000
 
 NORMAL_EPSILON = 1e-12
-SUPPORTED_SPRAY_ANGLE_DEG = 0.0
 
 # Conversion factor: millimeters per one STL coordinate unit.
 MM_PER_UNIT = {
@@ -247,28 +245,16 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
-def _validate_parameters(
-    standoff_mm: float,
-    spray_angle_deg: float,
-) -> tuple[float, float]:
-
+def _validate_parameters(standoff_mm: float) -> float:
     standoff = _safe_float(standoff_mm)
-    angle = _safe_float(spray_angle_deg)
-
     if standoff is None:
         raise ValueError("Standoff distance must be finite.")
-    if angle is None:
-        raise ValueError("Spray angle must be finite.")
-
     if not MIN_STANDOFF_MM <= standoff <= MAX_STANDOFF_MM:
         raise ValueError(
             f"Standoff must be between {MIN_STANDOFF_MM:.1f} "
             f"and {MAX_STANDOFF_MM:.1f} mm."
         )
-    if not 0.0 < angle <= 150.0:
-        raise ValueError("Spray angle must be greater than 0 and at most 150 degrees.")
-
-    return standoff, angle
+    return standoff
 
 
 def _calculate_spray_footprint(
@@ -3998,7 +3984,6 @@ def generate_spray_trajectory(
     face_status_labels: np.ndarray,
     patch_labels: np.ndarray,
     standoff_mm: float = DEFAULT_STANDOFF_MM,
-    spray_angle_deg: float = DEFAULT_SPRAY_ANGLE_DEG,
     stage1_report: dict | None = None,
     coordinate_unit: str | None = None,
     sprayer_profile: dict | None = None,
@@ -4009,10 +3994,7 @@ def generate_spray_trajectory(
     if not isinstance(mesh, trimesh.Trimesh):
         raise TypeError("mesh must be a trimesh.Trimesh object.")
 
-    standoff_mm, spray_angle_deg = _validate_parameters(
-        standoff_mm,
-        spray_angle_deg,
-    )
+    standoff_mm = _validate_parameters(standoff_mm)
 
     product_transform_matrix = _validate_product_transform(product_transform)
 
@@ -4036,11 +4018,11 @@ def generate_spray_trajectory(
     profile_for_path = (
         dict(sprayer_profile) if isinstance(sprayer_profile, dict) else {}
     )
-    profile_for_path.setdefault("spray_cone_angle_deg", spray_angle_deg)
     spray_footprint = _calculate_spray_footprint(
         profile_for_path,
         standoff_mm,
     )
+    spray_angle_deg = float(spray_footprint["included_angle_deg"])
     path_spray_width_mm = float(spray_footprint["width_mm"])
     path_track_spacing_mm = float(
         spray_footprint["nominal_track_spacing_mm"]
@@ -4823,7 +4805,6 @@ def execute_stage3(
     face_status_labels: np.ndarray | None = None,
     patch_labels: np.ndarray | None = None,
     standoff_mm: float = DEFAULT_STANDOFF_MM,
-    spray_angle_deg: float = DEFAULT_SPRAY_ANGLE_DEG,
     stage1_report: dict | None = None,
     coordinate_unit: str | None = None,
     sprayer_profile: dict | None = None,
@@ -4856,7 +4837,6 @@ def execute_stage3(
         face_status_labels=face_status_labels,
         patch_labels=patch_labels,
         standoff_mm=standoff_mm,
-        spray_angle_deg=spray_angle_deg,
         stage1_report=stage1_report,
         coordinate_unit=coordinate_unit,
         sprayer_profile=sprayer_profile,
