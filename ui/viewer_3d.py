@@ -5163,9 +5163,9 @@ class ProductViewer(QWidget):
         # Use the product's local axes so camera orbit directions remain
         # intuitive relative to the CAD object, even after a product pose change.
         product_matrix = self._actor_matrix_array()
-        local_x = product_matrix[:3, 0].astype(np.float64)
+        local_y = product_matrix[:3, 1].astype(np.float64)
         local_z = product_matrix[:3, 2].astype(np.float64)
-        local_x /= max(float(np.linalg.norm(local_x)), 1e-12)
+        local_y /= max(float(np.linalg.norm(local_y)), 1e-12)
         local_z /= max(float(np.linalg.norm(local_z)), 1e-12)
 
         def rotate_vector(vector, axis, angle_rad):
@@ -5182,12 +5182,12 @@ class ProductViewer(QWidget):
         yaw = -dx * sensitivity
         pitch = dy * sensitivity
 
-        # Horizontal drag orbits around product-local Z; vertical drag orbits
-        # around product-local X. Both camera position and view-up are rotated.
+        # Horizontal drag rotates around product-local Z; vertical drag
+        # rotates around product-local Y. The product itself is never moved.
         offset = rotate_vector(offset, local_z, yaw)
         view_up = rotate_vector(view_up, local_z, yaw)
-        offset = rotate_vector(offset, local_x, pitch)
-        view_up = rotate_vector(view_up, local_x, pitch)
+        offset = rotate_vector(offset, local_y, pitch)
+        view_up = rotate_vector(view_up, local_y, pitch)
 
         camera.SetPosition(*(focal_point + offset).tolist())
         camera.SetFocalPoint(*focal_point.tolist())
