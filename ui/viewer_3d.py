@@ -2294,6 +2294,7 @@ class ProductViewer(QWidget):
                 }
                 self._interactive_safe_connector_paths = safe_connector_paths
                 self.recorded_path_replay_button.setEnabled(False)
+                self.recorded_path_export_button.setEnabled(False)
                 self.route_readiness_changed.emit(False)
                 self.recorded_path_status_label.setText(
                     "ROUTE BLOCKED · " + reason[:100]
@@ -2326,6 +2327,7 @@ class ProductViewer(QWidget):
         self.recorded_path_replay_button.setEnabled(
             route_safe and len(metrics.get("timeline", [])) > 0
         )
+        self.recorded_path_export_button.setEnabled(route_safe)
 
         speed = float(
             self._robot_motion_settings.get("painting_speed_mm_s", 150.0)
@@ -2833,6 +2835,10 @@ class ProductViewer(QWidget):
         spray_point_data = pv.PolyData(np.asarray([
             item["nozzle_point_world"] for item in records
         ], dtype=np.float64))
+        spray_point_data.verts = np.column_stack((
+            np.ones(len(records), dtype=np.int64),
+            np.arange(len(records), dtype=np.int64),
+        )).ravel()
         spray_point_actor = self.plotter.add_mesh(
             spray_point_data,
             color="#FFD166",
@@ -2882,8 +2888,8 @@ class ProductViewer(QWidget):
                 )
                 actor = self.plotter.add_mesh(
                     arrow_actor,
-                    color="#FFF0B8",
-                    opacity=0.72,
+                    color="#D9E7C3",
+                    opacity=0.32,
                     lighting=False,
                     pickable=False,
                 )
@@ -4801,6 +4807,8 @@ class ProductViewer(QWidget):
         # been sprayed and add only the missing coverage.
         preserve_existing = bool(resume_existing)
         existing_records = list(self._interactive_spray_records) if preserve_existing else []
+        if getattr(self, "_interactive_manual_connector_mode", False):
+            self._toggle_manual_connector_mode(False)
         self._interactive_manual_connector_required = True
         self._interactive_manual_connector_mode = False
         self._interactive_manual_connector_selection = []
