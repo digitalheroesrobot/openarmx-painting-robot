@@ -40,6 +40,22 @@ class CircularSprayFootprintTests(unittest.TestCase):
             places=9,
         )
 
+    def test_active_profile_values_produce_expected_point_spacing(self):
+        profile = {
+            "pattern_type": "round_cone",
+            "spray_cone_angle_deg": 74.0,
+            "overlap_percent": 50.0,
+        }
+        result = _calculate_spray_footprint(profile, standoff_mm=180.0)
+        expected_diameter = 2.0 * 180.0 * math.tan(math.radians(37.0))
+        self.assertAlmostEqual(result["diameter_mm"], expected_diameter, places=9)
+        self.assertAlmostEqual(
+            result["nominal_point_spacing_mm"],
+            expected_diameter * 0.5,
+            places=9,
+        )
+        self.assertAlmostEqual(result["nominal_point_spacing_mm"], 135.6397290185, places=8)
+
     def test_invalid_overlap_is_rejected(self):
         with self.assertRaises(ValueError):
             _calculate_spray_footprint(
