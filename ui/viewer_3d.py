@@ -5138,20 +5138,35 @@ class ProductViewer(QWidget):
         self._interactive_camera_pan_last_position = None
 
     def _orbit_camera_from_right_drag(self, interactor):
-        """Orbit the camera around the product without changing product pose."""
+        """Rotate the camera freely with a virtual trackball (3 rotational DOF)."""
         if not self._interactive_camera_pan_dragging:
             return
+
         current = tuple(int(value) for value in interactor.GetEventPosition())
         previous = self._interactive_camera_pan_last_position
         self._interactive_camera_pan_last_position = current
-        if previous is None:
+        if previous is None or current == previous:
             return
 
-        dx = float(current[0] - previous[0])
-        dy = float(current[1] - previous[1])
-        if abs(dx) + abs(dy) < 1e-9:
-            return
+        viewport_width, viewport_height = self.plotter.render_window.GetSize()
+        viewport_width = max(int(viewport_width), 1)
+        viewport_height = max(int(viewport_height), 1)
+        trackball_radius = 0.5 * float(min(viewport_width, viewport_height))
 
+        def trackball_vector(point):
+            # VTK event coordinates use a bottom-left origin.
+            x = (float(point[0]) - 0.5 * viewport_width) / trackball_radius
+            y = (float(point[1]) - 0.5 * viewport_height) / trackball_radius
+            radius_sq = x * x + y * y
+            if radius_sq <= 0.5:
+                z = math.sqrt(max(1.0 - radius_sq, 0.0))
+            else:
+                z = 0.5 / math.sqrt(radius_sq)
+            vector = np.array([x, y, z], dtype=np.float64)
+            return vector / max(float(np.linalg.norm(vector)), 1e-12)
+
+        previous_trackball = trackball_vector(previous)
+        current_trackball = trackball_vector(current)
         camera = self.plotter.camera
         position = np.asarray(camera.GetPosition(), dtype=np.float64)
         focal_point = np.asarray(camera.GetFocalPoint(), dtype=np.float64)
@@ -5160,34 +5175,45 @@ class ProductViewer(QWidget):
         if float(np.linalg.norm(offset)) <= 1e-12:
             return
 
-        # Use the product's local axes so camera orbit directions remain
-        # intuitive relative to the CAD object, even after a product pose change.
-        product_matrix = self._actor_matrix_array()
-        local_y = product_matrix[:3, 1].astype(np.float64)
-        local_z = product_matrix[:3, 2].astype(np.float64)
-        local_y /= max(float(np.linalg.norm(local_y)), 1e-12)
-        local_z /= max(float(np.linalg.norm(local_z)), 1e-12)
+        view_direction = -offset / np.linalg.norm(offset)
+        view_up /= max(float(np.linalg.norm(view_up)), 1e-12)
+        view_right = np.cross(view_direction, view_up)
+        right_length = float(np.linalg.norm(view_right))
+        if right_length <= 1e-12:
+            return
+        view_right /= right_length
+        view_up = np.cross(view_right, view_direction)
+        view_up /= max(float(np.linalg.norm(view_up)), 1e-12)
 
-        def rotate_vector(vector, axis, angle_rad):
-            axis = axis / max(float(np.linalg.norm(axis)), 1e-12)
-            cosine = math.cos(angle_rad)
-            sine = math.sin(angle_rad)
-            return (
-                vector * cosine
-                + np.cross(axis, vector) * sine
-                + axis * float(np.dot(axis, vector)) * (1.0 - cosine)
-            )
+        # Convert the trackball rotation axis from camera coordinates to world.
+        axis_camera = np.cross(previous_trackball, current_trackball)
+        axis_length = float(np.linalg.norm(axis_camera))
+        if axis_length <= 1e-12:
+            return
+        axis_camera /= axis_length
+        axis_world = (
+            axis_camera[0] * view_right
+            + axis_camera[1] * view_up
+            + axis_camera[2] * view_direction
+        )
+        axis_world /= max(float(np.linalg.norm(axis_world)), 1e-12)
 
-        sensitivity = math.radians(0.5)
-        yaw = -dx * sensitivity
-        pitch = dy * sensitivity
+        cosine = float(np.clip(np.dot(previous_trackball, current_trackball), -1.0, 1.0))
+        angle = math.acos(cosine)
+        if angle <= 1e-10:
+            return
 
-        # Horizontal drag rotates around product-local Z; vertical drag
-        # rotates around product-local Y. The product itself is never moved.
-        offset = rotate_vector(offset, local_z, yaw)
-        view_up = rotate_vector(view_up, local_z, yaw)
-        offset = rotate_vector(offset, local_y, pitch)
-        view_up = rotate_vector(view_up, local_y, pitch)
+        # Rodrigues rotation updates only the camera around its focal point.
+        offset = (
+            offset * math.cos(angle)
+            + np.cross(axis_world, offset) * math.sin(angle)
+            + axis_world * float(np.dot(axis_world, offset)) * (1.0 - math.cos(angle))
+        )
+        view_up = (
+            view_up * math.cos(angle)
+            + np.cross(axis_world, view_up) * math.sin(angle)
+            + axis_world * float(np.dot(axis_world, view_up)) * (1.0 - math.cos(angle))
+        )
 
         camera.SetPosition(*(focal_point + offset).tolist())
         camera.SetFocalPoint(*focal_point.tolist())
