@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Numerical tests for coating process parameters and film-volume conservation."""
 from __future__ import annotations
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -19,7 +19,7 @@ from core.coating_process import (
 
 
 class CoatingProcessTests(unittest.TestCase):
-    def test_default_process_is_complete_but_explicitly_uncalibrated(self):
+    def test_default_process_is_complete_and_has_no_robot_motion_fields(self):
         status, missing = coating_model_readiness(DEFAULT_COATING_PROCESS)
         self.assertEqual(status, "INPUTS_READY_UNCALIBRATED")
         self.assertEqual(missing, [])
@@ -27,12 +27,27 @@ class CoatingProcessTests(unittest.TestCase):
         self.assertEqual(DEFAULT_COATING_PROCESS["fluid_flow_ml_min"], 300.0)
         self.assertEqual(DEFAULT_COATING_PROCESS["transfer_efficiency_percent"], 50.0)
         self.assertEqual(DEFAULT_COATING_PROCESS["volume_solids_percent"], 50.0)
-        self.assertEqual(DEFAULT_COATING_PROCESS["base_travel_speed_mm_s"], 500.0)
+        process = validate_coating_process(DEFAULT_COATING_PROCESS)
+        for key in (
+            "base_travel_speed_mm_s", "robot_control_frequency_hz",
+            "min_travel_speed_mm_s", "max_travel_acceleration_mm_s2",
+            "max_linear_speed_mm_s", "max_angular_speed_deg_s",
+        ):
+            self.assertNotIn(key, process)
+
+    def test_legacy_robot_fields_are_discarded_not_validated_as_process_inputs(self):
+        values = dict(DEFAULT_COATING_PROCESS)
+        values.update({
+            "base_travel_speed_mm_s": 125.0,
+            "robot_control_frequency_hz": 100.0,
+            "min_travel_speed_mm_s": 900.0,
+            "max_travel_acceleration_mm_s2": -1.0,
+        })
+        process = validate_coating_process(values)
+        self.assertNotIn("base_travel_speed_mm_s", process)
+        self.assertNotIn("min_travel_speed_mm_s", process)
 
     def test_uniform_film_volume_conservation_reference(self):
-        # 60 ml/min for 1 second, 50% transfer, 40% solids, over 100,000 mm².
-        # Dry volume = 60/60 * 1000 * .5 * .4 = 200 mm³.
-        # Thickness = 200/100000 mm = 2 µm.
         result = uniform_dry_film_increment_um(60.0, 1.0, 0.5, 0.4, 100000.0)
         self.assertAlmostEqual(result, 2.0, places=12)
 
@@ -52,12 +67,6 @@ class CoatingProcessTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             uniform_dry_film_increment_um(10, 1, 0.5, 0.5, 0)
 
-    def test_minimum_speed_cannot_exceed_base_speed(self):
-        values = dict(DEFAULT_COATING_PROCESS)
-        values["min_travel_speed_mm_s"] = 600
-        with self.assertRaises(ValueError):
-            validate_coating_process(values)
-
     def test_save_and_load_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "coating_process.json"
@@ -68,8 +77,7 @@ class CoatingProcessTests(unittest.TestCase):
             self.assertEqual(loaded["fluid_flow_ml_min"], 240.0)
             self.assertEqual(loaded["number_of_coats"], 1)
 
-    def test_old_factory_process_file_is_upgraded_without_overwriting_motion_settings(self):
-        import json
+    def test_legacy_factory_robot_fields_are_removed_during_upgrade(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "coating_process.json"
             old_factory = {
@@ -85,61 +93,30 @@ class CoatingProcessTests(unittest.TestCase):
                 "spray_on_delay_ms": 12.0,
                 "spray_off_delay_ms": 15.0,
             }
-            path.write_text(
-                json.dumps({"schema_version": 1, "process": old_factory}),
-                encoding="utf-8",
-            )
+            path.write_text(json.dumps({"schema_version": 1, "process": old_factory}), encoding="utf-8")
             loaded = load_coating_process(path)
             self.assertEqual(loaded["target_dry_film_thickness_um"], 50.0)
             self.assertEqual(loaded["fluid_flow_ml_min"], 300.0)
-            self.assertEqual(loaded["transfer_efficiency_percent"], 50.0)
-            self.assertEqual(loaded["volume_solids_percent"], 50.0)
-            self.assertEqual(loaded["base_travel_speed_mm_s"], 125.0)
-            self.assertEqual(loaded["min_travel_speed_mm_s"], 35.0)
             self.assertEqual(loaded["number_of_coats"], 2)
             self.assertEqual(loaded["spray_on_delay_ms"], 12.0)
             self.assertEqual(loaded["spray_off_delay_ms"], 15.0)
-            loaded["fluid_flow_ml_min"] = 275.0
-            save_coating_process(path, loaded)
-            again = load_coating_process(path)
-            self.assertEqual(again["fluid_flow_ml_min"], 275.0)
+            self.assertNotIn("base_travel_speed_mm_s", loaded)
+            self.assertNotIn("min_travel_speed_mm_s", loaded)
 
-    def test_untouched_legacy_factory_motion_defaults_are_upgraded(self):
-        import json
+    def test_legacy_sprayer_flow_is_migrated_but_robot_settings_are_not(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "coating_process.json"
-            old_factory = {
-                "name": "default coating process",
-                "target_dry_film_thickness_um": 60.0,
-                "fluid_flow_ml_min": 0.0,
-                "transfer_efficiency_percent": 0.0,
-                "volume_solids_percent": 0.0,
-                "base_travel_speed_mm_s": 150.0,
-                "min_travel_speed_mm_s": 40.0,
-                "max_travel_acceleration_mm_s2": 500.0,
-                "number_of_coats": 1,
-                "spray_on_delay_ms": 0.0,
-                "spray_off_delay_ms": 0.0,
+            legacy = {
+                "travel_speed_mm_s": 125.0,
+                "min_travel_speed_mm_s": 35.0,
+                "max_travel_acceleration_mm_s2": 400.0,
+                "fluid_flow_ml_min": 180.0,
             }
-            path.write_text(
-                json.dumps({"schema_version": 1, "process": old_factory}),
-                encoding="utf-8",
-            )
-            loaded = load_coating_process(path)
-            self.assertEqual(loaded["base_travel_speed_mm_s"], 500.0)
-            self.assertEqual(loaded["min_travel_speed_mm_s"], 300.0)
-            self.assertEqual(loaded["max_travel_acceleration_mm_s2"], 1000.0)
-
-    def test_legacy_sprayer_settings_are_migrated_once(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "coating_process.json"
-            legacy = {"travel_speed_mm_s": 125.0, "min_travel_speed_mm_s": 35.0, "max_travel_acceleration_mm_s2": 400.0, "fluid_flow_ml_min": 180.0}
             loaded = load_coating_process(path, legacy)
-            self.assertEqual(loaded["base_travel_speed_mm_s"], 125.0)
             self.assertEqual(loaded["fluid_flow_ml_min"], 180.0)
-            # Existing process file is authoritative on subsequent loads.
+            self.assertNotIn("base_travel_speed_mm_s", loaded)
             again = load_coating_process(path, {"travel_speed_mm_s": 900.0})
-            self.assertEqual(again["base_travel_speed_mm_s"], 125.0)
+            self.assertEqual(again["fluid_flow_ml_min"], 180.0)
 
 
 if __name__ == "__main__":
