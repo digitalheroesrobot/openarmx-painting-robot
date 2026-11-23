@@ -9554,10 +9554,12 @@ class ProductViewer(QWidget):
                 cmap=CLASSIFICATION_COLORS,
                 clim=(-0.5, 3.5),
                 categories=True,
-                show_edges=True,
-                edge_color="#182C38",
-                line_width=1,
-                smooth_shading=False,
+                show_edges=False,
+                smooth_shading=True,
+                ambient=0.28,
+                diffuse=0.72,
+                specular=0.32,
+                specular_power=32,
                 show_scalar_bar=True,
                 scalar_bar_args={
                     "title": "Surface Status",
@@ -9613,10 +9615,12 @@ class ProductViewer(QWidget):
                 cmap=PATCH_COLORS,
                 categories=True,
                 opacity="Surface Opacity",
-                show_edges=True,
-                edge_color="#182C38",
-                line_width=1,
-                smooth_shading=False,
+                show_edges=False,
+                smooth_shading=True,
+                ambient=0.28,
+                diffuse=0.72,
+                specular=0.32,
+                specular_power=32,
                 show_scalar_bar=True,
                 scalar_bar_args={
                     "title": "Surface Patches",
@@ -9832,27 +9836,27 @@ class ProductViewer(QWidget):
                 else:
                     self._pose_actor = self.plotter.add_mesh(
                         self.current_mesh,
-                        color="#A8A8A8",
+                        color="#AFC2D0",
                         opacity=1.0,
                         show_edges=False,
-                        edge_color="#555555",
-                        line_width=1.0,
-                        smooth_shading=False,
-                        specular=0.35,
-                        specular_power=25,
+                        smooth_shading=True,
+                        ambient=0.24,
+                        diffuse=0.76,
+                        specular=0.42,
+                        specular_power=38,
                         pickable=True,
                     )
             else:
                 self._pose_actor = self.plotter.add_mesh(
                     self.current_mesh,
-                    color="#A8A8A8",
+                    color="#AFC2D0",
                     opacity=1.0,
                     show_edges=False,
-                    edge_color="#555555",
-                    line_width=1.0,
-                    smooth_shading=False,
-                    specular=0.35,
-                    specular_power=25,
+                    smooth_shading=True,
+                    ambient=0.24,
+                    diffuse=0.76,
+                    specular=0.42,
+                    specular_power=38,
                     pickable=True,
                 )
             # CAD (0,0,0) is the rotation pivot and is aligned exactly
@@ -9879,6 +9883,8 @@ class ProductViewer(QWidget):
             self._pose_actor is not None
             and self.display_mode in (
                 "product",
+                "classification",
+                "patches",
                 "spray_point_preview",
                 "trajectory",
             )
