@@ -4237,72 +4237,25 @@ class MainWindow(QMainWindow):
         nozzle_points = np.asarray(result["nozzle_points_product"], dtype=float)
         path_length = float(result.get("route_length_product_units", 0.0))
         spray_distance = float(result.get("spray_length_mm", 0.0))
-        travel_distance = float(result.get("travel_length_mm", 0.0))
-        spray_time = float(result.get("spray_duration_s", 0.0))
-        travel_time = float(result.get("travel_duration_s", 0.0))
-        tool_delay = float(result.get("tool_delay_s", 0.0))
-        total_time = float(result.get("estimated_duration_s", 0.0))
-        format_time = self.viewer._format_route_time
+        connector_distance = float(result.get("travel_length_mm", 0.0))
         route_info = result.get("route_optimization") or {}
         route_algorithm = route_info.get("algorithm", "STROKE ORDER RETAINED")
-        route_timing = result.get("route_timing") or {}
-        speed_info = route_timing.get("spray_speed_profile", {})
-        generated_min_speed = float(
-            speed_info.get("minimum_generated_speed_mm_s", 0.0)
-        )
-        generated_max_speed = float(
-            speed_info.get("maximum_generated_speed_mm_s", 0.0)
-        )
-        travel_speed = float(route_timing.get("travel_speed_mm_s", 0.0))
-        optimization_metrics = result.get("route_optimization_metrics") or {}
-        before_optimization_time = float(
-            optimization_metrics.get(
-                "before_optimization_estimated_time_s", total_time
-            )
-        )
-        after_optimization_time = float(
-            optimization_metrics.get(
-                "after_optimization_estimated_time_s", total_time
-            )
-        )
-        time_saved = float(
-            optimization_metrics.get("estimated_time_saved_s", 0.0)
-        )
-        time_saved_percent = float(
-            optimization_metrics.get("estimated_time_saved_percent", 0.0)
-        )
-        optimizer_compute_time = float(
-            optimization_metrics.get("optimizer_compute_time_s", 0.0)
-        )
-        recording_elapsed = float(result.get("recording_elapsed_s", 0.0))
         self.analysis_summary.setText(
             "OPTIMIZED INTERACTIVE SPRAY ROUTE\n\n"
             f"RECORDED POSES: {len(nozzle_points):,}\n"
             f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\n"
             f"ROUTE LENGTH: {path_length:.2f} {self.coordinate_unit}\n"
-            f"SPRAY DISTANCE: {spray_distance:.1f} mm\n"
-            f"SPRAY-OFF TRAVEL: {travel_distance:.1f} mm\n\n"
-            f"SPRAY TIME: {format_time(spray_time)}\n"
-            f"TRAVEL TIME: {format_time(travel_time)}\n"
-            f"TOOL DELAYS: {format_time(tool_delay)}\n"
-            f"ESTIMATED COMPLETION: {format_time(total_time)}\n"
-            f"RECORDING ELAPSED: {format_time(recording_elapsed)}\n\n"
-            "ROUTE OPTIMIZATION TIME COMPARISON\n"
-            f"BEFORE OPTIMIZATION: {format_time(before_optimization_time)}\n"
-            f"AFTER OPTIMIZATION: {format_time(after_optimization_time)}\n"
-            f"ESTIMATED TIME SAVED: {format_time(time_saved)} ({time_saved_percent:.1f}%)\n"
-            f"OPTIMIZER COMPUTE TIME: {optimizer_compute_time:.3f} s\n\n"
-            f"SPRAY SPEED: {generated_min_speed:.0f}-{generated_max_speed:.0f} mm/s\n"
-            f"SPRAY-OFF TRAVEL SPEED: {travel_speed:.0f} mm/s\n\n"
+            f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
+            f"SPRAY-OFF CONNECTORS: {connector_distance:.1f} mm\n\n"
             f"ROUTING: {route_algorithm}\n"
             "GREEN: SPRAY-ON STROKES  |  BLUE: SPRAY-OFF CONNECTORS\n"
             "Route order is heuristic, not a guaranteed global optimum.\n"
-            "Straight spray-OFF connectors are not collision-checked or robot-ready.\n"
-            "Press SIMULATE to visually verify the optimized spray route."
+            "Connectors are geometric previews, not collision-checked robot paths.\n"
+            "No robot speed or controller timing is assumed."
         )
         self.status_bar.showMessage(
-            f"ROUTE GENERATED | ESTIMATED COMPLETION {format_time(total_time)} | "
-            f"{len(np.unique(result.get('stroke_ids', [])))} STROKES"
+            f"ROUTE GENERATED | {len(np.unique(result.get('stroke_ids', [])))} STROKES | "
+            f"SPRAY {spray_distance:.1f} mm | CONNECTORS {connector_distance:.1f} mm"
         )
         self.route_next_button.setVisible(True)
         self.route_next_button.setEnabled(True)
@@ -4312,38 +4265,12 @@ class MainWindow(QMainWindow):
         self._refresh_workflow_ui()
 
     def _show_interactive_route_summary(self, result):
-        """Summarize route generation without starting the simulation."""
+        """Summarize the route using geometry only, without motion-time estimates."""
         if not isinstance(result, dict):
             return
-        format_time = self.viewer._format_route_time
         route_info = result.get("route_optimization") or {}
-        optimization_metrics = result.get("route_optimization_metrics") or {}
-        before_time = float(
-            optimization_metrics.get(
-                "before_optimization_estimated_time_s",
-                result.get("estimated_duration_s", 0.0),
-            )
-        )
-        after_time = float(
-            optimization_metrics.get(
-                "after_optimization_estimated_time_s",
-                result.get("estimated_duration_s", 0.0),
-            )
-        )
-        saved_time = float(
-            optimization_metrics.get("estimated_time_saved_s", 0.0)
-        )
-        saved_percent = float(
-            optimization_metrics.get("estimated_time_saved_percent", 0.0)
-        )
-        optimizer_seconds = float(
-            optimization_metrics.get("optimizer_compute_time_s", 0.0)
-        )
-        recording_seconds = float(result.get("recording_elapsed_s", 0.0))
-        signed_saved_time = (
-            ("-" if saved_time < 0.0 else "+")
-            + format_time(abs(saved_time))
-        )
+        spray_distance = float(result.get("spray_length_mm", 0.0))
+        connector_distance = float(result.get("travel_length_mm", 0.0))
         self.summary_chart.hide()
         self.summary_section.setText("ROUTE GENERATION")
         self.analysis_summary.setStyleSheet("color: #00E676;")
@@ -4351,33 +4278,24 @@ class MainWindow(QMainWindow):
             "SPRAY ROUTE READY FOR SIMULATION\n\n"
             f"RECORDED POSES: {len(result.get('nozzle_points_product', [])):,}\n"
             f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\n"
-            f"ROUTE LENGTH: {float(result.get('route_length_product_units', 0.0)):.2f} {self.coordinate_unit}\n"
-            f"ESTIMATED COMPLETION: {format_time(result.get('estimated_duration_s', 0.0))}\n"
-            f"RECORDING ELAPSED: {format_time(recording_seconds)}\n\n"
-            "ROUTE OPTIMIZATION TIME COMPARISON\n"
-            f"BEFORE: {format_time(before_time)}\n"
-            f"AFTER: {format_time(after_time)}\n"
-            f"TIME SAVED: {signed_saved_time} ({saved_percent:.1f}%)\n"
-            f"OPTIMIZER COMPUTE: {optimizer_seconds:.3f} s\n"
+            f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
+            f"SPRAY-OFF CONNECTORS: {connector_distance:.1f} mm\n"
             f"ROUTING: {route_info.get('algorithm', 'STROKE ORDER RETAINED')}\n\n"
             "Review the optimized route in the 3D view.\n"
-            "Select NEXT: SPRAY SIMULATION to verify the coating process."
+            "Robot speed, controller frequency and execution time are not configured."
         )
 
     def _show_spray_simulation_summary(self):
-        result = self.interactive_spray_path or {}
-        format_time = self.viewer._format_route_time
         self.summary_chart.hide()
         self.summary_section.setText("SPRAY SIMULATION")
         self.analysis_summary.setStyleSheet("color: #D8E5ED;")
         self.analysis_summary.setText(
-            "SPRAY ROUTE SIMULATION\\n\\n"
-            f"ESTIMATED COMPLETION: {format_time(result.get('estimated_duration_s', 0.0))}\\n\\n"
-            "The product starts in its unpainted state.\\n"
-            "Only the surface reached during SPRAY ON is coated.\\n"
-            "SPRAY OFF connectors move between strokes without deposition.\\n\\n"
-            "Press SIMULATE in the 3D view to verify the result.\\n"
-            "If the coverage is unsatisfactory, return to ROUTE GENERATION."
+            "SPRAY ROUTE SIMULATION\n\n"
+            "The product starts in its unpainted state.\n"
+            "Only the surface reached during SPRAY ON is coated.\n"
+            "SPRAY OFF connectors move between strokes without deposition.\n\n"
+            "Simulation playback uses the recorded path sequence.\n"
+            "No robot execution speed or controller frequency is assumed."
         )
 
     def _continue_interactive_spray_path(self):
