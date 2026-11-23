@@ -92,11 +92,11 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
                 "fan_reference_distance_mm",
                 "fan_thickness_at_reference_mm",
                 "fan_air_pressure_bar",
-                    "travel_speed_mm_s",
+                "sampling_spacing_mm",
+                "travel_speed_mm_s",
                 "min_travel_speed_mm_s",
                 "max_travel_acceleration_mm_s2",
-            )
-            if item.get("pattern_type") != "round_cone" or any(
+            )            if item.get("pattern_type") != "round_cone" or any(
                 key in item for key in legacy_keys
             ):
                 migrated = True
@@ -501,7 +501,6 @@ class SprayerSettingsDialog(QDialog):
             "standoff_mm",
             "spray_cone_angle_deg",
             "overlap_percent",
-            "sampling_spacing_mm",
         }
         process_only_keys = {"fluid_flow_ml_min"}
         def add_profile_field(key, label, minimum, maximum, decimals):
