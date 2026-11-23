@@ -369,18 +369,10 @@ class MainWindow(QMainWindow):
         self.robot_settings = load_robot_settings(
             self.robot_settings_config_path, self.coating_process
         )
-        # Keep legacy process consumers compatible while Robot Settings owns
-        # the authoritative robot motion values. Do not copy the robot profile
-        # name or input status into the coating-process profile.
-        for key in (
-            "base_travel_speed_mm_s",
-            "robot_control_frequency_hz",
-            "min_travel_speed_mm_s",
-            "max_travel_acceleration_mm_s2",
-            "max_linear_speed_mm_s",
-            "max_angular_speed_deg_s",
-        ):
-            self.coating_process[key] = self.robot_settings[key]
+        self.coating_process.update({
+            "base_travel_speed_mm_s": self.robot_settings["base_travel_speed_mm_s"],
+            "robot_control_frequency_hz": self.robot_settings["robot_control_frequency_hz"],
+        })
 
         self.result_manager = ResultManager(self.project_root)
 
@@ -956,7 +948,7 @@ class MainWindow(QMainWindow):
         self.robot_settings_button = QPushButton("ROBOT SETTINGS")
         self.robot_settings_button.setObjectName("PrimaryButton")
         self.robot_settings_button.setToolTip(
-            "Configure robot painting speed, controller frequency and motion limits."
+            "Configure robot/product profile name, painting speed, and controller frequency."
         )
         self.robot_settings_button.clicked.connect(self._open_robot_settings)
         layout.addWidget(self.robot_settings_button)
@@ -2465,6 +2457,10 @@ class MainWindow(QMainWindow):
     def _get_current_spray_parameters(self):
         profile = dict(self.sprayer_profile)
         coating_process = dict(self.coating_process)
+        coating_process.update({
+            "base_travel_speed_mm_s": self.robot_settings["base_travel_speed_mm_s"],
+            "robot_control_frequency_hz": self.robot_settings["robot_control_frequency_hz"],
+        })
         robot_waypoint_spacing_mm = calculate_robot_waypoint_spacing_mm(
             coating_process["base_travel_speed_mm_s"],
             coating_process["robot_control_frequency_hz"],
@@ -2524,31 +2520,27 @@ class MainWindow(QMainWindow):
     def _open_robot_settings(self):
         if self._operation_running:
             return
+        product_name = (
+            Path(self.current_step_report_path).stem
+            if self.current_step_report_path
+            else self.robot_settings.get("product_name", "Product")
+        )
+        current_settings = dict(self.robot_settings)
+        current_settings["product_name"] = product_name
         dialog = RobotSettingsDialog(
             config_path=self.robot_settings_config_path,
-            current_settings=self.robot_settings,
+            current_settings=current_settings,
+            product_name=product_name,
             parent=self,
         )
         if dialog.exec() != QDialog.Accepted or dialog.selected_settings is None:
             return
         self.robot_settings = dict(dialog.selected_settings)
-        for key in (
-            "base_travel_speed_mm_s",
-            "robot_control_frequency_hz",
-            "min_travel_speed_mm_s",
-            "max_travel_acceleration_mm_s2",
-            "max_linear_speed_mm_s",
-            "max_angular_speed_deg_s",
-        ):
-            self.coating_process[key] = self.robot_settings[key]
-        motion_keys = (
-            "base_travel_speed_mm_s",
-            "robot_control_frequency_hz",
-            "min_travel_speed_mm_s",
-            "max_travel_acceleration_mm_s2",
-            "max_linear_speed_mm_s",
-            "max_angular_speed_deg_s",
-        )
+        self.coating_process.update({
+            "base_travel_speed_mm_s": self.robot_settings["base_travel_speed_mm_s"],
+            "robot_control_frequency_hz": self.robot_settings["robot_control_frequency_hz"],
+        })
+        motion_keys = ("base_travel_speed_mm_s", "robot_control_frequency_hz")
         generated_process = (
             self.current_stage3_parameters.get("coating_process", {})
             if isinstance(self.current_stage3_parameters, dict)
@@ -2576,7 +2568,7 @@ class MainWindow(QMainWindow):
             f"{self.robot_settings['robot_control_frequency_hz']:.1f} Hz"
         )
         self.status_bar.showMessage(
-            f"ROBOT SETTINGS LOADED: {self.robot_settings['name']}"
+            f"ROBOT PROFILE LOADED: {self.robot_settings['name']}"
         )
         self._on_spray_parameter_changed()
 
@@ -2591,14 +2583,11 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted or dialog.selected_process is None:
             return
         self.coating_process = dict(dialog.selected_process)
-        motion_keys = (
-            "base_travel_speed_mm_s",
-            "robot_control_frequency_hz",
-            "min_travel_speed_mm_s",
-            "max_travel_acceleration_mm_s2",
-            "max_linear_speed_mm_s",
-            "max_angular_speed_deg_s",
-        )
+        self.coating_process.update({
+            "base_travel_speed_mm_s": self.robot_settings["base_travel_speed_mm_s"],
+            "robot_control_frequency_hz": self.robot_settings["robot_control_frequency_hz"],
+        })
+        motion_keys = ("base_travel_speed_mm_s", "robot_control_frequency_hz")
         generated_process = (
             self.current_stage3_parameters.get("coating_process", {})
             if isinstance(self.current_stage3_parameters, dict)
@@ -2649,14 +2638,7 @@ class MainWindow(QMainWindow):
                 ):
                     return False
             elif key == "coating_process":
-                motion_keys = (
-                    "base_travel_speed_mm_s",
-                    "robot_control_frequency_hz",
-                    "min_travel_speed_mm_s",
-                    "max_travel_acceleration_mm_s2",
-                    "max_linear_speed_mm_s",
-                    "max_angular_speed_deg_s",
-                )
+                motion_keys = ("base_travel_speed_mm_s", "robot_control_frequency_hz")
                 if any(
                     value.get(motion_key) != previous[key].get(motion_key)
                     for motion_key in motion_keys
