@@ -17,3 +17,20 @@ env/
 build/
 dist/
 *.egg-info/
+
+# Coverage and test environments
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Editor and operating-system files
+.DS_Store
+*.swp
+*.swo
+
+# Temporary files and logs
+*.tmp
+*.bak
+*.log
