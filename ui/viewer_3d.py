@@ -738,13 +738,15 @@ class ProductViewer(QWidget):
         if direction is None:
             return
 
-        # Use visible actor bounds so the view remains correct after the
-        # product has been translated or rotated in the reference-pose stage.
-        bounds = np.asarray(
-            self.plotter.renderer.GetVisiblePropBounds(), dtype=np.float64
-        )
-        if bounds.shape != (6,) or not np.all(np.isfinite(bounds)):
+        # Use the product actor bounds, not all visible props: HUD labels,
+        # axes and spray overlays must not shift the camera's target.
+        # Actor bounds include the applied reference-pose transform.
+        if self._pose_actor is not None:
+            bounds = np.asarray(self._pose_actor.GetBounds(), dtype=np.float64)
+        else:
             bounds = np.asarray(self.current_mesh.bounds, dtype=np.float64).reshape(6)
+        if bounds.shape != (6,) or not np.all(np.isfinite(bounds)):
+            return
         minimum = bounds[[0, 2, 4]]
         maximum = bounds[[1, 3, 5]]
         center = 0.5 * (minimum + maximum)
