@@ -62,24 +62,6 @@ def validate_coating_process(parameters: dict) -> dict:
     return values
 
 
-def calculate_robot_waypoint_spacing_mm(
-    travel_speed_mm_s: float,
-    control_frequency_hz: float,
-) -> float:
-    """Return distance travelled per robot control cycle, in millimetres.
-
-    This is the longitudinal robot waypoint interval. It is independent of
-    the lateral spray-track pitch calculated from spray footprint and overlap.
-    """
-    speed = float(travel_speed_mm_s)
-    frequency = float(control_frequency_hz)
-    if not math.isfinite(speed) or speed <= 0.0:
-        raise ValueError("Robot travel speed must be a positive finite value.")
-    if not math.isfinite(frequency) or frequency <= 0.0:
-        raise ValueError("Robot control frequency must be a positive finite value.")
-    return speed / frequency
-
-
 def coating_model_readiness(parameters: dict) -> tuple[str, list[str]]:
     """Report whether the inputs support a numerical deposition prediction."""
     p = validate_coating_process(parameters)
