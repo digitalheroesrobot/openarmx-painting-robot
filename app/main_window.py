@@ -1306,8 +1306,10 @@ class MainWindow(QMainWindow):
         # ----------------------------------------------------
         layout.addStretch()
 
+        # Shared Stage 1/2 action control. Product loading is handled
+        # exclusively by the persistent top-level LOAD button.
         self.start_analysis_button = QPushButton(
-            "LOAD STL PRODUCT"
+            "ANALYZE GEOMETRY"
         )
         self.start_analysis_button.setObjectName(
             "PrimaryButton"
@@ -1369,6 +1371,19 @@ class MainWindow(QMainWindow):
         )
         self.simulation_back_button.hide()
         layout.addWidget(self.simulation_back_button)
+
+        # Keep trajectory export prominent on the simulation page instead
+        # of squeezing it into the 3D viewer's horizontal control strip.
+        self.simulation_export_button = QPushButton("EXPORT TRAJECTORY")
+        self.simulation_export_button.setObjectName("PrimaryButton")
+        self.simulation_export_button.setToolTip(
+            "Export the optimized product-frame trajectory as a 9-column CSV and timing metadata JSON."
+        )
+        self.simulation_export_button.clicked.connect(
+            self.viewer._export_interactive_recorded_path
+        )
+        self.simulation_export_button.hide()
+        layout.addWidget(self.simulation_export_button)
 
         # ----------------------------------------------------
         # OPERATION PROGRESS
@@ -2903,6 +2918,12 @@ class MainWindow(QMainWindow):
             self.simulation_back_button.setEnabled(
                 simulation_page and not self._operation_running
             )
+            self.simulation_export_button.setVisible(
+                simulation_page and route_exists
+            )
+            self.simulation_export_button.setEnabled(
+                simulation_page and route_exists and not self._operation_running
+            )
 
         if self.active_stage in (
             STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION
@@ -3154,20 +3175,14 @@ class MainWindow(QMainWindow):
         if self._operation_running:
             return
 
-        # ----------------------------------------------------
-        # STAGE 1 - PRODUCT SETUP
-        # ----------------------------------------------------
-
-        if self.active_stage == STAGE_PRODUCT_SETUP:
-
-            self.load_stl_dialog()
-            return
+        # Product loading is intentionally not a sidebar workflow action.
+        # Use the persistent top-level LOAD button for STL import.
 
         # ----------------------------------------------------
         # STAGE 2 - GEOMETRY INSPECTION
         # ----------------------------------------------------
 
-        elif self.active_stage == STAGE_GEOMETRY_INSPECTION:
+        if self.active_stage == STAGE_GEOMETRY_INSPECTION:
 
             self.run_geometry_analysis()
             return
