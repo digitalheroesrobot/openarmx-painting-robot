@@ -2428,7 +2428,6 @@ class MainWindow(QMainWindow):
         return {
             "standoff_mm": float(profile["standoff_mm"]),
             # Geometric spacing is calculated from the active circular footprint.
-            "spray_angle_deg": float(profile.get("spray_cone_angle_deg", 0.0)),
             "sprayer_profile": profile,
             "coating_process": coating_process,
             # Capture the operator-confirmed CAD-to-World pose before
@@ -4067,7 +4066,6 @@ class MainWindow(QMainWindow):
             stage1_report=self.current_report,
             coordinate_unit=self.coordinate_unit,
             standoff_mm=parameters["standoff_mm"],
-            spray_angle_deg=parameters["spray_angle_deg"],
             sprayer_profile=parameters["sprayer_profile"],
             coating_process=parameters["coating_process"],
             product_transform=parameters["product_transform_4x4"],
