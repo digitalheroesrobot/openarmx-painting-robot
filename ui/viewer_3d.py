@@ -1770,7 +1770,10 @@ class ProductViewer(QWidget):
             # Multi-start nearest-neighbour search over both directions. This
             # finds a feasible global ordering candidate using real safe-path costs.
             candidate_routes = []
-            seed_ids = stroke_ids if len(stroke_ids) <= 24 else stroke_ids[:24]
+            seed_indices = np.linspace(
+                0, len(stroke_ids) - 1, min(len(stroke_ids), 8), dtype=int
+            )
+            seed_ids = [stroke_ids[int(index)] for index in np.unique(seed_indices)]
             for seed_id in seed_ids:
                 for seed_reverse in (False, True):
                     route = [(seed_id, seed_reverse)]
@@ -1778,15 +1781,39 @@ class ProductViewer(QWidget):
                     remaining.remove(seed_id)
                     feasible = True
                     while remaining:
-                        best = None
-                        best_cost = float("inf")
+                        current_state = route[-1]
+                        current_end = oriented_records(
+                            current_state[0], current_state[1]
+                        )[-1]
+                        current_point = np.asarray(
+                            current_end["nozzle_point_product"], dtype=np.float64
+                        )
+                        geometric_candidates = []
                         for next_id in remaining:
                             for next_reverse in (False, True):
-                                state = (next_id, next_reverse)
-                                cost, _ = transition(route[-1], state)
-                                if cost < best_cost:
-                                    best_cost = cost
-                                    best = state
+                                next_start = oriented_records(next_id, next_reverse)[0]
+                                next_point = np.asarray(
+                                    next_start["nozzle_point_product"], dtype=np.float64
+                                )
+                                geometric_candidates.append((
+                                    float(np.linalg.norm(next_point - current_point)),
+                                    (next_id, next_reverse),
+                                ))
+                        geometric_candidates.sort(key=lambda item: item[0])
+                        # Evaluate a small nearest-neighbour shortlist first.
+                        # If all shortlisted transitions are unsafe, expand to
+                        # every remaining stroke rather than falsely declaring
+                        # that no feasible continuation exists.
+                        shortlist = geometric_candidates[:6]
+                        evaluated = []
+                        for _, state in shortlist:
+                            cost, _ = transition(current_state, state)
+                            evaluated.append((cost, state))
+                        if not any(np.isfinite(item[0]) for item in evaluated):
+                            for _, state in geometric_candidates[6:]:
+                                cost, _ = transition(current_state, state)
+                                evaluated.append((cost, state))
+                        best_cost, best = min(evaluated, key=lambda item: item[0])
                         if best is None or not np.isfinite(best_cost):
                             feasible = False
                             break
@@ -1829,7 +1856,7 @@ class ProductViewer(QWidget):
             # Improve the feasible route with 2-opt reversals. Reversing a
             # sub-route also reverses each stroke direction, preserving each
             # individual user-drawn stroke geometry.
-            max_passes = 2 if len(route) <= 30 else 1
+            max_passes = 1 if len(route) <= 30 else 0
             for _ in range(max_passes):
                 improved = False
                 baseline = route_cost(route)
