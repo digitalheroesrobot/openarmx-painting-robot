@@ -2497,6 +2497,7 @@ class MainWindow(QMainWindow):
         self.coating_process = dict(dialog.selected_process)
         motion_keys = (
             "base_travel_speed_mm_s",
+            "robot_control_frequency_hz",
             "min_travel_speed_mm_s",
             "max_travel_acceleration_mm_s2",
         )
@@ -2524,7 +2525,8 @@ class MainWindow(QMainWindow):
         self.coating_process_label.setText(
             f"PROCESS: {self.coating_process.get('name', 'Unnamed')}  |  "
             f"TARGET: {self.coating_process['target_dry_film_thickness_um']:.1f} µm  |  "
-            f"FLOW: {self.coating_process['fluid_flow_ml_min']:.1f} ml/min"
+            f"FLOW: {self.coating_process['fluid_flow_ml_min']:.1f} ml/min  |  "
+            f"ROBOT: {self.coating_process['robot_control_frequency_hz']:.1f} Hz"
         )
         self.status_bar.showMessage(
             f"COATING PROCESS LOADED: {self.coating_process['name']}"
@@ -2552,6 +2554,7 @@ class MainWindow(QMainWindow):
             elif key == "coating_process":
                 motion_keys = (
                     "base_travel_speed_mm_s",
+                    "robot_control_frequency_hz",
                     "min_travel_speed_mm_s",
                     "max_travel_acceleration_mm_s2",
                 )
