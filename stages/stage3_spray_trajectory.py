@@ -4534,9 +4534,9 @@ def generate_spray_trajectory(
     )
     # Fixed preview playback speed; Robot Settings are intentionally not
     # connected to route generation or coating simulation.
-    base_travel_speed = 500.0
+    preview_speed_mm_s = 500.0
     travel_speeds_mm_s = np.full(
-        len(ordered["nozzle_points"]), base_travel_speed, dtype=np.float64
+        len(ordered["nozzle_points"]), preview_speed_mm_s, dtype=np.float64
     )
     trajectory_time_s = np.zeros(len(ordered["nozzle_points"]), dtype=np.float64)
     for segment_id in np.unique(ordered["segment_ids"]):
@@ -4545,16 +4545,12 @@ def generate_spray_trajectory(
             distances_mm = np.linalg.norm(
                 np.diff(ordered["nozzle_points"][indices], axis=0), axis=1
             ) * MM_PER_UNIT[source_unit]
-            trajectory_time_s[indices[1:]] = np.cumsum(distances_mm / base_travel_speed)
-    robot_speed_profile = {
-        "method": "constant_robot_painting_speed",
-        "base_speed_mm_s": base_travel_speed,
-    }
+            trajectory_time_s[indices[1:]] = np.cumsum(distances_mm / preview_speed_mm_s)
     inter_segment_travel_plan = _build_inter_segment_travel_plan(
         nozzle_points=ordered["nozzle_points"],
         segment_ids=ordered["segment_ids"],
         coordinate_unit=source_unit,
-        travel_speed_mm_s=base_travel_speed,
+        travel_speed_mm_s=preview_speed_mm_s,
     )
     inter_segment_travel_plan["ordering_optimization"] = ordered.get(
         "travel_ordering", {}
@@ -4764,11 +4760,8 @@ def generate_spray_trajectory(
             "nearest_neighbor_fallback_patch_ids": ordered.get("nearest_neighbor_fallback_patch_ids", []),
             "lane_spacing_mm": effective_lane_spacing_mm,
             "surface_sample_spacing_mm": coverage_spacing_mm,
-            "robot_waypoint_spacing_mm": robot_waypoint_spacing_mm,
-            "robot_waypoint_spacing_coordinate_units": robot_waypoint_spacing_coordinate_units,
-            "robot_waypoint_sampling_basis": (
-                "BASE_TRAVEL_SPEED_DIVIDED_BY_ROBOT_CONTROL_FREQUENCY"
-            ),
+            "effective_sample_spacing_mm": coverage_spacing_mm,
+            "sample_spacing_coordinate_units": spacing_coordinate_units,
             "coverage_spacing_basis": coverage_spacing_basis,
             "nominal_footprint_track_spacing_mm": path_track_spacing_mm,
             "lane_spacing_coordinate_units": path_track_spacing_units,
