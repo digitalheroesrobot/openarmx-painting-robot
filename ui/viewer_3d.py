@@ -1338,6 +1338,19 @@ class ProductViewer(QWidget):
 
 
     @staticmethod
+    def _interactive_product_rotation_matrix(linear_transform):
+        """Extract the closest proper rotation from the product actor transform."""
+        matrix = np.asarray(linear_transform, dtype=np.float64)
+        if matrix.shape != (3, 3) or not np.all(np.isfinite(matrix)):
+            raise ValueError("Product transform must contain a finite 3x3 matrix.")
+        u, _, vt = np.linalg.svd(matrix)
+        rotation = u @ vt
+        if np.linalg.det(rotation) < 0.0:
+            u[:, -1] *= -1.0
+            rotation = u @ vt
+        return rotation
+
+    @staticmethod
     def _csv_quaternion_rotation_xyzw(quaternion):
         """Convert a normalized XYZW quaternion to a 3x3 rotation matrix."""
         q = np.asarray(quaternion, dtype=np.float64)
@@ -1409,14 +1422,28 @@ class ProductViewer(QWidget):
             pose = self._interpolate_replay_record(
                 edge["start_record"], edge["end_record"], fraction
             )
-            position_mm = np.asarray(pose["nozzle_point_world"], dtype=np.float64) * mm_factor
-            # CSV position and orientation are both expressed in the
-            # application/world coordinate frame.
+            nozzle_world = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
+            nozzle_product = (inverse @ np.append(nozzle_world, 1.0))[:3]
+            position_mm = nozzle_product * mm_factor
+            product_rotation = self._interactive_product_rotation_matrix(
+                self._interactive_spray_transform[:3, :3]
+            )
             direction_world = np.asarray(
                 pose["spray_direction_world"], dtype=np.float64
             )
             direction_world /= max(float(np.linalg.norm(direction_world)), 1e-12)
-            quaternion = self._interactive_pose_quaternion_from_direction(direction_world)
+            direction_product = product_rotation.T @ direction_world
+            direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
+            # Preserve an imported full product-frame orientation when present.
+            # Native mouse-created circular-cone poses use the documented,
+            # deterministic roll convention around the nozzle tool axis.
+            quaternion = pose.get("nozzle_quaternion_product_xyzw")
+            if quaternion is None:
+                quaternion = self._interactive_pose_quaternion_from_direction(
+                    direction_product
+                )
+            quaternion = np.asarray(quaternion, dtype=np.float64)
+            quaternion /= max(float(np.linalg.norm(quaternion)), 1e-12)
             output_rows.append({
                 "t": f"{float(t):.6f}",
                 "x": f"{position_mm[0]:.6f}",
@@ -1456,7 +1483,7 @@ class ProductViewer(QWidget):
             f"Exported {len(output_rows):,} samples.\n"
             f"Controller frequency: {frequency:g} Hz\n"
             f"Duration: {duration:.3f} s\n"
-            f"Positions: mm; quaternion order: qx, qy, qz, qw."
+            f"Positions: product-local mm; orientation: product-local XYZW quaternion."
         )
         return True
 
@@ -1493,6 +1520,9 @@ class ProductViewer(QWidget):
         standoff = float(self._interactive_spray_standoff)
         transform = np.asarray(self._interactive_spray_transform, dtype=np.float64)
         inverse = np.linalg.inv(transform)
+        product_rotation = self._interactive_product_rotation_matrix(
+            transform[:3, :3]
+        )
         parsed = []
         try:
             previous_t = -float("inf")
@@ -1511,15 +1541,20 @@ class ProductViewer(QWidget):
                 if state_text not in ("0", "1"):
                     raise ValueError(f"Line {row_number}: on/off must be 0 or 1.")
                 quaternion = values[4:8]
-                rotation = self._csv_quaternion_rotation_xyzw(quaternion)
-                direction_world = -(rotation @ np.array([0.0, 0.0, 1.0], dtype=np.float64))
-                direction_world /= max(float(np.linalg.norm(direction_world)), 1e-12)
-                nozzle_world = values[1:4] / mm_factor
-                surface_world = nozzle_world + direction_world * standoff
-                nozzle_product = (inverse @ np.append(nozzle_world, 1.0))[:3]
-                surface_product = (inverse @ np.append(surface_world, 1.0))[:3]
-                direction_product = inverse[:3, :3] @ direction_world
+                rotation_product = self._csv_quaternion_rotation_xyzw(quaternion)
+                # CSV XYZ and XYZW are both expressed in the original CAD /
+                # product-local frame. The nozzle tool's local +Z axis points
+                # away from the surface, opposite the spray direction.
+                direction_product = -(
+                    rotation_product @ np.array([0.0, 0.0, 1.0], dtype=np.float64)
+                )
                 direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
+                nozzle_product = values[1:4] / mm_factor
+                surface_product = nozzle_product + direction_product * standoff
+                nozzle_world = (transform @ np.append(nozzle_product, 1.0))[:3]
+                surface_world = (transform @ np.append(surface_product, 1.0))[:3]
+                direction_world = product_rotation @ direction_product
+                direction_world /= max(float(np.linalg.norm(direction_world)), 1e-12)
                 normal_world = -direction_world
                 normal_product = -direction_product
 
@@ -1540,6 +1575,9 @@ class ProductViewer(QWidget):
                     "surface_point_product": surface_product,
                     "surface_normal_product": normal_product,
                     "spray_direction_product": direction_product,
+                    "nozzle_quaternion_product_xyzw": (
+                        quaternion / max(float(np.linalg.norm(quaternion)), 1e-12)
+                    ),
                     "face_index": cell_id,
                     "cell_id": cell_id,
                 })
@@ -1615,7 +1653,8 @@ class ProductViewer(QWidget):
         QMessageBox.information(
             self, "Import trajectory",
             f"Loaded {len(records):,} samples for simulation.\n"
-            "CSV positions are interpreted in millimetres and quaternion order is qx, qy, qz, qw.\n"
+            "XYZ positions are interpreted as product-local millimetres.\n"
+            "Quaternion qx,qy,qz,qw is interpreted in the same product-local frame.\n"
             "The loaded time and spray ON/OFF sequence will be replayed as stored."
         )
         self.plotter.render()
@@ -2455,7 +2494,7 @@ class ProductViewer(QWidget):
                 value /= max(float(np.linalg.norm(value)), 1e-12)
             return value
 
-        return {
+        result = {
             "nozzle_point_world": vector("nozzle_point_world"),
             "surface_point_world": vector("surface_point_world"),
             "surface_normal_world": vector("surface_normal_world"),
@@ -2464,6 +2503,20 @@ class ProductViewer(QWidget):
                 first["face_index"] if fraction < 0.5 else second["face_index"]
             ),
         }
+        if (
+            "nozzle_quaternion_product_xyzw" in first
+            and "nozzle_quaternion_product_xyzw" in second
+        ):
+            q0 = np.asarray(first["nozzle_quaternion_product_xyzw"], dtype=np.float64)
+            q1 = np.asarray(second["nozzle_quaternion_product_xyzw"], dtype=np.float64)
+            q0 /= max(float(np.linalg.norm(q0)), 1e-12)
+            q1 /= max(float(np.linalg.norm(q1)), 1e-12)
+            if float(np.dot(q0, q1)) < 0.0:
+                q1 = -q1
+            q = q0 + (q1 - q0) * fraction
+            q /= max(float(np.linalg.norm(q)), 1e-12)
+            result["nozzle_quaternion_product_xyzw"] = q
+        return result
 
     def _interactive_reset_coating_for_replay(self):
         """Start the verification replay from an uncoated, neutral-gray product."""
