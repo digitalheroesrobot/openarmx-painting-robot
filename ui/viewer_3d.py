@@ -5135,6 +5135,7 @@ class ProductViewer(QWidget):
             self.plotter.render()
 
     def _rotate_camera_from_spray_drag(self, interactor):
+        """Orbit the camera around the product using the product's local axes."""
         current = tuple(int(value) for value in interactor.GetEventPosition())
         previous = self._interactive_spray_camera_last_position
         self._interactive_spray_camera_last_position = current
@@ -5147,11 +5148,58 @@ class ProductViewer(QWidget):
 
         camera = self.plotter.camera
         sensitivity = 0.5  # degrees per screen pixel
-        camera.Azimuth(-float(dx) * sensitivity)
-        # VTK display coordinates use a bottom-left origin, while the
-        # operator's drag convention is top-left (downward-positive).
-        # Negate dy so dragging down moves the view downward naturally.
-        camera.Elevation(-float(dy) * sensitivity)
+
+        # The product actor matrix maps its local coordinate frame into world.
+        # In this workspace, local +Z is the vertical axis and local +X is
+        # the horizontal axis. Orbit around those fixed product axes rather
+        # than VTK's camera-relative Azimuth/Elevation axes.
+        pivot = np.asarray(camera.GetFocalPoint(), dtype=np.float64)
+        local_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        local_z = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        if self._pose_actor is not None:
+            actor_matrix = self._pose_actor.GetMatrix()
+            local_x = np.array(
+                [actor_matrix.GetElement(row, 0) for row in range(3)],
+                dtype=np.float64,
+            )
+            local_z = np.array(
+                [actor_matrix.GetElement(row, 2) for row in range(3)],
+                dtype=np.float64,
+            )
+            actor_center = np.asarray(self._pose_actor.GetCenter(), dtype=np.float64)
+            if actor_center.shape == (3,) and np.all(np.isfinite(actor_center)):
+                pivot = actor_center
+
+        def rotate_vector(vector, axis, angle_deg):
+            axis_norm = float(np.linalg.norm(axis))
+            if axis_norm <= 1e-12:
+                return vector
+            axis = axis / axis_norm
+            angle = math.radians(float(angle_deg))
+            cosine = math.cos(angle)
+            sine = math.sin(angle)
+            return (
+                vector * cosine
+                + np.cross(axis, vector) * sine
+                + axis * float(np.dot(axis, vector)) * (1.0 - cosine)
+            )
+
+        # Preserve the existing mouse direction convention: drag right/down
+        # rotates the view in the same perceived direction as before.
+        yaw_deg = -float(dx) * sensitivity
+        pitch_deg = -float(dy) * sensitivity
+
+        position = np.asarray(camera.GetPosition(), dtype=np.float64)
+        view_up = np.asarray(camera.GetViewUp(), dtype=np.float64)
+        offset = position - pivot
+        offset = rotate_vector(offset, local_z, yaw_deg)
+        view_up = rotate_vector(view_up, local_z, yaw_deg)
+        offset = rotate_vector(offset, local_x, pitch_deg)
+        view_up = rotate_vector(view_up, local_x, pitch_deg)
+
+        camera.SetFocalPoint(*pivot.tolist())
+        camera.SetPosition(*(pivot + offset).tolist())
+        camera.SetViewUp(*view_up.tolist())
         camera.OrthogonalizeViewUp()
         self.plotter.reset_camera_clipping_range()
         self.plotter.render()
