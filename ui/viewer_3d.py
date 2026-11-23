@@ -496,6 +496,10 @@ class ProductViewer(QWidget):
         self._interactive_spray_input_style = None
         self._interactive_spray_camera_dragging = False
         self._interactive_spray_camera_last_position = None
+        self._interactive_spray_angle_dragging = False
+        self._interactive_spray_angle_last_position = None
+        self._interactive_spray_angle_x_deg = 0.0
+        self._interactive_spray_angle_y_deg = 0.0
         self._interactive_hud_actor = None
         self._interactive_last_record_time = 0.0
         self._interactive_mouse_move_observer_id = interactor.AddObserver(
@@ -512,6 +516,12 @@ class ProductViewer(QWidget):
         )
         self._interactive_spray_right_release_observer_id = interactor.AddObserver(
             "RightButtonReleaseEvent", self._on_interactive_spray_right_release, 3.0
+        )
+        self._interactive_spray_middle_press_observer_id = interactor.AddObserver(
+            "MiddleButtonPressEvent", self._on_interactive_spray_middle_press, 3.0
+        )
+        self._interactive_spray_middle_release_observer_id = interactor.AddObserver(
+            "MiddleButtonReleaseEvent", self._on_interactive_spray_middle_release, 3.0
         )
         self._interactive_spray_wheel_forward_observer_id = interactor.AddObserver(
             "MouseWheelForwardEvent", self._on_interactive_spray_wheel, 3.0
@@ -3452,6 +3462,27 @@ class ProductViewer(QWidget):
             spray_direction_world /= max(
                 float(np.linalg.norm(spray_direction_world)), 1e-12
             )
+
+        # Operator-controlled tilt is applied in the local tangent frame of
+        # the picked surface, independent of cavity insertion mode.
+        manual_x = math.radians(float(self._interactive_spray_angle_x_deg))
+        manual_y = math.radians(float(self._interactive_spray_angle_y_deg))
+        if abs(manual_x) > 1e-9 or abs(manual_y) > 1e-9:
+            reference = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+            if abs(float(np.dot(reference, normal_world))) > 0.92:
+                reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+            tangent_x = np.cross(reference, normal_world)
+            tangent_x /= max(float(np.linalg.norm(tangent_x)), 1e-12)
+            tangent_y = np.cross(normal_world, tangent_x)
+            tangent_y /= max(float(np.linalg.norm(tangent_y)), 1e-12)
+            spray_direction_world = (
+                spray_direction_world
+                + math.tan(manual_x) * tangent_x
+                + math.tan(manual_y) * tangent_y
+            )
+            spray_direction_world /= max(
+                float(np.linalg.norm(spray_direction_world)), 1e-12
+            )
         return {
             "surface_point_world": hit_world,
             "surface_normal_world": normal_world,
@@ -5161,6 +5192,53 @@ class ProductViewer(QWidget):
         self._interactive_spray_camera_dragging = False
         self._interactive_spray_camera_last_position = None
 
+    def _on_interactive_spray_middle_press(self, interactor, event):
+        """Begin a middle-button drag to tilt the spray axis."""
+        if not self._interactive_spray_active or self._interactive_view_mode != "spray":
+            return
+        self._interactive_spray_angle_dragging = True
+        self._interactive_spray_angle_last_position = tuple(
+            int(value) for value in interactor.GetEventPosition()
+        )
+        # Angle adjustment is a positioning gesture, never a paint stroke.
+        self._interactive_spray_recording = False
+        self._interactive_spray_last_deposition_timestamp = None
+        self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_last_speed_mm_s = 0.0
+
+    def _on_interactive_spray_middle_release(self, interactor, event):
+        self._interactive_spray_angle_dragging = False
+        self._interactive_spray_angle_last_position = None
+
+    def _rotate_spray_axis_from_middle_drag(self, interactor):
+        current = tuple(int(value) for value in interactor.GetEventPosition())
+        previous = self._interactive_spray_angle_last_position
+        self._interactive_spray_angle_last_position = current
+        if previous is None:
+            return
+        dx = current[0] - previous[0]
+        dy = current[1] - previous[1]
+        if dx == 0 and dy == 0:
+            return
+
+        # Horizontal drag controls yaw; vertical drag controls pitch.
+        # Positive screen-down increases the Y tilt. Clamp each axis to ±45°.
+        sensitivity = 0.20
+        self._interactive_spray_angle_y_deg = float(np.clip(
+            self._interactive_spray_angle_y_deg + dx * sensitivity,
+            -45.0, 45.0,
+        ))
+        self._interactive_spray_angle_x_deg = float(np.clip(
+            self._interactive_spray_angle_x_deg + dy * sensitivity,
+            -45.0, 45.0,
+        ))
+
+        pose = self._interactive_pick_surface_pose(*current)
+        if pose is not None:
+            self._interactive_update_cursor(pose)
+        else:
+            self.plotter.render()
+
     def _on_interactive_spray_wheel(self, interactor, event):
         """Adjust spray working distance instead of zooming during SPRAY mode.
 
@@ -5237,6 +5315,15 @@ class ProductViewer(QWidget):
             or self._interactive_view_mode != "spray"
         ):
             return
+
+        # Middle-drag exclusively controls spray direction.
+        if self._interactive_spray_angle_dragging:
+            if not bool(QApplication.mouseButtons() & Qt.MouseButton.MiddleButton):
+                self._interactive_spray_angle_dragging = False
+                self._interactive_spray_angle_last_position = None
+            else:
+                self._rotate_spray_axis_from_middle_drag(interactor)
+                return
 
         # Right-drag exclusively controls the camera; do not pick or paint.
         if self._interactive_spray_camera_dragging:
