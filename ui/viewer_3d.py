@@ -3184,9 +3184,8 @@ class ProductViewer(QWidget):
         if best_world is None:
             return pose
 
-        factor = self._get_source_mm_factor() or 1.0
         target_source = self._interactive_spray_standoff
-        target_world = target_source / float(factor)
+        target_world = target_source
         updated = dict(pose)
         updated["nozzle_point_world"] = best_world - direction * target_world
         updated["timestamp"] = time.monotonic()
