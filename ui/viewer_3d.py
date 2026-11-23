@@ -1153,13 +1153,6 @@ class ProductViewer(QWidget):
         process = dict(DEFAULT_COATING_PROCESS)
         process.update(self._interactive_coating_process or {})
         base_speed = max(float(process.get("base_travel_speed_mm_s", 500.0)), 0.1)
-        minimum_speed = min(
-            max(float(process.get("min_travel_speed_mm_s", 300.0)), 0.1),
-            base_speed,
-        )
-        acceleration = max(
-            float(process.get("max_travel_acceleration_mm_s2", 1000.0)), 0.1
-        )
         spray_on_delay = max(float(process.get("spray_on_delay_ms", 0.0)), 0.0) / 1000.0
         spray_off_delay = max(float(process.get("spray_off_delay_ms", 0.0)), 0.0) / 1000.0
         mm_factor = self._get_source_mm_factor()
@@ -1169,22 +1162,11 @@ class ProductViewer(QWidget):
         points = np.asarray(
             [item["nozzle_point_product"] for item in records], dtype=np.float64
         )
-        normals = np.asarray(
-            [item["surface_normal_product"] for item in records], dtype=np.float64
-        )
         segment_ids = np.asarray(
             [item["stroke_id"] for item in records], dtype=np.int64
         )
-        from stages.stage3_spray_trajectory import _calculate_adaptive_travel_speed_profile
-        speeds, _, speed_metadata = _calculate_adaptive_travel_speed_profile(
-            nozzle_points=points,
-            surface_normals=normals,
-            segment_ids=segment_ids,
-            coordinate_unit=self.source_unit,
-            base_speed_mm_s=base_speed,
-            minimum_speed_mm_s=minimum_speed,
-            maximum_acceleration_mm_s2=acceleration,
-        )
+        speeds = np.full(len(records), base_speed, dtype=np.float64)
+        speed_metadata = {"method": "constant_robot_painting_speed"}
 
         timeline = []
         elapsed = 0.0
@@ -7895,7 +7877,6 @@ class ProductViewer(QWidget):
 
         process = cache["coating_process"]
         base_speed = float(process.get("base_travel_speed_mm_s", 500.0))
-        minimum_speed = float(process.get("min_travel_speed_mm_s", 300.0))
         source_face_ids = np.repeat(
             cache["target_face_ids"], cache["sample_count_per_face"]
         )
@@ -7912,7 +7893,6 @@ class ProductViewer(QWidget):
                 source_face_ids=source_face_ids,
                 mm_per_unit=cache["mm_per_unit"],
                 base_speed_mm_s=base_speed,
-                minimum_speed_mm_s=minimum_speed,
             )
         except (KeyError, TypeError, ValueError, RuntimeError) as exc:
             self.trajectory_correction_label.setText(
