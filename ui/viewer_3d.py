@@ -456,6 +456,7 @@ class ProductViewer(QWidget):
         self._interactive_recorded_replay_end_times = np.empty(0, dtype=np.float64)
         self._interactive_recorded_replay_started_at = None
         self._interactive_recorded_replay_timing = None
+        self._robot_motion_settings = {"painting_speed_mm_s": 150.0, "control_frequency_hz": 100.0}
         self._interactive_spray_path_actor = None
         self._interactive_spray_route_actors = []
         self._interactive_recorded_replay_timer = QTimer(self)
@@ -1248,6 +1249,22 @@ class ProductViewer(QWidget):
         panel.hide()
         return panel
 
+    def set_robot_motion_settings(self, settings):
+        """Apply robot speed for route-time estimates; frequency is stored for later export."""
+        values = dict(settings or {})
+        speed = float(values.get("painting_speed_mm_s", 150.0))
+        frequency = float(values.get("control_frequency_hz", 100.0))
+        if not np.isfinite(speed) or speed <= 0.0:
+            raise ValueError("Robot painting speed must be a positive finite value.")
+        if not np.isfinite(frequency) or frequency <= 0.0:
+            raise ValueError("Robot control frequency must be a positive finite value.")
+        self._robot_motion_settings = {
+            "painting_speed_mm_s": speed,
+            "control_frequency_hz": frequency,
+        }
+        # Changing robot speed invalidates only the timing, never route geometry.
+        self._interactive_recorded_replay_timing = None
+
     def set_recorded_path_page(self, page):
         """Show route-editing or simulation controls for the active workflow page."""
         page = str(page).lower()
@@ -1559,27 +1576,32 @@ class ProductViewer(QWidget):
         return sampled
 
     def _build_interactive_route_metrics(self, records):
-        """Measure spray strokes and collision-checked spray-OFF routes."""
+        """Build safe spray-OFF connectors and time every route segment at robot speed."""
         if not records:
             return {
                 "spray_distance_mm": 0.0,
                 "connector_distance_mm": 0.0,
+                "total_route_distance_mm": 0.0,
+                "estimated_duration_s": 0.0,
                 "recorded_replay_duration_s": 0.0,
                 "timeline": [],
                 "safe_connector_paths": [],
                 "safety_status": "NO_ROUTE",
             }
         mm_factor = self._get_source_mm_factor()
-        if mm_factor is None:
+        if mm_factor is None or mm_factor <= 0.0:
             raise ValueError("A known source coordinate unit is required for route distances.")
+        speed_mm_s = float(
+            getattr(self, "_robot_motion_settings", {}).get("painting_speed_mm_s", 150.0)
+        )
+        if not np.isfinite(speed_mm_s) or speed_mm_s <= 0.0:
+            raise ValueError("Robot painting speed must be greater than zero.")
+
         points = np.asarray(
             [item["nozzle_point_product"] for item in records], dtype=np.float64
         )
         segment_ids = np.asarray(
             [item["stroke_id"] for item in records], dtype=np.int64
-        )
-        timestamps = np.asarray(
-            [item.get("timestamp", 0.0) for item in records], dtype=np.float64
         )
         spray_distance = 0.0
         for segment_id in np.unique(segment_ids):
@@ -1595,30 +1617,38 @@ class ProductViewer(QWidget):
         connector_distance = 0.0
         elapsed = 0.0
         for index in range(1, len(records)):
-            duration = abs(float(timestamps[index] - timestamps[index - 1]))
-            if not np.isfinite(duration):
-                duration = 0.0
-            duration = max(duration, 0.01)
             spray_on = bool(segment_ids[index] == segment_ids[index - 1])
             if spray_on:
+                p0 = np.asarray(records[index - 1]["nozzle_point_product"], dtype=np.float64)
+                p1 = np.asarray(records[index]["nozzle_point_product"], dtype=np.float64)
+                distance_mm = float(np.linalg.norm(p1 - p0)) * mm_factor
+                if distance_mm <= 1e-12:
+                    continue
+                duration = distance_mm / speed_mm_s
                 timeline.append({
                     "start_s": elapsed,
                     "end_s": elapsed + duration,
                     "start_record": records[index - 1],
                     "end_record": records[index],
                     "spray_on": True,
-                    "kind": "SPRAY_ON_RECORDED_INTERVAL",
+                    "kind": "SPRAY_ON_ROBOT_SPEED",
                 })
                 elapsed += duration
                 continue
 
-            connector_records = self._interactive_build_safe_connector_path(
-                records[index - 1], records[index]
-            )
+            connector_cache = getattr(self, "_interactive_precomputed_connector_paths", {})
+            connector_key = (id(records[index - 1]), id(records[index]))
+            connector_records = connector_cache.get(connector_key)
+            if connector_records is None:
+                connector_records = self._interactive_build_safe_connector_path(
+                    records[index - 1], records[index]
+                )
             if connector_records is None:
                 return {
                     "spray_distance_mm": float(spray_distance),
                     "connector_distance_mm": float(connector_distance),
+                    "total_route_distance_mm": float(spray_distance + connector_distance),
+                    "estimated_duration_s": 0.0,
                     "recorded_replay_duration_s": float(elapsed),
                     "timeline": [],
                     "safe_connector_paths": safe_connector_paths,
@@ -1641,6 +1671,8 @@ class ProductViewer(QWidget):
                 return {
                     "spray_distance_mm": float(spray_distance),
                     "connector_distance_mm": float(connector_distance),
+                    "total_route_distance_mm": float(spray_distance + connector_distance),
+                    "estimated_duration_s": 0.0,
                     "recorded_replay_duration_s": float(elapsed),
                     "timeline": [],
                     "safe_connector_paths": safe_connector_paths,
@@ -1648,9 +1680,10 @@ class ProductViewer(QWidget):
                     "blocked_transition": int(index),
                 }
             for path_index, length in enumerate(lengths):
-                if length <= 1e-12:
+                distance_mm = float(length) * mm_factor
+                if distance_mm <= 1e-12:
                     continue
-                segment_duration = duration * float(length / total_length)
+                segment_duration = distance_mm / speed_mm_s
                 timeline.append({
                     "start_s": elapsed,
                     "end_s": elapsed + segment_duration,
@@ -1661,94 +1694,241 @@ class ProductViewer(QWidget):
                 })
                 elapsed += segment_duration
 
+        total_distance = float(spray_distance + connector_distance)
+        expected_duration = total_distance / speed_mm_s
         return {
             "spray_distance_mm": float(spray_distance),
             "connector_distance_mm": float(connector_distance),
+            "total_route_distance_mm": total_distance,
+            "estimated_duration_s": float(expected_duration),
             "recorded_replay_duration_s": float(elapsed),
+            "painting_speed_mm_s": speed_mm_s,
             "timeline": timeline,
             "safe_connector_paths": safe_connector_paths,
             "safety_status": "SAFE",
         }
 
     def _optimize_interactive_recorded_path(self):
-        """Optimize stroke order/orientation and report geometry-only distances."""
+        """Optimize stroke order and direction using collision-free connector distances."""
         records = list(self._interactive_spray_records)
         if not records:
             self.recorded_path_status_label.setText("No recorded path")
             return False
+
         source_ids = np.asarray([item["stroke_id"] for item in records], dtype=np.int64)
-        stroke_ids = np.unique(source_ids)
-        before_metrics = self._build_interactive_route_metrics(records)
-        if len(stroke_ids) > 1:
-            from stages.spray_stroke_route_optimizer import optimize_stroke_order
-            candidate = {
-                "nozzle_points": np.asarray(
-                    [item["nozzle_point_product"] for item in records], dtype=float
-                ),
-                "spray_directions": np.asarray(
-                    [item["spray_direction_product"] for item in records], dtype=float
-                ),
-                "segment_ids": source_ids,
-            }
-            optimized = optimize_stroke_order(
-                candidate,
-                orientation_weight_coordinate_units_per_rad=0.0,
-                max_2opt_passes=2 if len(stroke_ids) <= 30 else 0,
-            )
-            ordered = []
-            for stroke in optimized["route_optimization"]["strokes"]:
-                indices = np.flatnonzero(source_ids == stroke["source_segment_id"])
-                if stroke["reversed"]:
-                    indices = indices[::-1]
-                ordered.extend(records[int(index)] for index in indices)
-            records = ordered
-            self._interactive_spray_records = list(records)
-            route_info = optimized["route_optimization"]
-            self._interactive_spray_route_optimization = route_info
-            self.recorded_path_status_label.setText(
-                f"Optimized {len(stroke_ids)} strokes · "
-                f"{route_info['optimality'].replace('_', ' ')}"
-            )
-        else:
-            self._interactive_spray_records = list(records)
-            self._interactive_spray_route_optimization = {
+        stroke_ids = [int(value) for value in np.unique(source_ids)]
+        strokes = {
+            stroke_id: [
+                item for item in records if int(item["stroke_id"]) == stroke_id
+            ]
+            for stroke_id in stroke_ids
+        }
+        self._interactive_precomputed_connector_paths = {}
+        speed = float(self._robot_motion_settings.get("painting_speed_mm_s", 150.0))
+        mm_factor = self._get_source_mm_factor()
+        if mm_factor is None or mm_factor <= 0.0:
+            self.recorded_path_status_label.setText("ROUTE BLOCKED · UNKNOWN SOURCE UNIT")
+            self.recorded_path_replay_button.setEnabled(False)
+            return False
+
+        if len(stroke_ids) == 1:
+            ordered = list(strokes[stroke_ids[0]])
+            route_info = {
                 "algorithm": "SINGLE_STROKE_ORDER_PRESERVED",
                 "stroke_count": 1,
                 "optimality": "NO_INTER_STROKE_ROUTING_REQUIRED",
+                "connector_cost_basis": "NOT_APPLICABLE",
             }
-            self.recorded_path_status_label.setText(
-                f"Single stroke · {len(records)} poses"
-            )
+        else:
+            # A state is (stroke index, reversed). Connector costs are based on
+            # the actual collision-checked gun-envelope path, not endpoint distance.
+            def oriented_records(stroke_id, reversed_flag):
+                values = strokes[stroke_id]
+                return list(reversed(values)) if reversed_flag else values
 
-        after_metrics = self._build_interactive_route_metrics(records)
-        self._interactive_recorded_replay_timing = after_metrics
-        self._interactive_safe_connector_paths = after_metrics.get(
-            "safe_connector_paths", []
+            connector_cache = {}
+            def transition(state_a, state_b):
+                key = (state_a[0], bool(state_a[1]), state_b[0], bool(state_b[1]))
+                if key in connector_cache:
+                    return connector_cache[key]
+                if state_a[0] == state_b[0]:
+                    connector_cache[key] = (float("inf"), None)
+                    return connector_cache[key]
+                a = oriented_records(state_a[0], state_a[1])[-1]
+                b = oriented_records(state_b[0], state_b[1])[0]
+                path = self._interactive_build_safe_connector_path(a, b)
+                if path is None:
+                    connector_cache[key] = (float("inf"), None)
+                else:
+                    points = np.asarray(
+                        [item["nozzle_point_product"] for item in path], dtype=np.float64
+                    )
+                    distance = float(np.sum(np.linalg.norm(np.diff(points, axis=0), axis=1)))
+                    connector_cache[key] = (distance, path)
+                return connector_cache[key]
+
+            # Multi-start nearest-neighbour search over both directions. This
+            # finds a feasible global ordering candidate using real safe-path costs.
+            candidate_routes = []
+            seed_indices = np.linspace(
+                0, len(stroke_ids) - 1, min(len(stroke_ids), 8), dtype=int
+            )
+            seed_ids = [stroke_ids[int(index)] for index in np.unique(seed_indices)]
+            for seed_id in seed_ids:
+                for seed_reverse in (False, True):
+                    route = [(seed_id, seed_reverse)]
+                    remaining = set(stroke_ids)
+                    remaining.remove(seed_id)
+                    feasible = True
+                    while remaining:
+                        current_state = route[-1]
+                        current_end = oriented_records(
+                            current_state[0], current_state[1]
+                        )[-1]
+                        current_point = np.asarray(
+                            current_end["nozzle_point_product"], dtype=np.float64
+                        )
+                        geometric_candidates = []
+                        for next_id in remaining:
+                            for next_reverse in (False, True):
+                                next_start = oriented_records(next_id, next_reverse)[0]
+                                next_point = np.asarray(
+                                    next_start["nozzle_point_product"], dtype=np.float64
+                                )
+                                geometric_candidates.append((
+                                    float(np.linalg.norm(next_point - current_point)),
+                                    (next_id, next_reverse),
+                                ))
+                        geometric_candidates.sort(key=lambda item: item[0])
+                        # Evaluate a small nearest-neighbour shortlist first.
+                        # If all shortlisted transitions are unsafe, expand to
+                        # every remaining stroke rather than falsely declaring
+                        # that no feasible continuation exists.
+                        shortlist = geometric_candidates[:6]
+                        evaluated = []
+                        for _, state in shortlist:
+                            cost, _ = transition(current_state, state)
+                            evaluated.append((cost, state))
+                        if not any(np.isfinite(item[0]) for item in evaluated):
+                            for _, state in geometric_candidates[6:]:
+                                cost, _ = transition(current_state, state)
+                                evaluated.append((cost, state))
+                        best_cost, best = min(evaluated, key=lambda item: item[0])
+                        if best is None or not np.isfinite(best_cost):
+                            feasible = False
+                            break
+                        route.append(best)
+                        remaining.remove(best[0])
+                    if feasible:
+                        candidate_routes.append(route)
+
+            if not candidate_routes:
+                reason = getattr(
+                    self, "_interactive_last_connector_failure_reason",
+                    "No collision-free connector ordering exists",
+                )
+                self._interactive_spray_route_optimization = {
+                    "algorithm": "COLLISION_CHECKED_CONNECTOR_SEARCH",
+                    "stroke_count": len(stroke_ids),
+                    "optimality": "NO_FEASIBLE_ROUTE_FOUND",
+                }
+                self._interactive_recorded_replay_timing = {
+                    "safety_status": "BLOCKED_NO_COLLISION_FREE_CONNECTOR",
+                    "safety_reason": reason,
+                    "timeline": [],
+                    "safe_connector_paths": [],
+                }
+                self.recorded_path_replay_button.setEnabled(False)
+                self.recorded_path_status_label.setText("ROUTE BLOCKED · " + str(reason)[:100])
+                self._interactive_spray_route_actors = []
+                return False
+
+            def route_cost(route):
+                total = 0.0
+                for left, right in zip(route[:-1], route[1:]):
+                    cost, _ = transition(left, right)
+                    if not np.isfinite(cost):
+                        return float("inf")
+                    total += cost
+                return total
+
+            route = min(candidate_routes, key=route_cost)
+            # Improve the feasible route with 2-opt reversals. Reversing a
+            # sub-route also reverses each stroke direction, preserving each
+            # individual user-drawn stroke geometry.
+            max_passes = 1 if len(route) <= 30 else 0
+            for _ in range(max_passes):
+                improved = False
+                baseline = route_cost(route)
+                for first in range(0, len(route) - 1):
+                    for last in range(first + 1, len(route)):
+                        candidate = (
+                            route[:first]
+                            + [(sid, not rev) for sid, rev in reversed(route[first:last + 1])]
+                            + route[last + 1:]
+                        )
+                        cost = route_cost(candidate)
+                        if cost + 1e-9 < baseline:
+                            route = candidate
+                            baseline = cost
+                            improved = True
+                if not improved:
+                    break
+
+            ordered = []
+            for state in route:
+                ordered.extend(oriented_records(state[0], state[1]))
+            route_info = {
+                "algorithm": "COLLISION_CHECKED_SAFE_CONNECTOR_MULTI_START_NEAREST_NEIGHBOUR_2OPT",
+                "stroke_count": len(stroke_ids),
+                "optimality": "FEASIBLE_LOCAL_OPTIMUM_NOT_GLOBAL_PROOF",
+                "connector_cost_basis": "COLLISION_CHECKED_FULL_GUN_ENVELOPE_PATH_LENGTH",
+                "initial_seed_count": len(seed_ids) * 2,
+                "safe_connector_candidates_cached": len(connector_cache),
+                "safe_connector_search_length_source_units": float(route_cost(route)),
+            }
+            # Reuse the exact connector geometries found during optimization.
+            for state_a, state_b in zip(route[:-1], route[1:]):
+                _, path = transition(state_a, state_b)
+                if path is not None:
+                    left_record = oriented_records(state_a[0], state_a[1])[-1]
+                    right_record = oriented_records(state_b[0], state_b[1])[0]
+                    self._interactive_precomputed_connector_paths[
+                        (id(left_record), id(right_record))
+                    ] = path
+
+        self._interactive_spray_records = list(ordered)
+        self._interactive_spray_route_optimization = route_info
+        self.recorded_path_status_label.setText(
+            f"Optimized {len(stroke_ids)} strokes · {route_info['optimality'].replace('_', ' ')}"
         )
+
+        after_metrics = self._build_interactive_route_metrics(ordered)
+        self._interactive_recorded_replay_timing = after_metrics
+        self._interactive_safe_connector_paths = after_metrics.get("safe_connector_paths", [])
         route_safe = after_metrics.get("safety_status") == "SAFE"
         self.recorded_path_replay_button.setEnabled(
             route_safe and len(after_metrics.get("timeline", [])) > 0
         )
         if not route_safe:
-            reason = str(after_metrics.get(
-                "safety_reason", "No collision-free exterior connector"
-            ))
-            self.recorded_path_status_label.setText(
-                "ROUTE BLOCKED · " + reason[:100]
-            )
+            reason = str(after_metrics.get("safety_reason", "No collision-free exterior connector"))
+            self.recorded_path_status_label.setText("ROUTE BLOCKED · " + reason[:100])
+
         self._interactive_route_optimization_metrics = {
-            "before_spray_distance_mm": before_metrics["spray_distance_mm"],
-            "after_spray_distance_mm": after_metrics["spray_distance_mm"],
-            "before_connector_distance_mm": before_metrics["connector_distance_mm"],
-            "after_connector_distance_mm": after_metrics["connector_distance_mm"],
             "stroke_count": int(len(stroke_ids)),
+            "safe_connector_candidates_cached": int(
+                route_info.get("safe_connector_candidates_cached", 0)
+            ),
         }
+        total_distance = float(after_metrics.get("total_route_distance_mm", 0.0))
+        total_time = float(after_metrics.get("estimated_duration_s", 0.0))
         self.recorded_path_time_label.setText(
-            f"SPRAY {after_metrics['spray_distance_mm']:.1f} mm  |  "
-            f"SAFE SPRAY-OFF ROUTES {after_metrics['connector_distance_mm']:.1f} mm"
+            f"TOTAL {total_distance:.1f} mm  |  "
+            f"TIME {self._format_route_time(total_time)}  |  "
+            f"{speed:.1f} mm/s"
         )
         self._refresh_interactive_recorded_path_actor()
-        return True
+        return route_safe
 
     def _refresh_interactive_recorded_path_actor(self):
         for actor in getattr(self, "_interactive_spray_route_actors", []):
@@ -7514,6 +7694,13 @@ class ProductViewer(QWidget):
             "travel_length_mm": (
                 float(route_timing["connector_distance_mm"]) if route_timing else 0.0
             ),
+            "total_route_distance_mm": (
+                float(route_timing["total_route_distance_mm"]) if route_timing else 0.0
+            ),
+            "estimated_duration_s": (
+                float(route_timing["estimated_duration_s"]) if route_timing else 0.0
+            ),
+            "robot_motion_settings": dict(self._robot_motion_settings),
             "route_timing": (
                 {key: value for key, value in route_timing.items() if key != "timeline"}
                 if route_timing else None

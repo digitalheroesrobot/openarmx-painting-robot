@@ -47,6 +47,7 @@ from stages.stage3_spray_trajectory import (
 
 from ui.viewer_3d import ProductViewer
 from ui.coating_process_settings import CoatingProcessSettingsDialog
+from ui.robot_settings import RobotSettingsDialog, load_robot_settings, save_robot_settings
 from ui.sprayer_settings import (
     SprayerSettingsDialog,
     load_active_sprayer_profile_name,
@@ -352,6 +353,9 @@ class MainWindow(QMainWindow):
             )
         )
 
+        self.robot_settings_path = self.project_root / "config" / "robot_settings.json"
+        self.robot_settings = load_robot_settings(self.robot_settings_path)
+
         self.coating_process_config_path = (
             self.project_root / "config" / "coating_process.json"
         )
@@ -646,6 +650,7 @@ class MainWindow(QMainWindow):
 
         # 3D Viewer
         self.viewer = ProductViewer()
+        self.viewer.set_robot_motion_settings(self.robot_settings)
         self.viewer.pose_confirmed.connect(self._save_reference_pose)
         self.viewer.patch_selected.connect(
             self._on_viewer_patch_selected
@@ -922,6 +927,14 @@ class MainWindow(QMainWindow):
             self._open_sprayer_settings
         )
         layout.addWidget(self.sprayer_settings_button)
+
+        self.robot_settings_button = QPushButton("ROBOT ARM SETTINGS")
+        self.robot_settings_button.setObjectName("PrimaryButton")
+        self.robot_settings_button.setToolTip(
+            "Set painting travel speed and the future spray-point control frequency."
+        )
+        self.robot_settings_button.clicked.connect(self._open_robot_settings)
+        layout.addWidget(self.robot_settings_button)
 
         self.sprayer_profile_label = QLabel(
             f"ACTIVE PROFILE: {self.sprayer_profile.get('name', 'default sprayer')}"
@@ -2434,6 +2447,38 @@ class MainWindow(QMainWindow):
             # the background Stage 3 worker starts.
             "product_transform_4x4": self.viewer.get_product_transform().tolist(),
         }
+
+    def _open_robot_settings(self):
+        if self._operation_running:
+            return
+        dialog = RobotSettingsDialog(self.robot_settings, parent=self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.robot_settings = dict(dialog.settings)
+        save_robot_settings(self.robot_settings_path, self.robot_settings)
+        self.viewer.set_robot_motion_settings(self.robot_settings)
+        if len(getattr(self.viewer, "_interactive_spray_records", [])) >= 2:
+            self.viewer._optimize_interactive_recorded_path()
+            if self.interactive_spray_path is not None:
+                self.interactive_spray_path.update({
+                    "total_route_distance_mm": float(
+                        self.viewer._interactive_recorded_replay_timing.get(
+                            "total_route_distance_mm", 0.0
+                        )
+                    ) if self.viewer._interactive_recorded_replay_timing else 0.0,
+                    "estimated_duration_s": float(
+                        self.viewer._interactive_recorded_replay_timing.get(
+                            "estimated_duration_s", 0.0
+                        )
+                    ) if self.viewer._interactive_recorded_replay_timing else 0.0,
+                    "robot_motion_settings": dict(self.robot_settings),
+                })
+                self._show_interactive_route_summary(self.interactive_spray_path)
+        self.status_bar.showMessage(
+            "ROBOT SETTINGS SAVED | "
+            f"PAINTING SPEED: {self.robot_settings['painting_speed_mm_s']:.1f} mm/s | "
+            f"CONTROL: {self.robot_settings['control_frequency_hz']:.1f} Hz"
+        )
 
     def _open_sprayer_settings(self):
         if self._operation_running:
@@ -4257,14 +4302,17 @@ class MainWindow(QMainWindow):
             "OPTIMIZED INTERACTIVE SPRAY ROUTE\n\n"
             f"RECORDED POSES: {len(nozzle_points):,}\n"
             f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\n"
-            f"ROUTE LENGTH: {path_length:.2f} {self.coordinate_unit}\n"
+            f"TOTAL ROUTE LENGTH: {float(result.get('total_route_distance_mm', spray_distance + connector_distance)):.1f} mm\n"
             f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
-            f"SPRAY-OFF CONNECTORS: {connector_distance:.1f} mm\n\n"
+            f"SPRAY-OFF CONNECTORS: {connector_distance:.1f} mm\n"
+            f"ESTIMATED PAINTING TIME: {self.viewer._format_route_time(float(result.get('estimated_duration_s', 0.0)))}\n"
+            f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\n\n"
             f"ROUTING: {route_algorithm}\n"
             "GREEN: SPRAY-ON STROKES  |  BLUE: SPRAY-OFF CONNECTORS\n"
-            "Route order is heuristic, not a guaranteed global optimum.\n"
-            "Connectors are geometric previews, not collision-checked robot paths.\n"
-            "No robot speed or controller timing is assumed."
+            "Stroke order uses collision-checked exterior connector lengths; "
+            "the search is heuristic, not a proof of global optimum.\n"
+            "All route segments are timed at the configured constant painting speed.\n"
+            "Control frequency is reserved for future spray-point export."
         )
         self.status_bar.showMessage(
             f"ROUTE GENERATED | {len(np.unique(result.get('stroke_ids', [])))} STROKES | "
@@ -4291,11 +4339,15 @@ class MainWindow(QMainWindow):
             "SPRAY ROUTE READY FOR SIMULATION\n\n"
             f"RECORDED POSES: {len(result.get('nozzle_points_product', [])):,}\n"
             f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\n"
+            f"TOTAL ROUTE LENGTH: {float(result.get('total_route_distance_mm', spray_distance + connector_distance)):.1f} mm\n"
             f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
             f"SPRAY-OFF CONNECTORS: {connector_distance:.1f} mm\n"
+            f"ESTIMATED PAINTING TIME: {self.viewer._format_route_time(float(result.get('estimated_duration_s', 0.0)))}\n"
+            f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\n"
             f"ROUTING: {route_info.get('algorithm', 'STROKE ORDER RETAINED')}\n\n"
             "Review the optimized route in the 3D view.\n"
-            "Robot speed, controller frequency and execution time are not configured."
+            f"Simulation duration is calculated at {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s. "
+            "Control frequency is stored for future spray-point export."
         )
 
     def _show_spray_simulation_summary(self):
