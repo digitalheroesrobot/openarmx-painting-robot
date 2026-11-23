@@ -2,37 +2,49 @@ import math
 
 import pytest
 
-from core.coating_process import (
-    DEFAULT_COATING_PROCESS,
-    calculate_robot_waypoint_spacing_mm,
-    validate_coating_process,
-)
+from stages.stage3_spray_trajectory import _calculate_spray_footprint
 
 
-def test_robot_waypoint_spacing_uses_distance_per_control_cycle():
-    assert math.isclose(calculate_robot_waypoint_spacing_mm(500.0, 100.0), 5.0)
+def test_default_sprayer_geometry_is_100_mm_and_50_degrees():
+    footprint = _calculate_spray_footprint(
+        {
+            "pattern_type": "round_cone",
+            "spray_cone_angle_deg": 50.0,
+            "overlap_percent": 50.0,
+        },
+        100.0,
+    )
+    expected_width = 2.0 * 100.0 * math.tan(math.radians(25.0))
+    assert footprint["working_distance_mm"] == 100.0
+    assert footprint["included_angle_deg"] == 50.0
+    assert math.isclose(footprint["width_mm"], expected_width)
+    assert math.isclose(
+        footprint["nominal_track_spacing_mm"],
+        expected_width * 0.5,
+    )
 
 
-def test_robot_waypoint_spacing_changes_with_speed_and_frequency():
-    assert math.isclose(calculate_robot_waypoint_spacing_mm(250.0, 100.0), 2.5)
-    assert math.isclose(calculate_robot_waypoint_spacing_mm(500.0, 250.0), 2.0)
+@pytest.mark.parametrize("overlap", [0.0, 25.0, 50.0, 75.0, 90.0])
+def test_sample_spacing_equals_footprint_width_minus_overlap(overlap):
+    footprint = _calculate_spray_footprint(
+        {
+            "pattern_type": "round_cone",
+            "spray_cone_angle_deg": 50.0,
+            "overlap_percent": overlap,
+        },
+        100.0,
+    )
+    expected = footprint["width_mm"] * (1.0 - overlap / 100.0)
+    assert math.isclose(footprint["nominal_track_spacing_mm"], expected)
 
 
-def test_coating_process_does_not_own_robot_motion_settings():
-    process = validate_coating_process(DEFAULT_COATING_PROCESS)
-    assert "base_travel_speed_mm_s" not in process
-    assert "robot_control_frequency_hz" not in process
-    assert "min_travel_speed_mm_s" not in process
-    assert "max_travel_acceleration_mm_s2" not in process
-
-
-@pytest.mark.parametrize(
-    "speed,frequency",
-    [
-        (0.0, 100.0), (-1.0, 100.0), (100.0, 0.0),
-        (100.0, -1.0), (float("nan"), 100.0), (100.0, float("inf")),
-    ],
-)
-def test_robot_waypoint_spacing_rejects_invalid_inputs(speed, frequency):
+def test_invalid_overlap_is_rejected():
     with pytest.raises(ValueError):
-        calculate_robot_waypoint_spacing_mm(speed, frequency)
+        _calculate_spray_footprint(
+            {
+                "pattern_type": "round_cone",
+                "spray_cone_angle_deg": 50.0,
+                "overlap_percent": 100.0,
+            },
+            100.0,
+        )
