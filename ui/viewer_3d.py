@@ -3076,8 +3076,14 @@ class ProductViewer(QWidget):
         normal = np.asarray(pose["surface_normal_world"], dtype=np.float64)
         normal /= max(float(np.linalg.norm(normal)), 1e-12)
 
+        direction = np.asarray(
+            pose["spray_direction_world"], dtype=np.float64
+        )
+        direction /= max(float(np.linalg.norm(direction)), 1e-12)
         updated = dict(pose)
-        updated["nozzle_point_world"] = surface_point + normal * distance_source
+        # Working distance is measured along the current cone centerline,
+        # preserving its surface intersection even when the cone is tilted.
+        updated["nozzle_point_world"] = surface_point - direction * distance_source
         updated["timestamp"] = time.monotonic()
         self._interactive_update_cursor(updated)
 
@@ -4880,12 +4886,36 @@ class ProductViewer(QWidget):
         anchor = self._interactive_spray_latest_pose
         if anchor is None:
             anchor = self._interactive_pick_surface_pose(*self._interactive_spray_angle_last_position)
-        self._interactive_spray_angle_anchor_pose = (
-            None if anchor is None else {
+        self._interactive_spray_angle_anchor_pose = None
+        if anchor is not None:
+            anchor_pose = {
                 key: (value.copy() if isinstance(value, np.ndarray) else value)
                 for key, value in anchor.items()
             }
-        )
+            nozzle = np.asarray(
+                anchor_pose["nozzle_point_world"], dtype=np.float64
+            )
+            direction = np.asarray(
+                anchor_pose["spray_direction_world"], dtype=np.float64
+            )
+            direction /= max(float(np.linalg.norm(direction)), 1e-12)
+            plane_point = np.asarray(
+                anchor_pose["surface_point_world"], dtype=np.float64
+            )
+            plane_normal = np.asarray(
+                anchor_pose["surface_normal_world"], dtype=np.float64
+            )
+            plane_normal /= max(float(np.linalg.norm(plane_normal)), 1e-12)
+            denominator = float(np.dot(direction, plane_normal))
+            if abs(denominator) > 1e-8:
+                ray_distance = float(
+                    np.dot(plane_point - nozzle, plane_normal) / denominator
+                )
+                if ray_distance > 0.0 and np.isfinite(ray_distance):
+                    anchor_pose["angle_pivot_world"] = (
+                        nozzle + direction * ray_distance
+                    )
+                    self._interactive_spray_angle_anchor_pose = anchor_pose
         # Angle adjustment is a positioning gesture, never a paint stroke.
         self._interactive_spray_recording = False
         self._interactive_spray_last_deposition_timestamp = None
@@ -4923,16 +4953,27 @@ class ProductViewer(QWidget):
         anchor = self._interactive_spray_angle_anchor_pose
         if anchor is None:
             return
-        # Freeze the picked surface point and nozzle origin; only the cone axis moves.
-        pose = {
-            key: (value.copy() if isinstance(value, np.ndarray) else value)
-            for key, value in anchor.items()
-        }
-        pose["spray_direction_world"] = self._interactive_rotate_spray_direction(
+
+        # Rotate about the intersection of the original cone centerline and
+        # the picked surface plane. The intersection stays fixed; the nozzle
+        # moves on an arc at the configured working distance.
+        pivot = np.asarray(
+            anchor["angle_pivot_world"], dtype=np.float64
+        )
+        rotated_direction = self._interactive_rotate_spray_direction(
             anchor["spray_direction_world"],
             self._interactive_spray_angle_y_deg,
             self._interactive_spray_angle_x_deg,
         )
+        distance_source = float(self._interactive_spray_standoff)
+        pose = {
+            key: (value.copy() if isinstance(value, np.ndarray) else value)
+            for key, value in anchor.items()
+            if key != "angle_pivot_world"
+        }
+        pose["surface_point_world"] = pivot.copy()
+        pose["spray_direction_world"] = rotated_direction
+        pose["nozzle_point_world"] = pivot - rotated_direction * distance_source
         pose["timestamp"] = time.monotonic()
         self._interactive_update_cursor(pose)
 
