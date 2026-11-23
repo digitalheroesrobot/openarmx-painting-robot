@@ -1016,12 +1016,12 @@ class ProductViewer(QWidget):
         row.setContentsMargins(8, 4, 8, 4)
         row.setSpacing(7)
         row.addWidget(QLabel("RECORDED SPRAY PATH"))
-        self.recorded_path_optimize_button = QPushButton("OPTIMIZE PATH")
+        self.recorded_path_optimize_button = QPushButton("OPTIMIZE ROUTE")
         self.recorded_path_optimize_button.clicked.connect(
             self._optimize_interactive_recorded_path
         )
         row.addWidget(self.recorded_path_optimize_button)
-        self.recorded_path_replay_button = QPushButton("▶ REPLAY")
+        self.recorded_path_replay_button = QPushButton("▶ SIMULATE")
         self.recorded_path_replay_button.clicked.connect(
             self._start_interactive_recorded_replay
         )
