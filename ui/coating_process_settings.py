@@ -95,7 +95,10 @@ class CoatingProcessSettingsDialog(QDialog):
             spin.valueChanged.connect(self._update_readiness)
 
     def _values(self):
-        values = {"name": self.name_edit.text().strip()}
+        # Preserve robot motion values and any future hidden process fields.
+        # Robot Settings is the authoritative editor for robot parameters.
+        values = deepcopy(self.current_process)
+        values["name"] = self.name_edit.text().strip()
         values.update({key: widget.value() for key, widget in self.fields.items()})
         values["number_of_coats"] = int(values["number_of_coats"])
         values["input_status"] = "UNVALIDATED_OPERATOR_INPUT"
