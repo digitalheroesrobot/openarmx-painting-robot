@@ -1646,7 +1646,7 @@ class ProductViewer(QWidget):
             if not edge["spray_on"]:
                 self._interactive_spray_last_deposition_timestamp = None
                 self._interactive_spray_previous_nozzle_world = None
-                        cursor = interval_end
+                cursor = interval_end
                 continue
 
             first_record = edge["start_record"]
