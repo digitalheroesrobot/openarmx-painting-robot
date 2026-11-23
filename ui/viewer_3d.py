@@ -479,7 +479,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_face_area_mm2 = None
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
-        self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_spray_start_timestamp = None
         self._interactive_spray_paint_footprint_angle_deg = 0.0
         self._interactive_spray_gun_actors = []
@@ -1083,8 +1082,7 @@ class ProductViewer(QWidget):
             self._interactive_spray_dirty_face_ids = set()
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
-            self._interactive_spray_last_speed_mm_s = 0.0
-            self._interactive_saved_route_face_thickness_um = None
+                self._interactive_saved_route_face_thickness_um = None
             self._interactive_saved_route_surface_field = None
             self._interactive_refresh_paint_visual(render=False)
         self.recorded_path_optimize_button.setVisible(route_page)
@@ -1426,7 +1424,6 @@ class ProductViewer(QWidget):
             }
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
-        self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_spray_gun_collision = False
         self._interactive_spray_surface_excluded = False
         self._interactive_refresh_paint_visual(render=False)
@@ -1560,8 +1557,7 @@ class ProductViewer(QWidget):
         if self._interactive_spray_gun_collision:
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
-            self._interactive_spray_last_speed_mm_s = 0.0
-            return False
+                return False
         self._interactive_apply_paint_deposition(
             patch, replay_pose, duration_s=float(dt)
         )
@@ -1651,8 +1647,7 @@ class ProductViewer(QWidget):
             if not edge["spray_on"]:
                 self._interactive_spray_last_deposition_timestamp = None
                 self._interactive_spray_previous_nozzle_world = None
-                self._interactive_spray_last_speed_mm_s = 0.0
-                cursor = interval_end
+                        cursor = interval_end
                 continue
 
             first_record = edge["start_record"]
@@ -3301,7 +3296,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_face_area_mm2 = None
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
-        self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_spray_start_timestamp = None
         self._interactive_spray_paint_footprint_angle_deg = float(cone_angle_deg)
         self._interactive_spray_gun_collision = False
@@ -3798,8 +3792,7 @@ class ProductViewer(QWidget):
         if self._interactive_spray_recording:
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
-            self._interactive_spray_last_speed_mm_s = 0.0
-
+    
         pose = self._interactive_spray_latest_pose
         if pose is None:
             return
@@ -3996,8 +3989,7 @@ class ProductViewer(QWidget):
         ):
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
-            self._interactive_spray_last_speed_mm_s = 0.0
-            return
+                return
         if self.current_mesh is None:
             return
         ids = patch.cell_data.get("InteractiveOriginalCellId")
@@ -4046,9 +4038,6 @@ class ProductViewer(QWidget):
         source_factor = self._get_source_mm_factor()
         if source_factor is None:
             source_factor = 1.0
-        travel_distance_mm = float(np.linalg.norm(nozzle_world - previous_nozzle)) * float(source_factor)
-        travel_speed_mm_s = travel_distance_mm / dt if dt > 1e-9 else 0.0
-        self._interactive_spray_last_speed_mm_s = travel_speed_mm_s
         process = dict(DEFAULT_COATING_PROCESS)
         process.update(self._interactive_coating_process or {})
         try:
@@ -4088,7 +4077,7 @@ class ProductViewer(QWidget):
             self._interactive_apply_brep_uv_deposition(
                 ids=ids, pose=pose, nozzle_world=nozzle_world,
                 source_factor=float(source_factor), transform=transform,
-                dt=dt, travel_speed_mm_s=travel_speed_mm_s,
+                dt=dt,
                 flow=flow, efficiency=efficiency, solids=solids,
                 coats=coats, brep_context=brep_context,
             )
@@ -4165,7 +4154,6 @@ class ProductViewer(QWidget):
             transfer_efficiency_percent=efficiency,
             volume_solids_percent=solids,
             number_of_coats=coats,
-            travel_speed_mm_s=travel_speed_mm_s,
             radial_alpha=float(
                 self._interactive_sprayer_profile.get("deposition_beta", 2.0)
             ),
@@ -4495,8 +4483,7 @@ class ProductViewer(QWidget):
                     transfer_efficiency_percent=efficiency,
                     volume_solids_percent=solids,
                     number_of_coats=coats,
-                    travel_speed_mm_s=travel_speed_mm_s,
-                    radial_alpha=float(
+                            radial_alpha=float(
                         self._interactive_sprayer_profile.get("deposition_beta", 2.0)
                     ),
                     radial_beta=float(
@@ -4558,7 +4545,7 @@ class ProductViewer(QWidget):
 
     def _interactive_apply_brep_uv_deposition(
         self, *, ids, pose, nozzle_world, source_factor, transform, dt,
-        travel_speed_mm_s, flow, efficiency, solids, coats, brep_context,
+        flow, efficiency, solids, coats, brep_context,
     ):
         """Apply sparse triangle-integrated spray physics and bake it to CAD Face UV textures.
 
@@ -4817,7 +4804,6 @@ class ProductViewer(QWidget):
             transfer_efficiency_percent=efficiency,
             volume_solids_percent=solids,
             number_of_coats=coats,
-            travel_speed_mm_s=travel_speed_mm_s,
             radial_alpha=float(self._interactive_sprayer_profile.get("deposition_beta", 2.0)),
             radial_beta=float(self._interactive_sprayer_profile.get("deposition_beta", 2.0)),
             core_deposition_fraction=float(self._interactive_sprayer_profile.get("core_deposition_fraction", 0.88)),
@@ -5386,8 +5372,7 @@ class ProductViewer(QWidget):
             self._interactive_spray_previous_nozzle_world = None
             self._interactive_spray_sampling_previous_pose = None
             self._interactive_spray_sampling_distance_accumulator = 0.0
-            self._interactive_spray_last_speed_mm_s = 0.0
-
+    
         local_pose = self._interactive_pose_to_product_frame(pose)
         footprints = _build_spray_footprint_overlay(
             self.current_mesh,
@@ -5428,8 +5413,7 @@ class ProductViewer(QWidget):
                         # footprint breaks deposition continuity.
                         self._interactive_spray_last_deposition_timestamp = None
                         self._interactive_spray_previous_nozzle_world = None
-                        self._interactive_spray_last_speed_mm_s = 0.0
-                        continue
+                                        continue
                     sample_patch = sample_footprints[0][0]
                     sample_patch.points = (
                         np.asarray(sample_patch.points)
@@ -5695,8 +5679,7 @@ class ProductViewer(QWidget):
             status_text = "COLLISION - SPRAY BLOCKED"
         else:
             status_text = (
-                f"SPRAYER CLEAR | SPEED "
-                f"{self._interactive_spray_last_speed_mm_s:.1f} mm/s"
+                "SPRAYER CLEAR | READY"
             )
 
         if self._interactive_hud_actor is not None:
@@ -5906,7 +5889,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_recording = False
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
-        self._interactive_spray_last_speed_mm_s = 0.0
 
     def _on_interactive_spray_middle_release(self, interactor, event):
         self._interactive_spray_angle_dragging = False
@@ -6060,8 +6042,7 @@ class ProductViewer(QWidget):
         if self._interactive_spray_recording:
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
-            self._interactive_spray_last_speed_mm_s = 0.0
-
+    
         pose = self._interactive_spray_latest_pose
         if pose is not None:
             self._interactive_update_cursor(dict(pose))
@@ -6095,8 +6076,7 @@ class ProductViewer(QWidget):
             self._interactive_spray_recording = False
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
-            self._interactive_spray_last_speed_mm_s = 0.0
-
+    
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y)
         if pose is None:
@@ -6110,8 +6090,7 @@ class ProductViewer(QWidget):
             self._interactive_spray_recording = False
             self._interactive_spray_last_deposition_timestamp = None
             self._interactive_spray_previous_nozzle_world = None
-            self._interactive_spray_last_speed_mm_s = 0.0
-        elif left_button_held and not self._interactive_spray_recording:
+            elif left_button_held and not self._interactive_spray_recording:
             self._interactive_begin_spray_stroke()
 
         if self._interactive_spray_recording:
@@ -6130,7 +6109,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_recording = True
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
-        self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_spray_start_timestamp = None
         self._interactive_spray_sampling_previous_pose = None
         self._interactive_spray_sampling_distance_accumulator = 0.0
@@ -6173,7 +6151,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_sampling_previous_pose = None
         self._interactive_spray_sampling_distance_accumulator = 0.0
-        self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
         self._interactive_spray_angle_x_deg = 0.0
@@ -6226,7 +6203,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_sampling_previous_pose = None
         self._interactive_spray_sampling_distance_accumulator = 0.0
-        self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
         self._interactive_spray_angle_x_deg = 0.0
@@ -6266,7 +6242,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_sampling_previous_pose = None
         self._interactive_spray_sampling_distance_accumulator = 0.0
-        self._interactive_spray_last_speed_mm_s = 0.0
 
         # One angle adjustment applies to exactly one completed paint stroke.
         # Restore the standard cone direction immediately after the stroke.
@@ -6307,7 +6282,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_active = False
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
-        self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_remove_live_actors()
         if self._interactive_spray_excluded_overlay_actor is not None:
             try:
