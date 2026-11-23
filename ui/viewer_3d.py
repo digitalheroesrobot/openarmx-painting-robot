@@ -1043,7 +1043,7 @@ class ProductViewer(QWidget):
         row.addWidget(self.recorded_path_stop_button)
         self.recorded_path_status_label = QLabel("No recorded path")
         row.addWidget(self.recorded_path_status_label, 1)
-        self.recorded_path_time_label = QLabel("EST. TIME: --")
+        self.recorded_path_time_label = QLabel("ROUTE DISTANCE: --")
         self.recorded_path_time_label.setMinimumWidth(220)
         self.recorded_path_time_label.setStyleSheet(
             "color: #79D7A5; font-weight: 800;"
@@ -2083,7 +2083,7 @@ class ProductViewer(QWidget):
         settings_row.addWidget(self.trajectory_paint_color_button)
         settings_row.addStretch(1)
 
-        speed_label = QLabel("SPEED")
+        speed_label = QLabel("PLAYBACK RATE")
         speed_label.setStyleSheet(
             "color: #8EADBC; font-size: 9px; font-weight: 700;"
         )
@@ -2109,18 +2109,15 @@ class ProductViewer(QWidget):
         playback_layout.addWidget(self.trajectory_playback_slider)
 
         self.trajectory_time_label = QLabel(
-            "WALL 00:00 | PATH 00:00 / 00:00 | TRAVEL +00:00 | PLAN 00:00"
+            "VISUAL POINT -- / -- | ROBOT TIMING NOT CONFIGURED"
         )
         self.trajectory_time_label.setMinimumWidth(0)
         self.trajectory_time_label.setStyleSheet(
             "color: #B9CCD5; font-size: 9px; font-weight: 700; padding-left: 4px;"
         )
         self.trajectory_time_label.setToolTip(
-            "WALL is real time spent in this preview. PATH is calculated spray-path "
-            "time. TRAVEL is the straight-line spray-OFF transfer estimate between "
-            "strokes; transfers are not animated and are not collision checked. "
-            "PLAN is PATH plus estimated TRAVEL; it excludes valve delays, robot "
-            "IK/collision planning, and other cell-cycle overhead."
+            "This is visual point-index playback only. Robot execution speed, "
+            "controller frequency and cycle time are intentionally not configured."
         )
         playback_layout.addWidget(self.trajectory_time_label)
 
@@ -6390,18 +6387,6 @@ class ProductViewer(QWidget):
             "travel_length_mm": (
                 float(route_timing["connector_distance_mm"]) if route_timing else 0.0
             ),
-            "spray_duration_s": (
-                float(route_timing.get("recorded_replay_duration_s", 0.0)) if route_timing else 0.0
-            ),
-            "travel_duration_s": (
-                0.0 if route_timing else 0.0
-            ),
-            "tool_delay_s": (
-                0.0 if route_timing else 0.0
-            ),
-            "estimated_duration_s": (
-                float(route_timing.get("recorded_replay_duration_s", 0.0)) if route_timing else 0.0
-            ),
             "route_timing": (
                 {key: value for key, value in route_timing.items() if key != "timeline"}
                 if route_timing else None
@@ -7348,6 +7333,9 @@ class ProductViewer(QWidget):
             deposition_readiness, deposition_missing_inputs = (
                 "INPUTS_INCOMPLETE", ["valid coating process parameters"]
             )
+        deposition_readiness = "INPUTS_INCOMPLETE"
+        deposition_missing_inputs = list(deposition_missing_inputs)
+        deposition_missing_inputs.append("robot motion timing (not configured)")
         faces = np.asarray(self.current_mesh.faces, dtype=np.int64)
         vertices = np.asarray(self.current_mesh.vertices, dtype=float)
         triangles = vertices[faces[target_face_ids]]
