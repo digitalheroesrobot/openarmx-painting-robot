@@ -1584,25 +1584,30 @@ class ProductViewer(QWidget):
                 tool_axis_count = max(
                     1, int(math.ceil(tool_axis_length / tool_axis_step))
                 )
-                for axis_index in range(tool_axis_count + 1):
-                    axis_fraction = float(axis_index) / float(tool_axis_count)
-                    axis_point = (
-                        point_product
-                        + outward * (tool_axis_length * axis_fraction)
+                axis_fractions = np.linspace(
+                    0.0, 1.0, tool_axis_count + 1, dtype=np.float64
+                )
+                axis_points = (
+                    point_product[None, :]
+                    + np.outer(
+                        axis_fractions * tool_axis_length, outward
                     )
-                    signed_plane_distances = (
-                        hull_equations[:, :3] @ axis_point
-                        + hull_equations[:, 3]
+                )
+                signed_plane_distances = (
+                    axis_points @ hull_equations[:, :3].T
+                    + hull_equations[None, :, 3]
+                )
+                # One supporting half-space must contain the entire
+                # clearance-radius ball around every centerline sample.
+                # This is a sufficient, intentionally conservative test.
+                if np.any(
+                    np.max(signed_plane_distances, axis=1) < tool_clearance
+                ):
+                    return blocked(
+                        "sprayer would enter a product hole, recess, or "
+                        "interior region; connector must remain outside "
+                        "the product's convex envelope"
                     )
-                    # One supporting half-space must contain the entire
-                    # clearance-radius ball around this centerline sample.
-                    # This is a sufficient, intentionally conservative test.
-                    if float(np.max(signed_plane_distances)) < tool_clearance:
-                        return blocked(
-                            "sprayer would enter a product hole, recess, or "
-                            "interior region; connector must remain outside "
-                            "the product's convex envelope"
-                        )
 
                 _, gun_polydata = self._interactive_build_gun_visual(
                     point_world, direction_world, render=False
