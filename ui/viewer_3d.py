@@ -493,6 +493,8 @@ class ProductViewer(QWidget):
 
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
+        self._interactive_camera_pan_dragging = False
+        self._interactive_camera_pan_last_position = None
         self._interactive_spray_angle_x_deg = 0.0
         self._interactive_spray_angle_y_deg = 0.0
         self._interactive_spray_angle_anchor_pose = None
@@ -513,6 +515,12 @@ class ProductViewer(QWidget):
         )
         self._interactive_spray_middle_release_observer_id = interactor.AddObserver(
             "MiddleButtonReleaseEvent", self._on_interactive_spray_middle_release, 3.0
+        )
+        self._interactive_camera_pan_press_observer_id = interactor.AddObserver(
+            "RightButtonPressEvent", self._on_interactive_camera_pan_press, 3.0
+        )
+        self._interactive_camera_pan_release_observer_id = interactor.AddObserver(
+            "RightButtonReleaseEvent", self._on_interactive_camera_pan_release, 3.0
         )
         self._interactive_spray_wheel_forward_observer_id = interactor.AddObserver(
             "MouseWheelForwardEvent", self._on_interactive_spray_wheel, 3.0
@@ -2800,7 +2808,7 @@ class ProductViewer(QWidget):
             (
                 f"SPRAY CURSOR ACTIVE  |  WORK DIST {self._interactive_spray_standoff * (self._get_source_mm_factor() or 1.0):.1f} mm "
                 f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
-                "MOVE: PREVIEW  |  HOLD LEFT MOUSE: PAINT  |  FINISH IN RIGHT PANEL"
+                "MOVE: PREVIEW  |  LEFT: PAINT  |  MIDDLE: ANGLE  |  RIGHT: CAMERA PAN"
             ),
             position="upper_left",
             font_size=10,
@@ -5113,6 +5121,75 @@ class ProductViewer(QWidget):
         pose["timestamp"] = time.monotonic()
         self._interactive_update_cursor(pose)
 
+    def _on_interactive_camera_pan_press(self, interactor, event):
+        """Start a camera-only pan; the product transform is never modified."""
+        if (
+            not self._interactive_spray_active
+            or self._interactive_view_mode != "spray"
+        ):
+            return
+        self._interactive_camera_pan_dragging = True
+        self._interactive_camera_pan_last_position = tuple(
+            int(value) for value in interactor.GetEventPosition()
+        )
+
+    def _on_interactive_camera_pan_release(self, interactor, event):
+        self._interactive_camera_pan_dragging = False
+        self._interactive_camera_pan_last_position = None
+
+    def _pan_camera_from_right_drag(self, interactor):
+        """Translate camera position and focal point together, without orbiting."""
+        if not self._interactive_camera_pan_dragging:
+            return
+        current = tuple(int(value) for value in interactor.GetEventPosition())
+        previous = self._interactive_camera_pan_last_position
+        self._interactive_camera_pan_last_position = current
+        if previous is None:
+            return
+
+        dx = float(current[0] - previous[0])
+        dy = float(current[1] - previous[1])
+        if abs(dx) + abs(dy) < 1e-9:
+            return
+
+        camera = self.plotter.camera
+        viewport_height = max(int(self.plotter.render_window.GetSize()[1]), 1)
+        position = np.asarray(camera.GetPosition(), dtype=np.float64)
+        focal_point = np.asarray(camera.GetFocalPoint(), dtype=np.float64)
+        view_up = np.asarray(camera.GetViewUp(), dtype=np.float64)
+        view_direction = focal_point - position
+        distance = float(np.linalg.norm(view_direction))
+        up_length = float(np.linalg.norm(view_up))
+        if distance <= 1e-12 or up_length <= 1e-12:
+            return
+
+        view_direction /= distance
+        view_up /= up_length
+        view_right = np.cross(view_direction, view_up)
+        right_length = float(np.linalg.norm(view_right))
+        if right_length <= 1e-12:
+            return
+        view_right /= right_length
+
+        if camera.GetParallelProjection():
+            world_per_pixel = (
+                2.0 * float(camera.GetParallelScale()) / viewport_height
+            )
+        else:
+            world_per_pixel = (
+                2.0 * distance
+                * math.tan(math.radians(float(camera.GetViewAngle())) * 0.5)
+                / viewport_height
+            )
+
+        translation = (
+            -dx * world_per_pixel * view_right
+            + dy * world_per_pixel * view_up
+        )
+        camera.SetPosition(*(position + translation).tolist())
+        camera.SetFocalPoint(*(focal_point + translation).tolist())
+        self.plotter.render()
+
     def _on_interactive_spray_wheel(self, interactor, event):
         """Adjust spray working distance instead of zooming during SPRAY mode.
 
@@ -5167,6 +5244,16 @@ class ProductViewer(QWidget):
             or self._interactive_view_mode != "spray"
         ):
             return
+
+        # Right-drag translates the camera only. The product and spray pose
+        # remain unchanged; camera orientation is preserved during the pan.
+        if self._interactive_camera_pan_dragging:
+            if not bool(QApplication.mouseButtons() & Qt.MouseButton.RightButton):
+                self._interactive_camera_pan_dragging = False
+                self._interactive_camera_pan_last_position = None
+            else:
+                self._pan_camera_from_right_drag(interactor)
+                return
 
         # Middle-drag exclusively controls spray direction.
         if self._interactive_spray_angle_dragging:
@@ -5268,6 +5355,8 @@ class ProductViewer(QWidget):
 
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
+        self._interactive_camera_pan_dragging = False
+        self._interactive_camera_pan_last_position = None
         self._interactive_spray_angle_x_deg = 0.0
         self._interactive_spray_angle_y_deg = 0.0
         self._interactive_spray_angle_anchor_pose = None
@@ -5285,6 +5374,8 @@ class ProductViewer(QWidget):
 
         self._interactive_spray_active = False
         self._interactive_view_mode = "camera"
+        self._interactive_camera_pan_dragging = False
+        self._interactive_camera_pan_last_position = None
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_last_speed_mm_s = 0.0
