@@ -7165,6 +7165,10 @@ class ProductViewer(QWidget):
         )
         if stored_count:
             self._interactive_safe_connector_paths = None
+            self._interactive_recorded_replay_timing = None
+            self.recorded_path_replay_button.setEnabled(
+                len(self._interactive_spray_records) >= 2
+            )
             self._refresh_interactive_recorded_path_actor()
         return stored_count
 
