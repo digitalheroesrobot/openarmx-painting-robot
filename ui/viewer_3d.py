@@ -447,11 +447,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_active = False
         self._interactive_view_mode = "camera"
         self._interactive_spray_recording = False
-        # Deep cavity mode follows the deepest front-facing surface visible
-        # through the cursor ray, allowing the virtual nozzle to enter hollow parts.
-        self._interactive_spray_cavity_mode = False
         self._interactive_spray_standoff = 0.0
-        self._interactive_spray_auto_standoff = False
         self._interactive_spray_cone_angle_deg = 0.0
         self._interactive_spray_transform = np.eye(4, dtype=float)
         self._interactive_spray_latest_pose = None
@@ -500,6 +496,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_angle_last_position = None
         self._interactive_spray_angle_x_deg = 0.0
         self._interactive_spray_angle_y_deg = 0.0
+        self._interactive_spray_angle_anchor_pose = None
         self._interactive_hud_actor = None
         self._interactive_last_record_time = 0.0
         self._interactive_mouse_move_observer_id = interactor.AddObserver(
@@ -982,74 +979,6 @@ class ProductViewer(QWidget):
         )
         row.addWidget(self.working_distance_label)
         row.addWidget(self.working_distance_spin)
-
-        self.auto_standoff_button = QPushButton("AUTO STANDOFF")
-        self.auto_standoff_button.setCheckable(True)
-        self.auto_standoff_button.setChecked(False)
-        self.auto_standoff_button.setEnabled(False)
-        self.auto_standoff_button.setToolTip(
-            "Keep the nozzle at the requested working distance from the nearest "
-            "surface along the current spray direction."
-        )
-        self.auto_standoff_button.toggled.connect(
-            self._on_interactive_auto_standoff_toggled
-        )
-        row.addWidget(self.auto_standoff_button)
-
-        self.cavity_mode_button = QPushButton("CAVITY NOZZLE")
-        self.cavity_mode_button.setCheckable(True)
-        self.cavity_mode_button.setChecked(False)
-        self.cavity_mode_button.setEnabled(False)
-        self.cavity_mode_button.setToolTip(
-            "Pick the deepest front-facing surface along the cursor ray so the "
-            "spray nozzle can enter hollow parts. Collision protection remains active."
-        )
-        self.cavity_mode_button.toggled.connect(
-            self._on_interactive_cavity_mode_toggled
-        )
-        row.addWidget(self.cavity_mode_button)
-
-        self.cavity_depth_label = QLabel("DEPTH")
-        self.cavity_depth_spin = QDoubleSpinBox()
-        self.cavity_depth_spin.setRange(0.0, 180.0)
-        self.cavity_depth_spin.setSingleStep(5.0)
-        self.cavity_depth_spin.setValue(40.0)
-        self.cavity_depth_spin.setSuffix(" mm")
-        self.cavity_depth_spin.setEnabled(False)
-        self.cavity_depth_spin.setToolTip(
-            "Additional nozzle insertion distance into a hollow part."
-        )
-        self.cavity_depth_spin.valueChanged.connect(
-            self._on_interactive_cavity_controls_changed
-        )
-        row.addWidget(self.cavity_depth_label)
-        row.addWidget(self.cavity_depth_spin)
-
-        self.cavity_tilt_x_label = QLabel("TILT X")
-        self.cavity_tilt_x_spin = QDoubleSpinBox()
-        self.cavity_tilt_x_spin.setRange(-45.0, 45.0)
-        self.cavity_tilt_x_spin.setSingleStep(1.0)
-        self.cavity_tilt_x_spin.setValue(0.0)
-        self.cavity_tilt_x_spin.setSuffix("°")
-        self.cavity_tilt_x_spin.setEnabled(False)
-        self.cavity_tilt_x_spin.valueChanged.connect(
-            self._on_interactive_cavity_controls_changed
-        )
-        row.addWidget(self.cavity_tilt_x_label)
-        row.addWidget(self.cavity_tilt_x_spin)
-
-        self.cavity_tilt_y_label = QLabel("TILT Y")
-        self.cavity_tilt_y_spin = QDoubleSpinBox()
-        self.cavity_tilt_y_spin.setRange(-45.0, 45.0)
-        self.cavity_tilt_y_spin.setSingleStep(1.0)
-        self.cavity_tilt_y_spin.setValue(0.0)
-        self.cavity_tilt_y_spin.setSuffix("°")
-        self.cavity_tilt_y_spin.setEnabled(False)
-        self.cavity_tilt_y_spin.valueChanged.connect(
-            self._on_interactive_cavity_controls_changed
-        )
-        row.addWidget(self.cavity_tilt_y_label)
-        row.addWidget(self.cavity_tilt_y_spin)
 
         self.interaction_mode_status = QLabel("CAMERA CONTROL")
         self.interaction_mode_status.setStyleSheet(
@@ -2813,9 +2742,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_input_style = vtkInteractorStyleUser()
         self.interaction_mode_panel.show()
         self.spray_mode_button.setEnabled(True)
-        self.cavity_mode_button.setEnabled(True)
         self.working_distance_spin.setEnabled(True)
-        self.auto_standoff_button.setEnabled(True)
         factor = self._get_source_mm_factor()
         if factor is not None:
             self.working_distance_spin.blockSignals(True)
@@ -3122,96 +3049,6 @@ class ProductViewer(QWidget):
                 pass
         self._interactive_spray_live_actors = []
 
-    def _on_interactive_cavity_mode_toggled(self, enabled):
-        """Toggle deep-surface picking for manual cavity spraying."""
-        self._interactive_spray_cavity_mode = bool(enabled)
-        for widget in (
-            self.cavity_depth_spin,
-            self.cavity_tilt_x_spin,
-            self.cavity_tilt_y_spin,
-        ):
-            widget.setEnabled(bool(enabled))
-        if hasattr(self, "interaction_mode_status"):
-            if enabled:
-                self.interaction_mode_status.setText("SPRAY / CAVITY NOZZLE")
-            elif self._interactive_spray_active:
-                self.interaction_mode_status.setText("SPRAY CONTROL")
-            else:
-                self.interaction_mode_status.setText("CAMERA CONTROL")
-
-        # Re-evaluate the current cursor immediately.
-        if self._interactive_spray_active and self._interactive_spray_latest_pose is not None:
-            x, y = self.plotter.iren.interactor.GetEventPosition()
-            pose = self._interactive_pick_surface_pose(x, y)
-            if pose is not None:
-                self._interactive_update_cursor(pose)
-
-    def _on_interactive_auto_standoff_toggled(self, enabled):
-        """Enable closed-loop geometric working-distance control."""
-        self._interactive_spray_auto_standoff = bool(enabled)
-        if hasattr(self, "interaction_mode_status") and self._interactive_spray_active:
-            self.interaction_mode_status.setText(
-                "SPRAY / AUTO STANDOFF" if enabled else
-                ("SPRAY / CAVITY NOZZLE" if self._interactive_spray_cavity_mode else "SPRAY CONTROL")
-            )
-        if enabled and self._interactive_spray_active and self._interactive_spray_latest_pose is not None:
-            pose = self._interactive_apply_auto_standoff(
-                self._interactive_spray_latest_pose
-            )
-            if pose is not None:
-                self._interactive_update_cursor(pose)
-
-    def _interactive_apply_auto_standoff(self, pose):
-        """Move the nozzle to the requested distance from the nearest surface along spray axis."""
-        if not self._interactive_spray_auto_standoff:
-            return pose
-        if self._interactive_spray_locator is None:
-            return pose
-
-        nozzle = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
-        direction = np.asarray(pose["spray_direction_world"], dtype=np.float64)
-        direction /= max(float(np.linalg.norm(direction)), 1e-12)
-        rotation = self._actor_matrix_array()[:3, :3]
-        inverse = np.linalg.inv(self._interactive_spray_transform)
-
-        # Work in product-local coordinates because the VTK locator is built
-        # from the product mesh before the actor transform is applied.
-        start_world = nozzle
-        end_world = nozzle + direction * (1000.0 / max(self._get_source_mm_factor() or 1.0, 1e-12))
-        start_local = (inverse @ np.append(start_world, 1.0))[:3]
-        end_local = (inverse @ np.append(end_world, 1.0))[:3]
-
-        points = vtkPoints()
-        cell_ids = vtkIdList()
-        hit = self._interactive_spray_locator.IntersectWithLine(
-            start_local.tolist(), end_local.tolist(), points, cell_ids
-        )
-        if not hit or points.GetNumberOfPoints() == 0:
-            return pose
-
-        best_distance = float("inf")
-        best_world = None
-        for index in range(points.GetNumberOfPoints()):
-            point_local = np.asarray(points.GetPoint(index), dtype=np.float64)
-            point_world = (
-                self._interactive_spray_transform
-                @ np.append(point_local, 1.0)
-            )[:3]
-            distance = float(np.dot(point_world - start_world, direction))
-            if distance > 1e-6 and distance < best_distance:
-                best_distance = distance
-                best_world = point_world
-
-        if best_world is None:
-            return pose
-
-        target_source = self._interactive_spray_standoff
-        target_world = target_source
-        updated = dict(pose)
-        updated["nozzle_point_world"] = best_world - direction * target_world
-        updated["timestamp"] = time.monotonic()
-        return updated
-
     def _on_interactive_working_distance_changed(self, value_mm):
         """Change the spray tip-to-surface working distance live."""
         if not self._interactive_spray_active:
@@ -3239,136 +3076,34 @@ class ProductViewer(QWidget):
         normal = np.asarray(pose["surface_normal_world"], dtype=np.float64)
         normal /= max(float(np.linalg.norm(normal)), 1e-12)
 
-        insertion_source = 0.0
-        if self._interactive_spray_cavity_mode:
-            insertion_source = float(self.cavity_depth_spin.value()) / float(factor)
-
         updated = dict(pose)
-        updated["nozzle_point_world"] = surface_point + normal * (
-            distance_source + insertion_source
-        )
+        updated["nozzle_point_world"] = surface_point + normal * distance_source
         updated["timestamp"] = time.monotonic()
         self._interactive_update_cursor(updated)
 
-    def _on_interactive_cavity_controls_changed(self, _value=None):
-        """Update the current cavity nozzle pose without another surface pick."""
-        if not self._interactive_spray_active or not self._interactive_spray_cavity_mode:
-            return
-        if self._interactive_spray_latest_pose is None:
-            return
-        pose = self._interactive_spray_latest_pose
-        surface_point = np.asarray(pose["surface_point_world"], dtype=np.float64)
-        normal = np.asarray(pose["surface_normal_world"], dtype=np.float64)
-        normal /= max(float(np.linalg.norm(normal)), 1e-12)
-
-        insertion = float(self.cavity_depth_spin.value())
-        source_factor = self._get_source_mm_factor() or 1.0
-        insertion_source = insertion / float(source_factor)
-
-        # The cavity wall normal points from the solid into the hollow volume.
-        # Moving along +normal therefore pushes the probe deeper into the cavity.
-        nozzle = surface_point + normal * (
-            float(self._interactive_spray_standoff) + insertion_source
-        )
-
-        spray = -normal
-        tilt_x = math.radians(float(self.cavity_tilt_x_spin.value()))
-        tilt_y = math.radians(float(self.cavity_tilt_y_spin.value()))
-
-        # Build a stable tangent frame around the cavity wall normal.
-        ref = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-        if abs(float(np.dot(ref, normal))) > 0.92:
-            ref = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-        tangent_x = np.cross(ref, normal)
-        tangent_x /= max(float(np.linalg.norm(tangent_x)), 1e-12)
-        tangent_y = np.cross(normal, tangent_x)
-        tangent_y /= max(float(np.linalg.norm(tangent_y)), 1e-12)
-
-        # Tilt the spray axis toward the two local tangent directions.
-        spray = spray + math.tan(tilt_x) * tangent_x + math.tan(tilt_y) * tangent_y
-        spray /= max(float(np.linalg.norm(spray)), 1e-12)
-
-        updated = dict(pose)
-        updated["nozzle_point_world"] = nozzle
-        updated["spray_direction_world"] = spray
-        updated["timestamp"] = time.monotonic()
-        self._interactive_update_cursor(updated)
-
-    def _interactive_deep_pick_surface(self, x, y):
-        """Pick the deepest camera-visible front-facing surface."""
-        if self._interactive_spray_surface is None or self._interactive_spray_locator is None:
-            return None
-
-        renderer = self.plotter.renderer
-        renderer.SetDisplayPoint(float(x), float(y), 0.0)
-        near_h = np.asarray(renderer.DisplayToWorld(), dtype=np.float64)
-        renderer.SetDisplayPoint(float(x), float(y), 1.0)
-        far_h = np.asarray(renderer.DisplayToWorld(), dtype=np.float64)
-        if (
-            near_h.shape != (4,) or far_h.shape != (4,)
-            or abs(near_h[3]) <= 1e-12 or abs(far_h[3]) <= 1e-12
-        ):
-            return None
-        near_world = near_h[:3] / near_h[3]
-        far_world = far_h[:3] / far_h[3]
-
-        inverse = np.linalg.inv(self._interactive_spray_transform)
-        near_local = (inverse @ np.append(near_world, 1.0))[:3]
-        far_local = (inverse @ np.append(far_world, 1.0))[:3]
-
-        intersections = vtkPoints()
-        intersected_cells = vtkIdList()
-        hit = self._interactive_spray_locator.IntersectWithLine(
-            near_local.tolist(),
-            far_local.tolist(),
-            intersections,
-            intersected_cells,
-        )
-        if not hit or intersections.GetNumberOfPoints() == 0:
-            return None
-
-        ray_world = far_world - near_world
-        ray_world /= max(float(np.linalg.norm(ray_world)), 1e-12)
-        rotation = self._actor_matrix_array()[:3, :3]
-
-        best = None
-        best_distance = -float("inf")
-        for index in range(intersections.GetNumberOfPoints()):
-            cell_id = (
-                int(intersected_cells.GetId(index))
-                if index < intersected_cells.GetNumberOfIds()
-                else -1
-            )
-            if cell_id < 0 or cell_id >= len(self.current_mesh.face_normals):
-                continue
-            normal_local = np.asarray(
-                self.current_mesh.face_normals[cell_id], dtype=np.float64
-            )
-            normal_world = rotation @ normal_local
-            normal_length = float(np.linalg.norm(normal_world))
-            if normal_length <= 1e-12:
-                continue
-            normal_world /= normal_length
-
-            # Keep only surfaces facing the camera. This rejects the far
-            # backside of a closed solid while retaining the inner wall
-            # visible through an opening.
-            if float(np.dot(normal_world, ray_world)) >= -0.05:
-                continue
-
-            point_local = np.asarray(
-                intersections.GetPoint(index), dtype=np.float64
-            )
-            point_world = (
-                self._interactive_spray_transform
-                @ np.append(point_local, 1.0)
-            )[:3]
-            distance = float(np.linalg.norm(point_world - near_world))
-            if distance > best_distance:
-                best_distance = distance
-                best = point_world, normal_world, cell_id
-
-        return best
+    @staticmethod
+    def _interactive_rotate_spray_direction(direction, yaw_deg, pitch_deg):
+        """Rotate the spray axis without changing the nozzle or surface position."""
+        axis = np.asarray(direction, dtype=np.float64).copy()
+        axis /= max(float(np.linalg.norm(axis)), 1e-12)
+        yaw, pitch = math.radians(float(yaw_deg)), math.radians(float(pitch_deg))
+        if abs(yaw) < 1e-12 and abs(pitch) < 1e-12:
+            return axis
+        reference = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        if abs(float(np.dot(reference, axis))) > 0.92:
+            reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        yaw_axis = np.cross(reference, axis)
+        yaw_axis /= max(float(np.linalg.norm(yaw_axis)), 1e-12)
+        pitch_axis = np.cross(axis, yaw_axis)
+        pitch_axis /= max(float(np.linalg.norm(pitch_axis)), 1e-12)
+        def rotate(vector, rotation_axis, angle):
+            cosine, sine = math.cos(angle), math.sin(angle)
+            return (vector*cosine + np.cross(rotation_axis, vector)*sine
+                    + rotation_axis*float(np.dot(rotation_axis, vector))*(1.0-cosine))
+        yawed = rotate(axis, yaw_axis, yaw)
+        yawed_pitch = rotate(pitch_axis, yaw_axis, yaw)
+        result = rotate(yawed, yawed_pitch, pitch)
+        return result / max(float(np.linalg.norm(result)), 1e-12)
 
     def _interactive_pick_surface_pose(self, x, y):
         if self._pose_actor is None or self.current_mesh is None:
@@ -3381,12 +3116,6 @@ class ProductViewer(QWidget):
             return None
         if picker.GetActor() != self._pose_actor:
             return None
-
-        deep_pick = (
-            self._interactive_deep_pick_surface(x, y)
-            if self._interactive_spray_cavity_mode
-            else None
-        )
 
         cell_id = int(picker.GetCellId())
         face_normals = np.asarray(self.current_mesh.face_normals, dtype=float)
@@ -3427,83 +3156,17 @@ class ProductViewer(QWidget):
             return None
         normal_world /= normal_world_length
 
-        if deep_pick is not None:
-            hit_world, normal_world, cell_id = deep_pick
-        else:
-            hit_world = np.asarray(picker.GetPickPosition(), dtype=float)
-            if hit_world.shape != (3,) or not np.all(np.isfinite(hit_world)):
-                return None
+        hit_world = np.asarray(picker.GetPickPosition(), dtype=float)
+        if hit_world.shape != (3,) or not np.all(np.isfinite(hit_world)):
+            return None
 
         nozzle_world = hit_world + normal_world * self._interactive_spray_standoff
         spray_direction_world = -normal_world
 
-        if self._interactive_spray_cavity_mode:
-            insertion = float(self.cavity_depth_spin.value())
-            source_factor = self._get_source_mm_factor() or 1.0
-            insertion_source = insertion / float(source_factor)
-            nozzle_world = hit_world + normal_world * (
-                self._interactive_spray_standoff + insertion_source
-            )
-
-            tilt_x = math.radians(float(self.cavity_tilt_x_spin.value()))
-            tilt_y = math.radians(float(self.cavity_tilt_y_spin.value()))
-            reference = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-            if abs(float(np.dot(reference, normal_world))) > 0.92:
-                reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-            tangent_x = np.cross(reference, normal_world)
-            tangent_x /= max(float(np.linalg.norm(tangent_x)), 1e-12)
-            tangent_y = np.cross(normal_world, tangent_x)
-            tangent_y /= max(float(np.linalg.norm(tangent_y)), 1e-12)
-            spray_direction_world = (
-                spray_direction_world
-                + math.tan(tilt_x) * tangent_x
-                + math.tan(tilt_y) * tangent_y
-            )
-            spray_direction_world /= max(
-                float(np.linalg.norm(spray_direction_world)), 1e-12
-            )
-
-        # Operator-controlled tilt rotates the current cone centerline itself.
-        # Build the two drag axes perpendicular to the current spray direction,
-        # not from the CAD surface normal. This keeps the adjustment intuitive
-        # even after the cone has already been tilted inside a cavity.
-        manual_yaw = math.radians(float(self._interactive_spray_angle_y_deg))
-        manual_pitch = math.radians(float(self._interactive_spray_angle_x_deg))
-        if abs(manual_yaw) > 1e-9 or abs(manual_pitch) > 1e-9:
-            base_axis = np.asarray(spray_direction_world, dtype=np.float64)
-            base_axis /= max(float(np.linalg.norm(base_axis)), 1e-12)
-
-            reference = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-            if abs(float(np.dot(reference, base_axis))) > 0.92:
-                reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-
-            # Local cone frame: both axes are perpendicular to its centerline.
-            yaw_axis = np.cross(reference, base_axis)
-            yaw_axis /= max(float(np.linalg.norm(yaw_axis)), 1e-12)
-            pitch_axis = np.cross(base_axis, yaw_axis)
-            pitch_axis /= max(float(np.linalg.norm(pitch_axis)), 1e-12)
-
-            def rotate_about_axis(vector, axis, angle):
-                cosine = math.cos(angle)
-                sine = math.sin(angle)
-                return (
-                    vector * cosine
-                    + np.cross(axis, vector) * sine
-                    + axis * float(np.dot(axis, vector)) * (1.0 - cosine)
-                )
-
-            # Horizontal drag yaws around the cone's local vertical axis;
-            # vertical drag pitches around its local horizontal axis.
-            rotated_axis = rotate_about_axis(base_axis, yaw_axis, manual_yaw)
-            rotated_pitch_axis = rotate_about_axis(
-                pitch_axis, yaw_axis, manual_yaw
-            )
-            spray_direction_world = rotate_about_axis(
-                rotated_axis, rotated_pitch_axis, manual_pitch
-            )
-            spray_direction_world /= max(
-                float(np.linalg.norm(spray_direction_world)), 1e-12
-            )
+        spray_direction_world = self._interactive_rotate_spray_direction(
+            spray_direction_world, self._interactive_spray_angle_y_deg,
+            self._interactive_spray_angle_x_deg,
+        )
         return {
             "surface_point_world": hit_world,
             "surface_normal_world": normal_world,
@@ -4505,13 +4168,6 @@ class ProductViewer(QWidget):
         body_diameter = positive("gun_body_diameter_mm", 45.0) / mm_factor
         nozzle_length = positive("nozzle_length_mm", 25.0) / mm_factor
 
-        # In cavity mode the real gun body remains outside while a slender
-        # nozzle probe enters the hollow volume. A compact probe prevents the
-        # visualization/collision envelope from falsely blocking insertion.
-        if self._interactive_spray_cavity_mode:
-            body_length = min(body_length, 80.0 / mm_factor)
-            body_diameter = min(body_diameter, 18.0 / mm_factor)
-            nozzle_length = max(nozzle_length, 60.0 / mm_factor)
         nozzle_diameter = max(
             positive("nozzle_orifice_mm", 1.4) * 2.0 / mm_factor,
             body_diameter * 0.18,
@@ -4850,7 +4506,6 @@ class ProductViewer(QWidget):
             return
         self._interactive_spray_last_cursor_update_time = now
 
-        pose = self._interactive_apply_auto_standoff(pose)
         self._interactive_remove_live_actors()
         self._interactive_spray_latest_pose = pose
         nozzle = pose["nozzle_point_world"]
@@ -5221,6 +4876,16 @@ class ProductViewer(QWidget):
         self._interactive_spray_angle_last_position = tuple(
             int(value) for value in interactor.GetEventPosition()
         )
+        # Capture the pose once. Subsequent middle-drag events must not repick.
+        anchor = self._interactive_spray_latest_pose
+        if anchor is None:
+            anchor = self._interactive_pick_surface_pose(*self._interactive_spray_angle_last_position)
+        self._interactive_spray_angle_anchor_pose = (
+            None if anchor is None else {
+                key: (value.copy() if isinstance(value, np.ndarray) else value)
+                for key, value in anchor.items()
+            }
+        )
         # Angle adjustment is a positioning gesture, never a paint stroke.
         self._interactive_spray_recording = False
         self._interactive_spray_last_deposition_timestamp = None
@@ -5230,6 +4895,7 @@ class ProductViewer(QWidget):
     def _on_interactive_spray_middle_release(self, interactor, event):
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
+        self._interactive_spray_angle_anchor_pose = None
 
     def _rotate_spray_axis_from_middle_drag(self, interactor):
         current = tuple(int(value) for value in interactor.GetEventPosition())
@@ -5254,11 +4920,21 @@ class ProductViewer(QWidget):
             -45.0, 45.0,
         ))
 
-        pose = self._interactive_pick_surface_pose(*current)
-        if pose is not None:
-            self._interactive_update_cursor(pose)
-        else:
-            self.plotter.render()
+        anchor = self._interactive_spray_angle_anchor_pose
+        if anchor is None:
+            return
+        # Freeze the picked surface point and nozzle origin; only the cone axis moves.
+        pose = {
+            key: (value.copy() if isinstance(value, np.ndarray) else value)
+            for key, value in anchor.items()
+        }
+        pose["spray_direction_world"] = self._interactive_rotate_spray_direction(
+            anchor["spray_direction_world"],
+            self._interactive_spray_angle_y_deg,
+            self._interactive_spray_angle_x_deg,
+        )
+        pose["timestamp"] = time.monotonic()
+        self._interactive_update_cursor(pose)
 
     def _on_interactive_spray_wheel(self, interactor, event):
         """Adjust spray working distance instead of zooming during SPRAY mode.
@@ -5420,6 +5096,7 @@ class ProductViewer(QWidget):
         # Restore the standard cone direction immediately after the stroke.
         self._interactive_spray_angle_x_deg = 0.0
         self._interactive_spray_angle_y_deg = 0.0
+        self._interactive_spray_angle_anchor_pose = None
         self._interactive_spray_latest_pose = None
         x, y = interactor.GetEventPosition()
         standard_pose = self._interactive_pick_surface_pose(x, y)
@@ -5442,6 +5119,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_angle_last_position = None
         self._interactive_spray_angle_x_deg = 0.0
         self._interactive_spray_angle_y_deg = 0.0
+        self._interactive_spray_angle_anchor_pose = None
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_latest_pose = None
@@ -5472,18 +5150,7 @@ class ProductViewer(QWidget):
         self.camera_mode_button.setChecked(True)
         self.spray_mode_button.setChecked(False)
         self.spray_mode_button.setEnabled(False)
-        self.cavity_mode_button.setChecked(False)
-        self.cavity_mode_button.setEnabled(False)
         self.working_distance_spin.setEnabled(False)
-        self.auto_standoff_button.setChecked(False)
-        self.auto_standoff_button.setEnabled(False)
-        for widget in (
-            self.cavity_depth_spin,
-            self.cavity_tilt_x_spin,
-            self.cavity_tilt_y_spin,
-        ):
-            widget.setEnabled(False)
-        self._interactive_spray_cavity_mode = False
         self.interaction_mode_status.setText("CAMERA CONTROL")
 
         if self._interactive_hud_actor is not None:
