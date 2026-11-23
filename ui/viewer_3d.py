@@ -435,6 +435,9 @@ class ProductViewer(QWidget):
         # Interactive spray-path input. Spray input owns the viewport
         # throughout the session; there is no camera/spray mode switch.
         self._interactive_spray_active = False
+        # True while editing/creating a route: keep spray geometry previews,
+        # but defer all coating deposition and surface-color rendering.
+        self._interactive_route_generation_only = False
         self._interactive_spray_mode = "camera"
         self._interactive_spray_recording = False
         self._interactive_spray_standoff = 0.0
@@ -1066,6 +1069,7 @@ class ProductViewer(QWidget):
         if page not in ("route", "simulation"):
             raise ValueError("Recorded path page must be 'route' or 'simulation'.")
         route_page = page == "route"
+        self._interactive_route_generation_only = route_page
 
         # Verification replay intentionally uses a temporary bare-product
         # coating field. When the operator returns to route generation, restore
@@ -1083,7 +1087,19 @@ class ProductViewer(QWidget):
             self._interactive_spray_previous_nozzle_world = None
             self._interactive_saved_route_face_thickness_um = None
             self._interactive_saved_route_surface_field = None
-            self._interactive_refresh_paint_visual(render=False)
+
+        if route_page and self._interactive_spray_texture_actors:
+            # Remove simulation-only coating textures when returning to route
+            # editing. Rebuild the neutral product plus Stage 2 exclusion mask.
+            self._render_product(reset_camera=False)
+            self._interactive_spray_texture_actors = {}
+            self._interactive_spray_texture_layout = {}
+            self._interactive_spray_texture_objects = {}
+            self._interactive_build_excluded_face_overlay()
+        elif not route_page and not self._interactive_spray_texture_actors:
+            # Coating textures are created only after entering simulation.
+            self._interactive_build_brep_texture_actors()
+
         self.recorded_path_optimize_button.setVisible(route_page)
         self.recorded_path_replay_button.setVisible(not route_page)
         self.recorded_path_stop_button.setVisible(not route_page)
@@ -3308,9 +3324,8 @@ class ProductViewer(QWidget):
                 "target_dry_film_thickness_um"
             ]
         self._render_product(reset_camera=False)
-        # STEP models render coating as per-Face UV textures. The original
-        # mesh actor remains available for cell picking and occlusion.
-        self._interactive_build_brep_texture_actors()
+        # Route generation must show the neutral CAD surface. STEP UV coating
+        # textures are created later, only when the simulation page is opened.
         self._interactive_build_excluded_face_overlay()
 
         self._interactive_spray_standoff = float(standoff)
@@ -3384,9 +3399,9 @@ class ProductViewer(QWidget):
         self._interactive_spray_live_actors = []
         self._interactive_spray_active = True
 
-        # The route editor must reopen with the accumulated wet-film state.
-        if preserve_existing and existing_thickness is not None:
-            self._interactive_refresh_paint_visual(render=False)
+        # Route editing preserves the recorded path but never renders or
+        # updates a coating field. The simulation page owns that state.
+        if preserve_existing:
             self._refresh_interactive_recorded_path_actor()
 
         # Cursor motion only previews the nozzle. Paint deposition and pose
@@ -5406,6 +5421,11 @@ class ProductViewer(QWidget):
                         self._interactive_spray_last_deposition_timestamp = None
                         self._interactive_spray_previous_nozzle_world = None
                         continue
+                    if getattr(self, "_interactive_route_generation_only", False):
+                        # The route sample is retained, but coating integration
+                        # is deliberately deferred to simulation replay.
+                        continue
+
                     sample_patch = sample_footprints[0][0]
                     sample_patch.points = (
                         np.asarray(sample_patch.points)
@@ -5453,7 +5473,8 @@ class ProductViewer(QWidget):
         self._interactive_remove_live_actors()
         self._interactive_spray_live_actors.extend(gun_actors)
         if recorded_new_pose:
-            self._interactive_refresh_paint_visual(render=False)
+            if not getattr(self, "_interactive_route_generation_only", False):
+                self._interactive_refresh_paint_visual(render=False)
             # Show the exact recorded trajectory during the stroke. The route
             # renderer already draws the green path and the yellow arrows that
             # follow each sample's actual spray direction. Refreshing only at
@@ -6397,11 +6418,17 @@ class ProductViewer(QWidget):
                       - np.min([item["timestamp"] for item in records]))
                 if len(records) >= 2 else 0.0
             ),
-            "surface_film_thickness_field": self._interactive_export_surface_field(),
+            "surface_film_thickness_field": (
+                None if getattr(self, "_interactive_route_generation_only", False)
+                else self._interactive_export_surface_field()
+            ),
             "face_thickness_um": (
-                self._interactive_spray_face_thickness_um.copy()
-                if self._interactive_spray_face_thickness_um is not None
-                else None
+                None if getattr(self, "_interactive_route_generation_only", False)
+                else (
+                    self._interactive_spray_face_thickness_um.copy()
+                    if self._interactive_spray_face_thickness_um is not None
+                    else None
+                )
             ),
             "product_transform_4x4": self._interactive_spray_transform.copy(),
         }
