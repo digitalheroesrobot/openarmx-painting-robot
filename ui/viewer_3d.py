@@ -7323,7 +7323,7 @@ class ProductViewer(QWidget):
             int(self._interactive_spray_stroke_id), next_stroke_id - 1
         )
         if stored_count:
-                self._interactive_recorded_replay_timing = None
+            self._interactive_recorded_replay_timing = None
             self.recorded_path_replay_button.setEnabled(
                 len(self._interactive_spray_records) >= 2
             )
