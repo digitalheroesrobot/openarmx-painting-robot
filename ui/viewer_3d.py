@@ -435,6 +435,7 @@ class ProductViewer(QWidget):
         # Interactive spray-path input. Spray input owns the viewport
         # throughout the session; there is no camera/spray mode switch.
         self._interactive_spray_active = False
+        self._interactive_spray_mode = "camera"
         self._interactive_spray_recording = False
         self._interactive_spray_standoff = 0.0
         self._interactive_spray_cone_angle_deg = 0.0
@@ -2728,19 +2729,18 @@ class ProductViewer(QWidget):
             self.working_distance_spin.blockSignals(True)
             self.working_distance_spin.setValue(float(standoff) * float(factor))
             self.working_distance_spin.blockSignals(False)
-        # Keep the original camera-navigation style detached during spray.
-        # A Space key event restores this spray input style after camera view.
-        interactor.SetInteractorStyle(self._interactive_spray_input_style)
-        self._interactive_spray_input_style.SetEnabled(1)
+        # Stage entry starts in normal camera navigation. Space explicitly
+        # switches the viewport to operator-controlled spray input.
+        self._interactive_spray_mode = "camera"
         self.interaction_mode_status.setText(
-            "SPRAY PREVIEW · HOLD LEFT TO PAINT"
+            "CAMERA VIEW · PRESS SPACE FOR SPRAY MODE"
         )
 
         self._interactive_hud_actor = self.plotter.add_text(
             (
                 f"SPRAY CURSOR ACTIVE  |  WORK DIST {self._interactive_spray_standoff * (self._get_source_mm_factor() or 1.0):.1f} mm "
                 f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
-                "MOVE: PREVIEW  |  LEFT: PAINT  |  MIDDLE: ANGLE  |  SPACE: SPRAY MODE"
+                "CAMERA VIEW  |  NAVIGATE: MOUSE  |  SPACE: SPRAY MODE"
             ),
             position="upper_left",
             font_size=10,
@@ -4895,7 +4895,10 @@ class ProductViewer(QWidget):
 
     def _on_interactive_spray_middle_press(self, interactor, event):
         """Begin a middle-button drag to tilt the spray axis."""
-        if not self._interactive_spray_active:
+        if (
+            not self._interactive_spray_active
+            or self._interactive_spray_mode != "spray"
+        ):
             return
         self._interactive_spray_angle_dragging = True
         self._interactive_spray_angle_last_position = tuple(
@@ -5061,7 +5064,10 @@ class ProductViewer(QWidget):
         maximum limits. The current cursor pose is recomputed immediately,
         so the nozzle moves even when the mouse cursor itself is stationary.
         """
-        if not self._interactive_spray_active:
+        if (
+            not self._interactive_spray_active
+            or self._interactive_spray_mode != "spray"
+        ):
             return
 
         event_name = str(event)
@@ -5099,7 +5105,10 @@ class ProductViewer(QWidget):
             self.plotter.render()
 
     def _on_interactive_spray_mouse_move(self, interactor, event):
-        if not self._interactive_spray_active:
+        if (
+            not self._interactive_spray_active
+            or self._interactive_spray_mode != "spray"
+        ):
             return
 
         # Middle-drag exclusively controls spray direction.
@@ -5155,7 +5164,10 @@ class ProductViewer(QWidget):
         self._interactive_spray_start_timestamp = None
 
     def _on_interactive_spray_left_press(self, interactor, event):
-        if not self._interactive_spray_active:
+        if (
+            not self._interactive_spray_active
+            or self._interactive_spray_mode != "spray"
+        ):
             return
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y)
@@ -5178,6 +5190,7 @@ class ProductViewer(QWidget):
         # Reinstall the dedicated input style without ending the spray session.
         interactor.SetInteractorStyle(self._interactive_spray_input_style)
         self._interactive_spray_input_style.SetEnabled(1)
+        self._interactive_spray_mode = "spray"
 
         # Return to the standard spray orientation. Keep coating and records.
         self._interactive_spray_recording = False
@@ -5192,7 +5205,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_locked_direction_world = None
 
         self.interaction_mode_status.setText(
-            "SPRAY PREVIEW · HOLD LEFT TO PAINT"
+            "SPRAY MODE · HOLD LEFT TO PAINT"
         )
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y)
@@ -5238,7 +5251,10 @@ class ProductViewer(QWidget):
             self.plotter.render()
 
     def _on_interactive_spray_left_release(self, interactor, event):
-        if not self._interactive_spray_active:
+        if (
+            not self._interactive_spray_active
+            or self._interactive_spray_mode != "spray"
+        ):
             return
         self._interactive_spray_recording = False
         self._interactive_spray_last_deposition_timestamp = None
