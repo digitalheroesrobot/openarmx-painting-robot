@@ -1585,10 +1585,20 @@ class ProductViewer(QWidget):
         self.plotter.render()
 
     def _interactive_add_replay_cone_visual(self, pose):
-        """Draw a spray cone with its apex at the nozzle and rim toward the product."""
+        """Render a smooth spray cone and its true intersection with the product."""
         nozzle = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
         axis = np.asarray(pose["spray_direction_world"], dtype=np.float64)
-        axis /= max(float(np.linalg.norm(axis)), 1e-12)
+        axis_length = float(np.linalg.norm(axis))
+        if (
+            nozzle.shape != (3,)
+            or axis.shape != (3,)
+            or not np.all(np.isfinite(nozzle))
+            or not np.all(np.isfinite(axis))
+            or axis_length <= 1e-12
+        ):
+            return
+        axis /= axis_length
+
         half_angle = math.radians(self._interactive_spray_cone_angle_deg) * 0.5
         height = max(float(self._interactive_spray_standoff), 1e-6)
         radius = height * math.tan(half_angle)
@@ -1601,7 +1611,10 @@ class ProductViewer(QWidget):
         radial_v = np.cross(axis, radial_u)
         radial_v /= max(float(np.linalg.norm(radial_v)), 1e-12)
 
-        angles = np.linspace(0.0, 2.0 * math.pi, 33)[:-1]
+        # A smooth translucent shell replaces the old triangular wireframe
+        # cage. The wireframe made the spray look like a net instead of a cone.
+        ring_count = 64
+        angles = np.linspace(0.0, 2.0 * math.pi, ring_count, endpoint=False)
         rim = (
             nozzle[None, :]
             + axis[None, :] * height
@@ -1610,41 +1623,130 @@ class ProductViewer(QWidget):
                 + np.sin(angles)[:, None] * radial_v[None, :]
             )
         )
-        points = np.vstack((nozzle, rim))
-        faces = []
-        for index in range(len(rim)):
-            next_index = (index + 1) % len(rim)
-            faces.extend((3, 0, index + 1, next_index + 1))
+        cone_points = np.vstack((nozzle, rim))
+        cone_faces = []
+        for index in range(ring_count):
+            next_index = (index + 1) % ring_count
+            cone_faces.extend((3, 0, index + 1, next_index + 1))
         cone = pv.PolyData(
-            points, faces=np.asarray(faces, dtype=np.int64)
+            cone_points,
+            faces=np.asarray(cone_faces, dtype=np.int64),
         )
-        actor = self.plotter.add_mesh(
+        cone_actor = self.plotter.add_mesh(
             cone,
             color="#FFE082",
-            opacity=0.16,
-            style="wireframe",
-            line_width=1.4,
+            opacity=0.12,
+            style="surface",
+            show_edges=False,
+            smooth_shading=True,
             lighting=False,
             pickable=False,
         )
-        self._interactive_spray_live_actors.append(actor)
+        self._interactive_spray_live_actors.append(cone_actor)
 
-        particle_fractions = np.asarray([0.18, 0.36, 0.54, 0.72, 0.90])
-        particle_points = (
-            nozzle[None, :]
-            + particle_fractions[:, None] * height * axis[None, :]
-        )
-        cloud = pv.PolyData(particle_points)
-        particle_actor = self.plotter.add_mesh(
-            cloud,
-            color="#FFF0C7",
-            opacity=0.48,
-            point_size=5.0,
-            render_points_as_spheres=True,
-            lighting=False,
-            pickable=False,
-        )
-        self._interactive_spray_live_actors.append(particle_actor)
+        # Keep only a small number of outer generators as orientation cues;
+        # do not draw every triangle edge across the cone surface.
+        guide_segments = [
+            (nozzle, rim[index])
+            for index in (0, ring_count // 4, ring_count // 2, 3 * ring_count // 4)
+        ]
+        guide_polydata = self._build_line_polydata(guide_segments)
+        if guide_polydata is not None:
+            guide_actor = self.plotter.add_mesh(
+                guide_polydata,
+                color="#FFE8A6",
+                opacity=0.48,
+                line_width=1.0,
+                lighting=False,
+                pickable=False,
+            )
+            self._interactive_spray_live_actors.append(guide_actor)
+
+        # Cast rays along the outer cone surface. Their first product hits
+        # form the actual curved cone/product intersection boundary.
+        if self._interactive_spray_surface is None or self._interactive_spray_locator is None:
+            return
+
+        inverse = np.linalg.inv(self._interactive_spray_transform)
+        nozzle_local = (inverse @ np.append(nozzle, 1.0))[:3]
+        axis_local = inverse[:3, :3] @ axis
+        axis_local_length = float(np.linalg.norm(axis_local))
+        if axis_local_length <= 1e-12:
+            return
+        axis_local /= axis_local_length
+
+        local_reference = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        if abs(float(np.dot(local_reference, axis_local))) > 0.92:
+            local_reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        edge_u = np.cross(axis_local, local_reference)
+        edge_u /= max(float(np.linalg.norm(edge_u)), 1e-12)
+        edge_v = np.cross(axis_local, edge_u)
+        edge_v /= max(float(np.linalg.norm(edge_v)), 1e-12)
+
+        edge_ray_count = 96
+        edge_ray_length = height / max(math.cos(half_angle), 1e-6) * 1.5
+        contact_points = [None] * edge_ray_count
+        for ray_index in range(edge_ray_count):
+            phi = 2.0 * math.pi * ray_index / edge_ray_count
+            radial = math.cos(phi) * edge_u + math.sin(phi) * edge_v
+            ray_direction = (
+                math.cos(half_angle) * axis_local
+                + math.sin(half_angle) * radial
+            )
+            ray_direction /= max(float(np.linalg.norm(ray_direction)), 1e-12)
+            endpoint = nozzle_local + ray_direction * edge_ray_length
+            intersections = vtkPoints()
+            intersected_cells = vtkIdList()
+            hit = self._interactive_spray_locator.IntersectWithLine(
+                nozzle_local.tolist(),
+                endpoint.tolist(),
+                intersections,
+                intersected_cells,
+            )
+            if not hit or intersections.GetNumberOfPoints() == 0:
+                continue
+
+            nearest_point = None
+            nearest_distance = float("inf")
+            for hit_index in range(intersections.GetNumberOfPoints()):
+                candidate = np.asarray(
+                    intersections.GetPoint(hit_index), dtype=np.float64
+                )
+                candidate_distance = float(np.linalg.norm(candidate - nozzle_local))
+                if candidate_distance < nearest_distance:
+                    nearest_distance = candidate_distance
+                    nearest_point = candidate
+            if nearest_point is not None:
+                contact_points[ray_index] = (
+                    self._interactive_spray_transform
+                    @ np.append(nearest_point, 1.0)
+                )[:3]
+
+        boundary_segments = []
+        for ray_index in range(edge_ray_count):
+            next_index = (ray_index + 1) % edge_ray_count
+            first_point = contact_points[ray_index]
+            second_point = contact_points[next_index]
+            if first_point is None or second_point is None:
+                continue
+            # Do not bridge large gaps across holes or missed surface regions.
+            if float(np.linalg.norm(second_point - first_point)) > max(
+                radius * 2.5, height * 0.35
+            ):
+                continue
+            boundary_segments.append((first_point, second_point))
+
+        boundary_polydata = self._build_line_polydata(boundary_segments)
+        if boundary_polydata is not None:
+            boundary_actor = self.plotter.add_mesh(
+                boundary_polydata,
+                color="#FFB74D",
+                opacity=0.98,
+                line_width=2.5,
+                lighting=False,
+                pickable=False,
+            )
+            self._interactive_spray_live_actors.append(boundary_actor)
 
     def _interactive_replay_deposition_step(self, pose, dt):
         """Apply the existing spray deposition kernel to the current replay pose."""
@@ -5755,7 +5857,9 @@ class ProductViewer(QWidget):
         # Keep the physical spray envelope visible for operator guidance.
         # This is display geometry only; no deposition or film-thickness
         # calculation and no coating texture refresh occur during route capture.
-        self._interactive_add_replay_cone_visual(pose)
+        # The cone must share the exact nozzle pose used by the rendered gun.
+        # Route recording still retains the untouched fixed-work-plane pose.
+        self._interactive_add_replay_cone_visual(display_pose)
 
         if recorded_samples:
             self._interactive_spray_live_route_refresh_at = now
