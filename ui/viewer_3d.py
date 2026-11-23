@@ -5120,23 +5120,10 @@ class ProductViewer(QWidget):
         )
 
     def _interactive_update_cursor(self, pose):
-        # Keep the indicator responsive even when the expensive spray renderer
-        # is throttled. The indicator is diagnostic only and never modifies pose.
+        # Record and deposit from every valid mouse sample. Only the expensive
+        # 3D cursor visualization is throttled; applying the old 30 Hz limit to
+        # this entire method silently discarded intermediate spray positions.
         self._interactive_update_surface_angle_indicator(pose)
-
-        # Mouse-move events can arrive much faster than the renderer can
-        # rebuild spray geometry. Cap the complete cursor/deposition/render
-        # pipeline at 30 Hz; this also bounds recorded trajectory sampling.
-        now = time.monotonic()
-        previous = getattr(
-            self, "_interactive_spray_last_cursor_update_time", None
-        )
-        if previous is not None and now - previous < (1.0 / 30.0):
-            self._interactive_spray_latest_pose = pose
-            return
-        self._interactive_spray_last_cursor_update_time = now
-
-        self._interactive_remove_live_actors()
         self._interactive_spray_latest_pose = pose
         nozzle = pose["nozzle_point_world"]
         direction = pose["spray_direction_world"]
@@ -5179,20 +5166,8 @@ class ProductViewer(QWidget):
                 np.asarray(patch.points) @ self._interactive_spray_transform[:3, :3].T
                 + self._interactive_spray_transform[:3, 3]
             )
-            # Do not draw a translucent coincident surface here.  The
-            # persistent paint field already shows the deposited coating;
-            # a second surface actor would z-fight and make paint appear
-            # to flash or disappear while the cursor moves.
-            if boundary.n_cells:
-                boundary.points = (
-                    np.asarray(boundary.points) @ self._interactive_spray_transform[:3, :3].T
-                    + self._interactive_spray_transform[:3, 3]
-                )
-                actor = self.plotter.add_mesh(
-                    boundary, color="#FF9F1C", line_width=2.0,
-                    lighting=False, pickable=False,
-                )
-                self._interactive_spray_live_actors.append(actor)
+            # The persistent paint field is the authoritative coating
+            # visualization. Do not add a coincident translucent surface.
             if (
                 self._interactive_spray_recording
                 and not spray_blocked
@@ -5203,6 +5178,30 @@ class ProductViewer(QWidget):
             if recorded_new_pose:
                 self._interactive_apply_paint_deposition(patch, pose)
                 self._interactive_refresh_paint_visual(render=False)
+
+        # Keep full-rate trajectory/deposition sampling above, but cap only
+        # actor rebuilding and rendering to 30 Hz for interactive responsiveness.
+        now = time.monotonic()
+        previous = getattr(
+            self, "_interactive_spray_last_cursor_update_time", None
+        )
+        if previous is not None and now - previous < (1.0 / 30.0):
+            return
+        self._interactive_spray_last_cursor_update_time = now
+        self._interactive_remove_live_actors()
+
+        if footprints and footprints[0][0].n_cells:
+            boundary = footprints[0][1]
+            if boundary.n_cells:
+                boundary.points = (
+                    np.asarray(boundary.points) @ self._interactive_spray_transform[:3, :3].T
+                    + self._interactive_spray_transform[:3, 3]
+                )
+                actor = self.plotter.add_mesh(
+                    boundary, color="#FF9F1C", line_width=2.0,
+                    lighting=False, pickable=False,
+                )
+                self._interactive_spray_live_actors.append(actor)
 
         nozzle = pose["nozzle_point_world"]
         hit = pose["surface_point_world"]
