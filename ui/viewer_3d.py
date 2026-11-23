@@ -4212,22 +4212,73 @@ class ProductViewer(QWidget):
             self._interactive_spray_work_plane_normal_world, dtype=np.float64
         )
         plane_normal /= max(float(np.linalg.norm(plane_normal)), 1e-12)
-        nozzle_world = self._interactive_intersect_display_ray_with_work_plane(
-            int(x), int(y),
-            self._interactive_spray_work_plane_origin_world,
-            plane_normal,
-        )
-        if nozzle_world is None:
-            return None
-        # Keep nozzle positions on the fixed offset work plane, but orient
-        # the gun to the local picked face normal at every cursor sample.
-        # This restores automatic perpendicular alignment without allowing
-        # hole walls to pull the nozzle path off its fixed plane.
+        # Keep nozzle positions on the fixed offset work plane during normal
+        # operation, but recompute the spray axis from the newly picked face.
         spray_direction_world = spray_direction_from_surface_normal(
             normal_world,
             self._interactive_spray_angle_y_deg,
             self._interactive_spray_angle_x_deg,
         )
+
+        nozzle_world = self._interactive_intersect_display_ray_with_work_plane(
+            int(x), int(y),
+            self._interactive_spray_work_plane_origin_world,
+            plane_normal,
+        )
+
+        # After camera rotation the display ray can become almost parallel to
+        # the fixed work plane. Its mathematical intersection then moves an
+        # arbitrarily large distance away from the picked surface. That was
+        # the source of oversized direction arrows and stray route samples.
+        # Re-anchor the work plane at the current surface hit when the
+        # projection is ill-conditioned or excessively far from the product.
+        max_projection_distance = max(
+            3.0 * float(self._interactive_spray_standoff), 1.0
+        )
+        projection_is_invalid = nozzle_world is None
+        if nozzle_world is not None:
+            projection_distance = float(np.linalg.norm(nozzle_world - hit_world))
+            projection_is_invalid = (
+                not np.isfinite(projection_distance)
+                or projection_distance > max_projection_distance
+            )
+
+        if projection_is_invalid:
+            plane_normal = -np.asarray(
+                spray_direction_world, dtype=np.float64
+            )
+            plane_normal /= max(float(np.linalg.norm(plane_normal)), 1e-12)
+            self._interactive_spray_work_plane_normal_world = plane_normal.copy()
+            self._interactive_spray_work_plane_origin_world = (
+                hit_world
+                - plane_normal * float(self._interactive_spray_standoff)
+            )
+            nozzle_world = self._interactive_intersect_display_ray_with_work_plane(
+                int(x), int(y),
+                self._interactive_spray_work_plane_origin_world,
+                plane_normal,
+            )
+
+        # A near-tangent camera ray may still be parallel to the re-anchored
+        # plane. In that case use the physically defined standoff pose directly
+        # rather than emitting a huge/invalid coordinate.
+        if nozzle_world is None:
+            nozzle_world = (
+                hit_world
+                - np.asarray(spray_direction_world, dtype=np.float64)
+                * float(self._interactive_spray_standoff)
+            )
+        else:
+            projection_distance = float(np.linalg.norm(nozzle_world - hit_world))
+            if (
+                not np.isfinite(projection_distance)
+                or projection_distance > max_projection_distance
+            ):
+                nozzle_world = (
+                    hit_world
+                    - np.asarray(spray_direction_world, dtype=np.float64)
+                    * float(self._interactive_spray_standoff)
+                )
         return {
             "surface_point_world": hit_world,
             "surface_normal_world": normal_world,
