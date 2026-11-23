@@ -53,14 +53,10 @@ from stages.spray_footprint_optimizer import optimize_redundant_spray_points
 # ------------------------------------------------------------
 
 DEFAULT_STANDOFF_MM = 200.0
-DEFAULT_SAMPLING_SPACING_MM = 20.0
 DEFAULT_SPRAY_ANGLE_DEG = 0.0
 
 MIN_STANDOFF_MM = 50.0
 MAX_STANDOFF_MM = 500.0
-
-MIN_SAMPLING_SPACING_MM = 1.0
-MAX_SAMPLING_SPACING_MM = 100.0
 
 MAX_TOTAL_SAMPLES = 250_000
 
@@ -253,20 +249,14 @@ def _safe_int(value: Any) -> int | None:
 
 def _validate_parameters(
     standoff_mm: float,
-    sampling_spacing_mm: float,
     spray_angle_deg: float,
-) -> tuple[float, float, float]:
+) -> tuple[float, float]:
 
     standoff = _safe_float(standoff_mm)
-    spacing = _safe_float(sampling_spacing_mm)
     angle = _safe_float(spray_angle_deg)
 
     if standoff is None:
         raise ValueError("Standoff distance must be finite.")
-
-    if spacing is None:
-        raise ValueError("Sampling spacing must be finite.")
-
     if angle is None:
         raise ValueError("Spray angle must be finite.")
 
@@ -275,18 +265,10 @@ def _validate_parameters(
             f"Standoff must be between {MIN_STANDOFF_MM:.1f} "
             f"and {MAX_STANDOFF_MM:.1f} mm."
         )
+    if not 0.0 < angle <= 150.0:
+        raise ValueError("Spray angle must be greater than 0 and at most 150 degrees.")
 
-    if not MIN_SAMPLING_SPACING_MM <= spacing <= MAX_SAMPLING_SPACING_MM:
-        raise ValueError(
-            f"Sampling spacing must be between "
-            f"{MIN_SAMPLING_SPACING_MM:.1f} and "
-            f"{MAX_SAMPLING_SPACING_MM:.1f} mm."
-        )
-
-    if not 0.0 <= angle <= 150.0:
-        raise ValueError("Spray angle must be between 0 and 150 degrees.")
-
-    return standoff, spacing, angle
+    return standoff, angle
 
 
 def _calculate_spray_footprint(
@@ -4016,7 +3998,6 @@ def generate_spray_trajectory(
     face_status_labels: np.ndarray,
     patch_labels: np.ndarray,
     standoff_mm: float = DEFAULT_STANDOFF_MM,
-    sampling_spacing_mm: float = DEFAULT_SAMPLING_SPACING_MM,
     spray_angle_deg: float = DEFAULT_SPRAY_ANGLE_DEG,
     stage1_report: dict | None = None,
     coordinate_unit: str | None = None,
@@ -4028,12 +4009,9 @@ def generate_spray_trajectory(
     if not isinstance(mesh, trimesh.Trimesh):
         raise TypeError("mesh must be a trimesh.Trimesh object.")
 
-    standoff_mm, sampling_spacing_mm, spray_angle_deg = (
-        _validate_parameters(
-            standoff_mm,
-            sampling_spacing_mm,
-            spray_angle_deg,
-        )
+    standoff_mm, spray_angle_deg = _validate_parameters(
+        standoff_mm,
+        spray_angle_deg,
     )
 
     product_transform_matrix = _validate_product_transform(product_transform)
@@ -4845,7 +4823,6 @@ def execute_stage3(
     face_status_labels: np.ndarray | None = None,
     patch_labels: np.ndarray | None = None,
     standoff_mm: float = DEFAULT_STANDOFF_MM,
-    sampling_spacing_mm: float = DEFAULT_SAMPLING_SPACING_MM,
     spray_angle_deg: float = DEFAULT_SPRAY_ANGLE_DEG,
     stage1_report: dict | None = None,
     coordinate_unit: str | None = None,
@@ -4879,7 +4856,6 @@ def execute_stage3(
         face_status_labels=face_status_labels,
         patch_labels=patch_labels,
         standoff_mm=standoff_mm,
-        sampling_spacing_mm=sampling_spacing_mm,
         spray_angle_deg=spray_angle_deg,
         stage1_report=stage1_report,
         coordinate_unit=coordinate_unit,
@@ -5109,7 +5085,6 @@ def run_stage3_numerical_tests() -> dict:
         face_status_labels=labels,
         patch_labels=patches,
         standoff_mm=200.0,
-        sampling_spacing_mm=50.0,
         coordinate_unit="mm",
     )
 
@@ -5226,7 +5201,6 @@ def run_stage3_numerical_tests() -> dict:
         face_status_labels=labels,
         patch_labels=patches,
         standoff_mm=200.0,
-        sampling_spacing_mm=50.0,
         stage1_report=synthetic_stage1,
     )
 
@@ -5320,7 +5294,6 @@ def run_stage3_numerical_tests() -> dict:
             face_status_labels=labels,
             patch_labels=patches,
             standoff_mm=200.0,
-            sampling_spacing_mm=50.0,
             coordinate_unit=unit,
         )
 
@@ -5373,7 +5346,6 @@ def run_stage3_numerical_tests() -> dict:
             face_status_labels=labels,
             patch_labels=patches,
             standoff_mm=200.0,
-            sampling_spacing_mm=50.0,
             coordinate_unit=unit,
         )
 
@@ -5437,7 +5409,6 @@ def run_stage3_numerical_tests() -> dict:
         face_status_labels=labels,
         patch_labels=patches,
         standoff_mm=200.0,
-        sampling_spacing_mm=50.0,
         coordinate_unit="mm",
         sprayer_profile=test_sprayer_profile,
     )
@@ -5476,7 +5447,6 @@ def run_stage3_numerical_tests() -> dict:
         face_status_labels=labels,
         patch_labels=patches,
         standoff_mm=200.0,
-        sampling_spacing_mm=50.0,
         coordinate_unit="mm",
         product_transform=test_transform,
     )
@@ -5536,7 +5506,6 @@ def run_stage3_numerical_tests() -> dict:
         face_status_labels=labels,
         patch_labels=patches,
         standoff_mm=200.0,
-        sampling_spacing_mm=20.0,
         coordinate_unit="mm",
         sprayer_profile=raster_profile,
     )
@@ -5587,7 +5556,6 @@ def run_stage3_numerical_tests() -> dict:
         face_status_labels=labels,
         patch_labels=patches,
         standoff_mm=200.0,
-        sampling_spacing_mm=20.0,
         coordinate_unit="mm",
         sprayer_profile=wide_angle_profile,
     )
