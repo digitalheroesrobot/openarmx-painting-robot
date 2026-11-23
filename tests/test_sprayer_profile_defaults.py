@@ -60,7 +60,16 @@ def test_measured_nondefault_standoff_and_angle_are_preserved(tmp_path):
         }),
         encoding="utf-8",
     )
-    profile = load_sprayer_profiles(path)[0]
+    profiles = load_sprayer_profiles(path)
+    profile = next(item for item in profiles if item["name"] == "Measured Gun")
     assert profile["standoff_mm"] == 125.0
     assert profile["spray_cone_angle_deg"] == 42.0
     assert profile["gun_body_dimensions_are_estimate"] is False
+
+    # Loading also persists any default-profile insertion/migration. Verify
+    # that the user's measured profile remains unchanged in the saved file.
+    stored_profiles = json.loads(path.read_text(encoding="utf-8"))["profiles"]
+    stored = next(item for item in stored_profiles if item["name"] == "Measured Gun")
+    assert stored["standoff_mm"] == 125.0
+    assert stored["spray_cone_angle_deg"] == 42.0
+    assert stored["gun_body_dimensions_are_estimate"] is False
