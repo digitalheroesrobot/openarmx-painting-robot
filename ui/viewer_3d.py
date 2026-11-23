@@ -3068,6 +3068,12 @@ class ProductViewer(QWidget):
             sampling_spacing = max(float(standoff) * 0.025, 1e-3)
         if not np.isfinite(sampling_spacing) or sampling_spacing <= 0.0:
             raise ValueError("Spray sampling spacing must be a positive finite value.")
+        # Cap the user-configured spacing to a fine spatial interval. This
+        # prevents sparse pose records from leaving visible gaps on replay.
+        sampling_spacing = min(
+            float(sampling_spacing),
+            max(float(standoff) * 0.005, 1e-3),
+        )
         if self._interactive_spray_active:
             return
         self.display_mode = "spray_point_preview"
@@ -5134,7 +5140,6 @@ class ProductViewer(QWidget):
             nozzle, direction
         )
         self._interactive_spray_gun_actors = gun_actors
-        self._interactive_spray_live_actors.extend(gun_actors)
         collision = self._interactive_check_gun_collision(gun_polydata)
         surface_excluded = not bool(pose.get("paintable", True))
         self._interactive_spray_gun_collision = collision
@@ -5189,6 +5194,7 @@ class ProductViewer(QWidget):
             return
         self._interactive_spray_last_cursor_update_time = now
         self._interactive_remove_live_actors()
+        self._interactive_spray_live_actors.extend(gun_actors)
 
         if footprints and footprints[0][0].n_cells:
             boundary = footprints[0][1]
