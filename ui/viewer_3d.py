@@ -441,6 +441,9 @@ class ProductViewer(QWidget):
         self._interactive_spray_active = False
         self._interactive_view_mode = "camera"
         self._interactive_spray_recording = False
+        # Deep cavity mode follows the deepest front-facing surface visible
+        # through the cursor ray, allowing the virtual nozzle to enter hollow parts.
+        self._interactive_spray_cavity_mode = False
         self._interactive_spray_standoff = 0.0
         self._interactive_spray_cone_angle_deg = 0.0
         self._interactive_spray_transform = np.eye(4, dtype=float)
@@ -940,6 +943,19 @@ class ProductViewer(QWidget):
             lambda checked=False: self._set_interactive_view_mode("spray")
         )
         row.addWidget(self.spray_mode_button)
+
+        self.cavity_mode_button = QPushButton("CAVITY NOZZLE")
+        self.cavity_mode_button.setCheckable(True)
+        self.cavity_mode_button.setChecked(False)
+        self.cavity_mode_button.setEnabled(False)
+        self.cavity_mode_button.setToolTip(
+            "Pick the deepest front-facing surface along the cursor ray so the "
+            "spray nozzle can enter hollow parts. Collision protection remains active."
+        )
+        self.cavity_mode_button.toggled.connect(
+            self._on_interactive_cavity_mode_toggled
+        )
+        row.addWidget(self.cavity_mode_button)
 
         self.interaction_mode_status = QLabel("CAMERA CONTROL")
         self.interaction_mode_status.setStyleSheet(
@@ -2703,6 +2719,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_input_style = vtkInteractorStyleUser()
         self.interaction_mode_panel.show()
         self.spray_mode_button.setEnabled(True)
+        self.cavity_mode_button.setEnabled(True)
         self._set_interactive_view_mode("spray")
 
         self._interactive_hud_actor = self.plotter.add_text(
@@ -3004,6 +3021,100 @@ class ProductViewer(QWidget):
                 pass
         self._interactive_spray_live_actors = []
 
+    def _on_interactive_cavity_mode_toggled(self, enabled):
+        """Toggle deep-surface picking for manual cavity spraying."""
+        self._interactive_spray_cavity_mode = bool(enabled)
+        if hasattr(self, "interaction_mode_status"):
+            if enabled:
+                self.interaction_mode_status.setText("SPRAY / CAVITY NOZZLE")
+            elif self._interactive_spray_active:
+                self.interaction_mode_status.setText("SPRAY CONTROL")
+            else:
+                self.interaction_mode_status.setText("CAMERA CONTROL")
+
+        # Re-evaluate the current cursor immediately.
+        if self._interactive_spray_active and self._interactive_spray_latest_pose is not None:
+            x, y = self.plotter.iren.interactor.GetEventPosition()
+            pose = self._interactive_pick_surface_pose(x, y)
+            if pose is not None:
+                self._interactive_update_cursor(pose)
+
+    def _interactive_deep_pick_surface(self, x, y):
+        """Pick the deepest camera-visible front-facing surface."""
+        if self._interactive_spray_surface is None or self._interactive_spray_locator is None:
+            return None
+
+        renderer = self.plotter.renderer
+        renderer.SetDisplayPoint(float(x), float(y), 0.0)
+        near_h = np.asarray(renderer.DisplayToWorld(), dtype=np.float64)
+        renderer.SetDisplayPoint(float(x), float(y), 1.0)
+        far_h = np.asarray(renderer.DisplayToWorld(), dtype=np.float64)
+        if (
+            near_h.shape != (4,) or far_h.shape != (4,)
+            or abs(near_h[3]) <= 1e-12 or abs(far_h[3]) <= 1e-12
+        ):
+            return None
+        near_world = near_h[:3] / near_h[3]
+        far_world = far_h[:3] / far_h[3]
+
+        inverse = np.linalg.inv(self._interactive_spray_transform)
+        near_local = (inverse @ np.append(near_world, 1.0))[:3]
+        far_local = (inverse @ np.append(far_world, 1.0))[:3]
+
+        intersections = vtkPoints()
+        intersected_cells = vtkIdList()
+        hit = self._interactive_spray_locator.IntersectWithLine(
+            near_local.tolist(),
+            far_local.tolist(),
+            intersections,
+            intersected_cells,
+        )
+        if not hit or intersections.GetNumberOfPoints() == 0:
+            return None
+
+        ray_world = far_world - near_world
+        ray_world /= max(float(np.linalg.norm(ray_world)), 1e-12)
+        rotation = self._actor_matrix_array()[:3, :3]
+
+        best = None
+        best_distance = -float("inf")
+        for index in range(intersections.GetNumberOfPoints()):
+            cell_id = (
+                int(intersected_cells.GetId(index))
+                if index < intersected_cells.GetNumberOfIds()
+                else -1
+            )
+            if cell_id < 0 or cell_id >= len(self.current_mesh.face_normals):
+                continue
+            normal_local = np.asarray(
+                self.current_mesh.face_normals[cell_id], dtype=np.float64
+            )
+            normal_world = rotation @ normal_local
+            normal_length = float(np.linalg.norm(normal_world))
+            if normal_length <= 1e-12:
+                continue
+            normal_world /= normal_length
+
+            # Keep only surfaces facing the camera. This rejects the far
+            # backside of a closed solid while retaining the inner wall
+            # visible through an opening.
+            if float(np.dot(normal_world, ray_world)) >= -0.05:
+                continue
+
+            point_local = np.asarray(
+                intersections.GetPoint(index), dtype=np.float64
+            )
+            point_world = (
+                self._interactive_spray_transform
+                @ np.append(point_local, 1.0)
+            )[:3]
+            distance = float(np.linalg.norm(point_world - near_world))
+            if distance > best_distance:
+                best_distance = distance
+                best = point_world, normal_world, cell_id
+
+        return best
+
     def _interactive_pick_surface_pose(self, x, y):
         if self._pose_actor is None or self.current_mesh is None:
             return None
@@ -3015,6 +3126,12 @@ class ProductViewer(QWidget):
             return None
         if picker.GetActor() != self._pose_actor:
             return None
+
+        deep_pick = (
+            self._interactive_deep_pick_surface(x, y)
+            if self._interactive_spray_cavity_mode
+            else None
+        )
 
         cell_id = int(picker.GetCellId())
         face_normals = np.asarray(self.current_mesh.face_normals, dtype=float)
@@ -3055,9 +3172,13 @@ class ProductViewer(QWidget):
             return None
         normal_world /= normal_world_length
 
-        hit_world = np.asarray(picker.GetPickPosition(), dtype=float)
-        if hit_world.shape != (3,) or not np.all(np.isfinite(hit_world)):
-            return None
+        if deep_pick is not None:
+            hit_world, normal_world, cell_id = deep_pick
+        else:
+            hit_world = np.asarray(picker.GetPickPosition(), dtype=float)
+            if hit_world.shape != (3,) or not np.all(np.isfinite(hit_world)):
+                return None
+
         nozzle_world = hit_world + normal_world * self._interactive_spray_standoff
         spray_direction_world = -normal_world
         return {
@@ -4914,6 +5035,9 @@ class ProductViewer(QWidget):
         self.camera_mode_button.setChecked(True)
         self.spray_mode_button.setChecked(False)
         self.spray_mode_button.setEnabled(False)
+        self.cavity_mode_button.setChecked(False)
+        self.cavity_mode_button.setEnabled(False)
+        self._interactive_spray_cavity_mode = False
         self.interaction_mode_status.setText("CAMERA CONTROL")
 
         if self._interactive_hud_actor is not None:
