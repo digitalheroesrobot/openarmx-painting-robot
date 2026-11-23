@@ -2663,7 +2663,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_paint_footprint_angle_deg = float(cone_angle_deg)
         self._interactive_spray_gun_collision = False
         self._interactive_spray_surface_excluded = False
-        self._interactive_spray_excluded_face_mask = None
         self._interactive_spray_collision_filter = None
         self._interactive_spray_paint_state_dirty = False
         self._interactive_coating_process = dict(coating_process or {})
