@@ -4938,15 +4938,17 @@ class ProductViewer(QWidget):
         if dx == 0 and dy == 0:
             return
 
-        # Horizontal drag controls yaw; vertical drag controls pitch.
-        # Positive screen-down increases the Y tilt. Clamp each axis to ±45°.
+        # Match the screen drag axes to the observed tool motion:
+        # horizontal drag changes the left/right tilt; vertical drag changes
+        # the up/down tilt. The pose helper maps angle_x to pitch and angle_y
+        # to yaw, so these accumulators are intentionally crossed here.
         sensitivity = 0.20
-        self._interactive_spray_angle_y_deg = float(np.clip(
-            self._interactive_spray_angle_y_deg + dx * sensitivity,
+        self._interactive_spray_angle_x_deg = float(np.clip(
+            self._interactive_spray_angle_x_deg + dx * sensitivity,
             -45.0, 45.0,
         ))
-        self._interactive_spray_angle_x_deg = float(np.clip(
-            self._interactive_spray_angle_x_deg + dy * sensitivity,
+        self._interactive_spray_angle_y_deg = float(np.clip(
+            self._interactive_spray_angle_y_deg + dy * sensitivity,
             -45.0, 45.0,
         ))
 
