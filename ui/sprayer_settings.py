@@ -222,10 +222,10 @@ class SprayPatternPreview(QWidget):
             tip_y = 76.0
 
             profile = self.profile
-            standoff = max(1.0, float(profile.get("standoff_mm", 180.0)))
+            standoff = max(1.0, float(profile.get("standoff_mm", 100.0)))
             angle = max(
                 1.0,
-                min(150.0, float(profile.get("spray_cone_angle_deg", 45.0))),
+                min(150.0, float(profile.get("spray_cone_angle_deg", 50.0))),
             )
             overlap = max(
                 0.0, min(90.0, float(profile.get("overlap_percent", 50.0)))
