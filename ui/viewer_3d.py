@@ -3340,7 +3340,10 @@ class ProductViewer(QWidget):
         # Cursor motion only previews the nozzle. Paint deposition and pose
         # recording are gated by the left mouse button.
         self._interactive_spray_recording = False
-        self._interactive_spray_stroke_id = -1
+        # Preserve the existing stroke counter in additive edit mode so every
+        # new stroke gets a unique ID after the existing route.
+        if not existing_records:
+            self._interactive_spray_stroke_id = -1
         self._interactive_last_record_time = 0.0
 
         interactor = self.plotter.iren.interactor
