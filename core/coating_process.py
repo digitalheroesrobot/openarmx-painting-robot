@@ -64,6 +64,12 @@ def validate_coating_process(parameters: dict) -> dict:
     values["number_of_coats"] = coats
     if values["min_travel_speed_mm_s"] > values["base_travel_speed_mm_s"]:
         raise ValueError("Minimum travel speed cannot exceed base travel speed.")
+    values["name"] = str(values.get("name", "default coating process")).strip()
+    if not values["name"]:
+        raise ValueError("Coating process name cannot be empty.")
+    return values
+
+
 def calculate_robot_waypoint_spacing_mm(
     travel_speed_mm_s: float,
     control_frequency_hz: float,
@@ -80,12 +86,6 @@ def calculate_robot_waypoint_spacing_mm(
     if not math.isfinite(frequency) or frequency <= 0.0:
         raise ValueError("Robot control frequency must be a positive finite value.")
     return speed / frequency
-
-
-    values["name"] = str(values.get("name", "default coating process")).strip()
-    if not values["name"]:
-        raise ValueError("Coating process name cannot be empty.")
-    return values
 
 
 def coating_model_readiness(parameters: dict) -> tuple[str, list[str]]:
