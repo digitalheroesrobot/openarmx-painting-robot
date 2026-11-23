@@ -1340,17 +1340,216 @@ class ProductViewer(QWidget):
             if hours else f"{minutes:02d}:{whole_seconds:02d}"
         )
 
-    def _build_interactive_route_metrics(self, records):
-        """Measure route geometry and replay recorded sample intervals only.
+    def _interactive_build_safe_connector_path(self, start_record, end_record):
+        """Build and collision-check an exterior spray-OFF route between strokes.
 
-        No robot speed, controller frequency, or planned motion time is inferred.
+        The nozzle first retreats along the local surface normal. The retreat
+        reaches an expanded product AABB whose margin accommodates the gun
+        radius and collision clearance. The connector then follows AABB edges,
+        never a straight chord through the product.
         """
+        if self.current_mesh is None or self._interactive_spray_surface is None:
+            return None
+        mm_factor = self._get_source_mm_factor()
+        if mm_factor is None or mm_factor <= 0.0:
+            return None
+
+        profile = self._interactive_sprayer_profile or {}
+        def profile_mm(key, default):
+            try:
+                value = float(profile.get(key, default))
+            except (TypeError, ValueError):
+                value = float(default)
+            return max(value, 0.0)
+
+        standoff = max(float(self._interactive_spray_standoff), 1e-6)
+        body_radius = 0.5 * profile_mm("gun_body_diameter_mm", 45.0) / mm_factor
+        nozzle_radius = 0.5 * max(
+            profile_mm("nozzle_orifice_mm", 1.4) * 2.0,
+            profile_mm("gun_body_diameter_mm", 45.0) * 0.18,
+        ) / mm_factor
+        clearance = profile_mm("gun_collision_clearance_mm", 2.0) / mm_factor
+        margin = max(body_radius, nozzle_radius) + clearance + max(1e-3, standoff * 0.01)
+
+        bounds = np.asarray(self.current_mesh.bounds, dtype=np.float64)
+        if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
+            return None
+        low = bounds[0] - margin
+        high = bounds[1] + margin
+        box_center = 0.5 * (low + high)
+        transform = np.asarray(self._interactive_spray_transform, dtype=np.float64)
+        rotation = transform[:3, :3]
+        translation = transform[:3, 3]
+
+        def unit(vector):
+            vector = np.asarray(vector, dtype=np.float64)
+            length = float(np.linalg.norm(vector))
+            if not np.isfinite(length) or length <= 1e-12:
+                return None
+            return vector / length
+
+        def product_vector(record, key):
+            value = np.asarray(record.get(key), dtype=np.float64)
+            return unit(value)
+
+        start_surface = np.asarray(start_record["surface_point_product"], dtype=np.float64)
+        end_surface = np.asarray(end_record["surface_point_product"], dtype=np.float64)
+        start_normal = product_vector(start_record, "surface_normal_product")
+        end_normal = product_vector(end_record, "surface_normal_product")
+        start_direction = product_vector(start_record, "spray_direction_product")
+        end_direction = product_vector(end_record, "spray_direction_product")
+        if any(value is None for value in (
+            start_normal, end_normal, start_direction, end_direction
+        )):
+            return None
+
+        def normal_exit(surface, normal):
+            distances = []
+            for axis in range(3):
+                if normal[axis] > 1e-10:
+                    distances.append((high[axis] - surface[axis]) / normal[axis])
+                elif normal[axis] < -1e-10:
+                    distances.append((low[axis] - surface[axis]) / normal[axis])
+            positive = [value for value in distances if np.isfinite(value) and value >= 0.0]
+            if not positive:
+                return None
+            distance = max(standoff, min(positive) + max(1e-3, margin * 1e-3))
+            return surface + normal * distance
+
+        start_lift = start_surface + start_normal * standoff
+        end_lift = end_surface + end_normal * standoff
+        start_exit = normal_exit(start_surface, start_normal)
+        end_exit = normal_exit(end_surface, end_normal)
+        if start_exit is None or end_exit is None:
+            return None
+
+        corners = np.asarray([
+            [high[0] if (mask & 1) else low[0],
+             high[1] if (mask & 2) else low[1],
+             high[2] if (mask & 4) else low[2]]
+            for mask in range(8)
+        ], dtype=np.float64)
+        start_corner = int(np.argmin(np.linalg.norm(corners - start_exit, axis=1)))
+        end_corner = int(np.argmin(np.linalg.norm(corners - end_exit, axis=1)))
+
+        # A deterministic shortest path on the 12 edges of the expanded box.
+        corner_indices = [start_corner]
+        current = start_corner
+        for bit in (1, 2, 4):
+            if (current & bit) != (end_corner & bit):
+                current ^= bit
+                corner_indices.append(current)
+
+        nodes = [
+            np.asarray(start_record["nozzle_point_product"], dtype=np.float64),
+            start_lift,
+            start_exit,
+        ]
+        nodes.extend(corners[index] for index in corner_indices)
+        nodes.extend([end_exit, end_lift,
+                      np.asarray(end_record["nozzle_point_product"], dtype=np.float64)])
+
+        start_outward = unit(-start_direction)
+        end_outward = unit(-end_direction)
+        if start_outward is None or end_outward is None:
+            return None
+        outward_nodes = [
+            start_outward,
+            start_normal,
+            unit(start_exit - box_center),
+        ]
+        outward_nodes.extend(unit(corners[index] - box_center) for index in corner_indices)
+        outward_nodes.extend([
+            unit(end_exit - box_center),
+            end_normal,
+            end_outward,
+        ])
+        if any(value is None for value in outward_nodes):
+            return None
+
+        body_diameter_units = max(
+            profile_mm("gun_body_diameter_mm", 45.0) / mm_factor,
+            1e-3,
+        )
+        sample_step = max(
+            min(body_diameter_units * 0.20, standoff * 0.05),
+            1e-3,
+        )
+        sampled = []
+        total_segments = len(nodes) - 1
+        for segment_index in range(total_segments):
+            p0 = nodes[segment_index]
+            p1 = nodes[segment_index + 1]
+            o0 = outward_nodes[segment_index]
+            o1 = outward_nodes[segment_index + 1]
+            length = float(np.linalg.norm(p1 - p0))
+            if not np.isfinite(length):
+                return None
+            steps = max(1, int(math.ceil(length / sample_step)))
+            first_step = 0 if segment_index == 0 else 1
+            for step_index in range(first_step, steps + 1):
+                fraction = float(step_index) / float(steps)
+                point_product = p0 * (1.0 - fraction) + p1 * fraction
+                outward = unit(o0 * (1.0 - fraction) + o1 * fraction)
+                if outward is None:
+                    return None
+                direction_product = -outward
+                point_world = rotation @ point_product + translation
+                direction_world = unit(rotation @ direction_product)
+                if direction_world is None:
+                    return None
+                gun_actors, gun_polydata = self._interactive_build_gun_visual(
+                    point_world, direction_world, render=False
+                )
+                collision = self._interactive_check_gun_collision(gun_polydata)
+                if collision:
+                    return None
+
+                if not sampled and step_index == 0 and segment_index == 0:
+                    sampled.append(start_record)
+                    continue
+                is_final = (
+                    segment_index == total_segments - 1
+                    and step_index == steps
+                )
+                if is_final:
+                    sampled.append(end_record)
+                    continue
+
+                surface_world = point_world + direction_world * standoff
+                normal_world = unit(rotation @ outward)
+                sampled.append({
+                    "nozzle_point_product": point_product.copy(),
+                    "surface_point_product": point_product + direction_product * standoff,
+                    "surface_normal_product": outward.copy(),
+                    "spray_direction_product": direction_product.copy(),
+                    "nozzle_point_world": point_world.copy(),
+                    "surface_point_world": surface_world.copy(),
+                    "surface_normal_world": normal_world.copy(),
+                    "spray_direction_world": direction_world.copy(),
+                    "face_index": int(
+                        start_record["face_index"]
+                        if segment_index < total_segments // 2
+                        else end_record["face_index"]
+                    ),
+                    "stroke_id": -1,
+                    "timestamp": 0.0,
+                })
+
+        if len(sampled) < 2:
+            return None
+        return sampled
+
+    def _build_interactive_route_metrics(self, records):
+        """Measure spray strokes and collision-checked spray-OFF routes."""
         if not records:
             return {
                 "spray_distance_mm": 0.0,
                 "connector_distance_mm": 0.0,
                 "recorded_replay_duration_s": 0.0,
                 "timeline": [],
+                "safe_connector_paths": [],
+                "safety_status": "NO_ROUTE",
             }
         mm_factor = self._get_source_mm_factor()
         if mm_factor is None:
@@ -1372,35 +1571,80 @@ class ProductViewer(QWidget):
                     np.sum(np.linalg.norm(np.diff(points[indices], axis=0), axis=1))
                     * mm_factor
                 )
-        starts = np.r_[0, np.flatnonzero(np.diff(segment_ids) != 0) + 1]
-        ends = np.r_[starts[1:], len(segment_ids)]
-        connector_distance = 0.0
-        for index in range(len(starts) - 1):
-            p0 = points[int(ends[index] - 1)]
-            p1 = points[int(starts[index + 1])]
-            connector_distance += float(np.linalg.norm(p1 - p0) * mm_factor)
 
         timeline = []
+        safe_connector_paths = []
+        connector_distance = 0.0
         elapsed = 0.0
         for index in range(1, len(records)):
             duration = abs(float(timestamps[index] - timestamps[index - 1]))
             if not np.isfinite(duration) or duration <= 1e-6:
                 continue
             spray_on = bool(segment_ids[index] == segment_ids[index - 1])
-            timeline.append({
-                "start_s": elapsed,
-                "end_s": elapsed + duration,
-                "start_record": records[index - 1],
-                "end_record": records[index],
-                "spray_on": spray_on,
-                "kind": "SPRAY_ON_RECORDED_INTERVAL" if spray_on else "SPRAY_OFF_CONNECTOR",
-            })
-            elapsed += duration
+            if spray_on:
+                timeline.append({
+                    "start_s": elapsed,
+                    "end_s": elapsed + duration,
+                    "start_record": records[index - 1],
+                    "end_record": records[index],
+                    "spray_on": True,
+                    "kind": "SPRAY_ON_RECORDED_INTERVAL",
+                })
+                elapsed += duration
+                continue
+
+            connector_records = self._interactive_build_safe_connector_path(
+                records[index - 1], records[index]
+            )
+            if connector_records is None:
+                return {
+                    "spray_distance_mm": float(spray_distance),
+                    "connector_distance_mm": float(connector_distance),
+                    "recorded_replay_duration_s": float(elapsed),
+                    "timeline": [],
+                    "safe_connector_paths": safe_connector_paths,
+                    "safety_status": "BLOCKED_NO_COLLISION_FREE_CONNECTOR",
+                    "blocked_transition": int(index),
+                }
+            safe_connector_paths.append(connector_records)
+            connector_points = np.asarray(
+                [item["nozzle_point_product"] for item in connector_records],
+                dtype=np.float64,
+            )
+            lengths = np.linalg.norm(np.diff(connector_points, axis=0), axis=1)
+            total_length = float(np.sum(lengths))
+            connector_distance += total_length * mm_factor
+            if total_length <= 1e-12:
+                return {
+                    "spray_distance_mm": float(spray_distance),
+                    "connector_distance_mm": float(connector_distance),
+                    "recorded_replay_duration_s": float(elapsed),
+                    "timeline": [],
+                    "safe_connector_paths": safe_connector_paths,
+                    "safety_status": "BLOCKED_DEGENERATE_CONNECTOR",
+                    "blocked_transition": int(index),
+                }
+            for path_index, length in enumerate(lengths):
+                if length <= 1e-12:
+                    continue
+                segment_duration = duration * float(length / total_length)
+                timeline.append({
+                    "start_s": elapsed,
+                    "end_s": elapsed + segment_duration,
+                    "start_record": connector_records[path_index],
+                    "end_record": connector_records[path_index + 1],
+                    "spray_on": False,
+                    "kind": "SAFE_SPRAY_OFF_EXTERIOR_MOVE",
+                })
+                elapsed += segment_duration
+
         return {
             "spray_distance_mm": float(spray_distance),
             "connector_distance_mm": float(connector_distance),
             "recorded_replay_duration_s": float(elapsed),
             "timeline": timeline,
+            "safe_connector_paths": safe_connector_paths,
+            "safety_status": "SAFE",
         }
 
     def _optimize_interactive_recorded_path(self):
@@ -1455,6 +1699,17 @@ class ProductViewer(QWidget):
 
         after_metrics = self._build_interactive_route_metrics(records)
         self._interactive_recorded_replay_timing = after_metrics
+        self._interactive_safe_connector_paths = after_metrics.get(
+            "safe_connector_paths", []
+        )
+        route_safe = after_metrics.get("safety_status") == "SAFE"
+        self.recorded_path_replay_button.setEnabled(
+            route_safe and len(after_metrics.get("timeline", [])) > 0
+        )
+        if not route_safe:
+            self.recorded_path_status_label.setText(
+                "ROUTE BLOCKED · NO COLLISION-FREE EXTERIOR CONNECTOR"
+            )
         self._interactive_route_optimization_metrics = {
             "before_spray_distance_mm": before_metrics["spray_distance_mm"],
             "after_spray_distance_mm": after_metrics["spray_distance_mm"],
@@ -1464,7 +1719,7 @@ class ProductViewer(QWidget):
         }
         self.recorded_path_time_label.setText(
             f"SPRAY {after_metrics['spray_distance_mm']:.1f} mm  |  "
-            f"SPRAY-OFF CONNECTORS {after_metrics['connector_distance_mm']:.1f} mm"
+            f"SAFE SPRAY-OFF ROUTES {after_metrics['connector_distance_mm']:.1f} mm"
         )
         self._refresh_interactive_recorded_path_actor()
         return True
@@ -1573,15 +1828,24 @@ class ProductViewer(QWidget):
                 )
                 self._interactive_spray_route_actors.append(actor)
 
-        for index in range(len(stroke_endpoints) - 1):
+        connector_paths = getattr(self, "_interactive_safe_connector_paths", None)
+        if connector_paths is None:
+            route_metrics = self._build_interactive_route_metrics(records)
+            connector_paths = route_metrics.get("safe_connector_paths", [])
+            self._interactive_safe_connector_paths = connector_paths
+        for connector_records in connector_paths:
             connector_points = np.asarray([
-                stroke_endpoints[index][1], stroke_endpoints[index + 1][0]
+                item["nozzle_point_world"] for item in connector_records
             ], dtype=np.float64)
+            if len(connector_points) < 2:
+                continue
             connector = pv.PolyData(connector_points)
-            connector.lines = np.asarray([2, 0, 1], dtype=np.int64)
+            connector.lines = np.asarray([
+                len(connector_points), *range(len(connector_points))
+            ], dtype=np.int64)
             actor = self.plotter.add_mesh(
-                connector, color="#5BA8FF", line_width=2.5,
-                style="wireframe", lighting=False, pickable=False,
+                connector, color="#5BA8FF", line_width=3.0,
+                lighting=False, pickable=False,
             )
             self._interactive_spray_route_actors.append(actor)
 
@@ -1777,6 +2041,12 @@ class ProductViewer(QWidget):
         if not self._interactive_recorded_replay_timing:
             self._optimize_interactive_recorded_path()
         timing = self._interactive_recorded_replay_timing
+        if timing and timing.get("safety_status") not in (None, "SAFE"):
+            self.recorded_path_status_label.setText(
+                "REPLAY BLOCKED · NO SAFE CONNECTOR"
+            )
+            self.recorded_path_replay_button.setEnabled(False)
+            return
         timeline = timing.get("timeline", []) if timing else []
         if not timeline:
             self.recorded_path_status_label.setText("Route timing unavailable")
@@ -1944,13 +2214,12 @@ class ProductViewer(QWidget):
             pose["nozzle_point_world"], pose["spray_direction_world"]
         )
         self._interactive_spray_live_actors.extend(gun_actors)
+        self._interactive_spray_gun_collision = (
+            self._interactive_check_gun_collision(gun_polydata)
+        )
         if edge["spray_on"]:
             self._interactive_add_replay_cone_visual(pose)
-            self._interactive_spray_gun_collision = (
-                self._interactive_check_gun_collision(gun_polydata)
-            )
         else:
-            self._interactive_spray_gun_collision = False
             self._interactive_spray_surface_excluded = False
 
         if self._interactive_recorded_replay_actor is not None:
@@ -1961,9 +2230,9 @@ class ProductViewer(QWidget):
             self._interactive_recorded_replay_actor = None
 
         self._interactive_recorded_replay_index = edge_index
-        mode = "SPRAY ON" if edge["spray_on"] else "SPRAY OFF"
-        if edge["spray_on"] and self._interactive_spray_gun_collision:
-            mode = "SPRAY BLOCKED · GUN COLLISION"
+        mode = "SPRAY ON" if edge["spray_on"] else "SPRAY OFF · SAFE MOVE"
+        if self._interactive_spray_gun_collision:
+            mode = "MOVE BLOCKED · GUN COLLISION"
         elif edge["spray_on"] and self._interactive_spray_surface_excluded:
             mode = "SPRAY BLOCKED · STAGE 2 EXCLUDED"
         current = self._format_route_time(target_elapsed)
@@ -3559,6 +3828,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_locator.BuildLocator()
         self._interactive_spray_latest_pose = None
         self._interactive_spray_records = list(existing_records)
+        self._interactive_safe_connector_paths = None
         if existing_records:
             # Continue stroke IDs after the existing route.
             existing_stroke_ids = [
@@ -5233,7 +5503,7 @@ class ProductViewer(QWidget):
             "PRECOMPUTED_SURFACE_SAMPLE_GAUSSIAN_BAKE"
         )
 
-    def _interactive_build_gun_visual(self, nozzle, spray_direction):
+    def _interactive_build_gun_visual(self, nozzle, spray_direction, render=True):
         """Build a lightweight sprayer envelope from the active profile."""
         profile = self._interactive_sprayer_profile or {}
         mm_factor = self._get_source_mm_factor() or 1.0
@@ -5285,16 +5555,17 @@ class ProductViewer(QWidget):
 
         gun_polydata = pv.merge(parts, merge_points=True)
         actors = []
-        for part in parts:
-            actor = self.plotter.add_mesh(
-                part,
-                color="#B9C4CC",
-                opacity=0.88,
-                smooth_shading=True,
-                lighting=True,
-                pickable=False,
-            )
-            actors.append(actor)
+        if render:
+            for part in parts:
+                actor = self.plotter.add_mesh(
+                    part,
+                    color="#B9C4CC",
+                    opacity=0.88,
+                    smooth_shading=True,
+                    lighting=True,
+                    pickable=False,
+                )
+                actors.append(actor)
         return actors, gun_polydata
 
     @staticmethod
@@ -6817,6 +7088,12 @@ class ProductViewer(QWidget):
                     )
                     pairs.append((run[index], run[index + 1], fraction))
 
+            # A valid mouse stroke must produce at least two real spray
+            # samples separated by the configured spatial sampling interval.
+            # This rejects clicks and tiny accidental drags.
+            if len(pairs) < 2 or total_length < spacing * (1.0 - 1e-8):
+                continue
+
             run_has_record = False
             for first, second, fraction in pairs:
                 surface_point = (
@@ -6886,6 +7163,7 @@ class ProductViewer(QWidget):
             int(self._interactive_spray_stroke_id), next_stroke_id - 1
         )
         if stored_count:
+            self._interactive_safe_connector_paths = None
             self._refresh_interactive_recorded_path_actor()
         return stored_count
 
@@ -7054,7 +7332,8 @@ class ProductViewer(QWidget):
             return
         self._interactive_spray_recording = False
         if getattr(self, "_interactive_route_generation_only", False):
-            self._interactive_finalize_smoothed_spray_stroke()
+            self._interactive_spray_stroke_input_poses = []
+            self._interactive_remove_stroke_preview()
 
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
