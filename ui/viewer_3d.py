@@ -445,6 +445,7 @@ class ProductViewer(QWidget):
         # through the cursor ray, allowing the virtual nozzle to enter hollow parts.
         self._interactive_spray_cavity_mode = False
         self._interactive_spray_standoff = 0.0
+        self._interactive_spray_auto_standoff = False
         self._interactive_spray_cone_angle_deg = 0.0
         self._interactive_spray_transform = np.eye(4, dtype=float)
         self._interactive_spray_latest_pose = None
@@ -960,6 +961,19 @@ class ProductViewer(QWidget):
         )
         row.addWidget(self.working_distance_label)
         row.addWidget(self.working_distance_spin)
+
+        self.auto_standoff_button = QPushButton("AUTO STANDOFF")
+        self.auto_standoff_button.setCheckable(True)
+        self.auto_standoff_button.setChecked(False)
+        self.auto_standoff_button.setEnabled(False)
+        self.auto_standoff_button.setToolTip(
+            "Keep the nozzle at the requested working distance from the nearest "
+            "surface along the current spray direction."
+        )
+        self.auto_standoff_button.toggled.connect(
+            self._on_interactive_auto_standoff_toggled
+        )
+        row.addWidget(self.auto_standoff_button)
 
         self.cavity_mode_button = QPushButton("CAVITY NOZZLE")
         self.cavity_mode_button.setCheckable(True)
@@ -2780,6 +2794,7 @@ class ProductViewer(QWidget):
         self.spray_mode_button.setEnabled(True)
         self.cavity_mode_button.setEnabled(True)
         self.working_distance_spin.setEnabled(True)
+        self.auto_standoff_button.setEnabled(True)
         factor = self._get_source_mm_factor()
         if factor is not None:
             self.working_distance_spin.blockSignals(True)
@@ -3109,6 +3124,73 @@ class ProductViewer(QWidget):
             pose = self._interactive_pick_surface_pose(x, y)
             if pose is not None:
                 self._interactive_update_cursor(pose)
+
+    def _on_interactive_auto_standoff_toggled(self, enabled):
+        """Enable closed-loop geometric working-distance control."""
+        self._interactive_spray_auto_standoff = bool(enabled)
+        if hasattr(self, "interaction_mode_status") and self._interactive_spray_active:
+            self.interaction_mode_status.setText(
+                "SPRAY / AUTO STANDOFF" if enabled else
+                ("SPRAY / CAVITY NOZZLE" if self._interactive_spray_cavity_mode else "SPRAY CONTROL")
+            )
+        if enabled and self._interactive_spray_active and self._interactive_spray_latest_pose is not None:
+            pose = self._interactive_apply_auto_standoff(
+                self._interactive_spray_latest_pose
+            )
+            if pose is not None:
+                self._interactive_update_cursor(pose)
+
+    def _interactive_apply_auto_standoff(self, pose):
+        """Move the nozzle to the requested distance from the nearest surface along spray axis."""
+        if not self._interactive_spray_auto_standoff:
+            return pose
+        if self._interactive_spray_locator is None:
+            return pose
+
+        nozzle = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
+        direction = np.asarray(pose["spray_direction_world"], dtype=np.float64)
+        direction /= max(float(np.linalg.norm(direction)), 1e-12)
+        rotation = self._actor_matrix_array()[:3, :3]
+        inverse = np.linalg.inv(self._interactive_spray_transform)
+
+        # Work in product-local coordinates because the VTK locator is built
+        # from the product mesh before the actor transform is applied.
+        start_world = nozzle
+        end_world = nozzle + direction * (1000.0 / max(self._get_source_mm_factor() or 1.0, 1e-12))
+        start_local = (inverse @ np.append(start_world, 1.0))[:3]
+        end_local = (inverse @ np.append(end_world, 1.0))[:3]
+
+        points = vtkPoints()
+        cell_ids = vtkIdList()
+        hit = self._interactive_spray_locator.IntersectWithLine(
+            start_local.tolist(), end_local.tolist(), points, cell_ids
+        )
+        if not hit or points.GetNumberOfPoints() == 0:
+            return pose
+
+        best_distance = float("inf")
+        best_world = None
+        for index in range(points.GetNumberOfPoints()):
+            point_local = np.asarray(points.GetPoint(index), dtype=np.float64)
+            point_world = (
+                self._interactive_spray_transform
+                @ np.append(point_local, 1.0)
+            )[:3]
+            distance = float(np.dot(point_world - start_world, direction))
+            if distance > 1e-6 and distance < best_distance:
+                best_distance = distance
+                best_world = point_world
+
+        if best_world is None:
+            return pose
+
+        factor = self._get_source_mm_factor() or 1.0
+        target_source = self._interactive_spray_standoff
+        target_world = target_source / float(factor)
+        updated = dict(pose)
+        updated["nozzle_point_world"] = best_world - direction * target_world
+        updated["timestamp"] = time.monotonic()
+        return updated
 
     def _on_interactive_working_distance_changed(self, value_mm):
         """Change the spray tip-to-surface working distance live."""
@@ -4699,6 +4781,7 @@ class ProductViewer(QWidget):
             return
         self._interactive_spray_last_cursor_update_time = now
 
+        pose = self._interactive_apply_auto_standoff(pose)
         self._interactive_remove_live_actors()
         self._interactive_spray_latest_pose = pose
         nozzle = pose["nozzle_point_world"]
@@ -5218,6 +5301,8 @@ class ProductViewer(QWidget):
         self.cavity_mode_button.setChecked(False)
         self.cavity_mode_button.setEnabled(False)
         self.working_distance_spin.setEnabled(False)
+        self.auto_standoff_button.setChecked(False)
+        self.auto_standoff_button.setEnabled(False)
         for widget in (
             self.cavity_depth_spin,
             self.cavity_tilt_x_spin,
