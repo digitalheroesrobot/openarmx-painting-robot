@@ -3045,7 +3045,7 @@ class MainWindow(QMainWindow):
         if self.current_stage2_result is None:
             self.patch_inspection_status_label.hide()
 
-            self.start_analysis_button.setVisible(False)
+            self.start_analysis_button.setVisible(True)
 
             return
 
