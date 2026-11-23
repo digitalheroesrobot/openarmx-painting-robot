@@ -463,6 +463,12 @@ class ProductViewer(QWidget):
         self._robot_motion_settings = {"painting_speed_mm_s": 150.0, "control_frequency_hz": 100.0}
         self._interactive_spray_path_actor = None
         self._interactive_spray_route_actors = []
+        self._interactive_endpoint_marker_actors = []
+        self._interactive_endpoint_pick_targets = []
+        self._interactive_manual_connector_mode = False
+        self._interactive_manual_connector_required = True
+        self._interactive_manual_connector_selection = []
+        self._interactive_precomputed_connector_paths = {}
         self._interactive_recorded_replay_timer = QTimer(self)
         self._interactive_recorded_replay_timer.setInterval(40)
         self._interactive_recorded_replay_timer.timeout.connect(
@@ -1217,7 +1223,20 @@ class ProductViewer(QWidget):
         row.setContentsMargins(8, 4, 8, 4)
         row.setSpacing(7)
         row.addWidget(QLabel("RECORDED SPRAY PATH"))
-        self.recorded_path_optimize_button = QPushButton("OPTIMIZE ROUTE")
+        self.recorded_path_connect_button = QPushButton("CONNECT ENDPOINTS")
+        self.recorded_path_connect_button.setCheckable(True)
+        self.recorded_path_connect_button.setToolTip(
+            "Click a stroke end point, then the next stroke start point. "
+            "The connector follows the product surface at the configured spray distance."
+        )
+        self.recorded_path_connect_button.toggled.connect(
+            self._toggle_manual_connector_mode
+        )
+        row.addWidget(self.recorded_path_connect_button)
+        self.recorded_path_optimize_button = QPushButton("CHECK ROUTE")
+        self.recorded_path_optimize_button.setToolTip(
+            "Validate the user-defined stroke order and all manually drawn connectors."
+        )
         self.recorded_path_optimize_button.clicked.connect(
             self._optimize_interactive_recorded_path
         )
@@ -1292,6 +1311,11 @@ class ProductViewer(QWidget):
             raise ValueError("Recorded path page must be 'route' or 'simulation'.")
         route_page = page == "route"
         self._interactive_route_generation_only = route_page
+        connect_button = getattr(self, "recorded_path_connect_button", None)
+        if connect_button is not None:
+            connect_button.setVisible(route_page)
+        if not route_page:
+            self._toggle_manual_connector_mode(False)
 
         # Verification replay intentionally uses a temporary bare-product
         # coating field. When the operator returns to route generation, restore
