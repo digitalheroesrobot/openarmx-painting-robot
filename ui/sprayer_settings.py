@@ -46,10 +46,6 @@ DEFAULT_SPRAYER_PROFILE = {
     "spray_cone_angle_deg": 45.0,
     "overlap_percent": 50.0,
     "sampling_spacing_mm": 20.0,
-    "travel_speed_mm_s": 150.0,
-    "min_travel_speed_mm_s": 40.0,
-    "max_travel_acceleration_mm_s2": 500.0,
-    "fan_air_pressure_bar": 1.7,
     "atomizing_air_pressure_bar": 1.7,
     "fluid_pressure_bar": 0.0,
     "fluid_flow_ml_min": 0.0,
@@ -90,11 +86,23 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
                 continue
             merged = deepcopy(DEFAULT_SPRAYER_PROFILE)
             merged.update(deepcopy(item))
-            # This simplified workflow supports circular cone spray only.
-            # A legacy flat-fan angle is not a measured cone angle.
-            if str(item.get("pattern_type", "round_cone")) != "round_cone":
-                merged["spray_cone_angle_deg"] = 45.0
+            # This application supports circular-cone spray only.
+            # Preserve the operator-entered angle when migrating older profiles.
             merged["pattern_type"] = "round_cone"
+            legacy_keys = (
+                "fan_reference_distance_mm",
+                "fan_thickness_at_reference_mm",
+                "fan_air_pressure_bar",
+                "travel_speed_mm_s",
+                "min_travel_speed_mm_s",
+                "max_travel_acceleration_mm_s2",
+            )
+            if item.get("pattern_type") != "round_cone" or any(
+                key in item for key in legacy_keys
+            ):
+                migrated = True
+            for key in legacy_keys:
+                merged.pop(key, None)
 
             # Older local profiles stored these dimensions as 0.0 ("not
             # specified"). Upgrade only missing/zero values; preserve every
@@ -224,7 +232,7 @@ class SprayPatternPreview(QWidget):
             )
             track_pitch_mm = spray_width_mm * (1.0 - overlap / 100.0)
             effective_sample_spacing = (
-                min(track_pitch_mm, 0.5 * spray_width_mm)
+                track_pitch_mm
                 if spray_width_mm > 0.0 and track_pitch_mm > 0.0
                 else fallback_sample_spacing
             )
@@ -488,10 +496,6 @@ class SprayerSettingsDialog(QDialog):
             ("overspray_tail_fraction", "Overspray tail fraction (%)", 0.0, 100.0, 1),
             ("overspray_tail_sigma_fraction", "Overspray tail sigma / R", 0.05, 2.0, 2),
             ("tcp_to_nozzle_tip_mm", "TCP to nozzle tip (mm)", 0.0, 500.0, 1),
-            ("travel_speed_mm_s", "Base gun travel speed (mm/s)", 1.0, 2000.0, 1),
-            ("min_travel_speed_mm_s", "Minimum curved/corner speed (mm/s)", 1.0, 2000.0, 1),
-            ("max_travel_acceleration_mm_s2", "Maximum travel acceleration (mm/s²)", 1.0, 10000.0, 1),
-            ("fan_air_pressure_bar", "Fan air pressure (bar)", 0.0, 10.0, 2),
             ("atomizing_air_pressure_bar", "Atomizing air pressure (bar)", 0.0, 10.0, 2),
             ("fluid_pressure_bar", "Fluid pressure (bar)", 0.0, 500.0, 2),
             ("fluid_flow_ml_min", "Fluid flow (ml/min)", 0.0, 10000.0, 1),
@@ -503,16 +507,6 @@ class SprayerSettingsDialog(QDialog):
             "overlap_percent",
             "sampling_spacing_mm",
         }
-        # These fields existed in early sprayer-profile files. They remain
-        # in the stored JSON for backward compatibility, but are now edited
-        # only in the independent Coating Process Parameters dialog.
-        process_only_keys = {
-            "travel_speed_mm_s",
-            "min_travel_speed_mm_s",
-            "max_travel_acceleration_mm_s2",
-            "fluid_flow_ml_min",
-        }
-
         def add_profile_field(key, label, minimum, maximum, decimals):
             spin = QDoubleSpinBox()
             spin.setRange(minimum, maximum)
@@ -545,23 +539,6 @@ class SprayerSettingsDialog(QDialog):
                 spin.setToolTip(
                     "A value of 0 means not specified. Enter the value from "
                     "the sprayer data sheet or validated paint process."
-                )
-            elif key == "travel_speed_mm_s":
-                spin.setToolTip(
-                    "Reference speed on flat, straight sections. The trajectory "
-                    "planner automatically reduces speed on curved surfaces and "
-                    "sharp path turns. This is a starting process value, not a "
-                    "robot motion safety limit."
-                )
-            elif key == "min_travel_speed_mm_s":
-                spin.setToolTip(
-                    "Lower speed limit used by the curvature and corner planner. "
-                    "Validate it with the actual coating and sprayer."
-                )
-            elif key == "max_travel_acceleration_mm_s2":
-                spin.setToolTip(
-                    "Acceleration limit used to smooth speed changes along each "
-                    "spray segment; this is not a robot controller limit."
                 )
             elif key == "gun_collision_clearance_mm":
                 spin.setToolTip(
@@ -633,7 +610,7 @@ class SprayerSettingsDialog(QDialog):
         form.addRow("Atomization technology", self.technology_combo)
 
         for key, label, minimum, maximum, decimals in field_specs:
-            if key not in trajectory_keys and key not in process_only_keys:
+            if key not in trajectory_keys:
                 add_profile_field(key, label, minimum, maximum, decimals)
 
         self.profile_notes = QLabel()
