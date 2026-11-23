@@ -10,11 +10,16 @@ def build_product_pose_trajectory(
     spray_on_delay_s=0.0,
     spray_off_delay_s=0.0,
 ):
-    """Build [t, x, y, z, qx, qy, qz, qw] using path distance and robot speed.
+    """Build [t, x, y, z, qx, qy, qz, qw, on_off] product-frame rows.
 
     The spatial records retain their spray-overlap-derived spacing. Robot
     painting speed assigns execution time. Controller frequency is retained
     as downstream interpolation metadata and never changes spatial spacing.
+
+    At a stroke boundary, explicit rows switch spray OFF at the previous
+    endpoint, remain OFF during inter-stroke travel, then switch ON at the
+    next stroke's first pose. These state-transition rows may share a
+    timestamp when the corresponding configured delay is zero.
     """
     if len(records) < 2:
         raise ValueError("At least two recorded nozzle poses are required.")
@@ -49,35 +54,93 @@ def build_product_pose_trajectory(
         raise ValueError("A recorded nozzle quaternion has zero length.")
     quaternions = quaternions / q_norms[:, None]
 
-    times = np.zeros(len(records), dtype=np.float64)
-    segment_spray_on = []
+    on_delay = float(spray_on_delay_s)
+    off_delay = float(spray_off_delay_s)
+    if not np.isfinite(on_delay) or not np.isfinite(off_delay):
+        raise ValueError("Spray on/off delays must be finite.")
+    on_delay = max(on_delay, 0.0)
+    off_delay = max(off_delay, 0.0)
+
+    # Each row is a controller pose plus the spray state commanded at that
+    # pose. Add duplicate-pose rows at stroke boundaries to encode state
+    # changes without losing the OFF travel connector.
+    rows = []
+    row_stroke_ids = []
     transitions = []
-    spray_on_delay_s = max(float(spray_on_delay_s), 0.0)
-    spray_off_delay_s = max(float(spray_off_delay_s), 0.0)
+    current_time = 0.0
+
+    def append_row(timestamp, point, quaternion, spray_on, stroke_id):
+        rows.append([
+            float(timestamp),
+            *point.tolist(),
+            *quaternion.tolist(),
+            1 if spray_on else 0,
+        ])
+        row_stroke_ids.append(int(stroke_id))
+
+    append_row(
+        current_time, points[0], quaternions[0], True, stroke_ids[0]
+    )
+    segment_spray_on = []
+
     for index in range(1, len(records)):
         distance_mm = float(
             np.linalg.norm(points[index] - points[index - 1]) * mm_per_unit
         )
         same_stroke = bool(stroke_ids[index] == stroke_ids[index - 1])
-        duration = distance_mm / speed
-        if not same_stroke:
-            duration += spray_off_delay_s + spray_on_delay_s
-            transitions.append({
-                "from_row": index - 1,
-                "to_row": index,
-                "from_stroke_id": int(stroke_ids[index - 1]),
-                "to_stroke_id": int(stroke_ids[index]),
-                "spray_off_travel_distance_mm": distance_mm,
-                "spray_off_delay_s": spray_off_delay_s,
-                "spray_on_delay_s": spray_on_delay_s,
-            })
-        times[index] = times[index - 1] + duration
-        segment_spray_on.append(same_stroke)
+        travel_duration = distance_mm / speed
 
-    trajectory = np.column_stack((times, points, quaternions))
+        if same_stroke:
+            current_time += travel_duration
+            append_row(
+                current_time, points[index], quaternions[index],
+                True, stroke_ids[index],
+            )
+            segment_spray_on.append(True)
+            continue
+
+        # Stop spraying at the previous stroke endpoint before OFF travel.
+        current_time += off_delay
+        append_row(
+            current_time, points[index - 1], quaternions[index - 1],
+            False, stroke_ids[index - 1],
+        )
+        off_row = len(rows) - 1
+
+        # Travel to the next stroke start with the spray explicitly OFF.
+        current_time += travel_duration
+        append_row(
+            current_time, points[index], quaternions[index],
+            False, stroke_ids[index],
+        )
+        travel_row = len(rows) - 1
+
+        # Resume spraying at the next stroke start after the configured delay.
+        current_time += on_delay
+        append_row(
+            current_time, points[index], quaternions[index],
+            True, stroke_ids[index],
+        )
+        on_row = len(rows) - 1
+
+        transitions.append({
+            "from_stroke_id": int(stroke_ids[index - 1]),
+            "to_stroke_id": int(stroke_ids[index]),
+            "off_state_row": off_row,
+            "off_travel_destination_row": travel_row,
+            "on_state_row": on_row,
+            "off_travel_distance_mm": distance_mm,
+            "spray_off_delay_s": off_delay,
+            "spray_on_delay_s": on_delay,
+        })
+        segment_spray_on.append(False)
+
+    trajectory = np.asarray(rows, dtype=np.float64)
     metadata = {
-        "schema": "OPENARMX_PRODUCT_FRAME_POSE_TRAJECTORY_V1",
-        "columns": ["t", "x", "y", "z", "qx", "qy", "qz", "qw"],
+        "schema": "OPENARMX_PRODUCT_FRAME_POSE_TRAJECTORY_V2",
+        "columns": [
+            "t", "x", "y", "z", "qx", "qy", "qz", "qw", "on_off"
+        ],
         "coordinate_frame": "PRODUCT_CAD",
         "position_unit": "source CAD coordinate unit",
         "millimetres_per_position_unit": mm_per_unit,
@@ -86,11 +149,19 @@ def build_product_pose_trajectory(
         "time_origin": "first optimized route pose",
         "time_definition": (
             "Cumulative nozzle path distance divided by robot painting "
-            "speed. The same configured speed is used for inter-stroke "
-            "OFF connectors until a separate travel speed is introduced. "
+            "speed. The same configured speed is used for inter-stroke OFF "
+            "connectors until a separate travel speed is introduced. "
             "Configured spray on/off delays are included. Human mouse "
             "recording time is not used."
         ),
+        "on_off_encoding": {
+            "1": "SPRAY_ON",
+            "0": "SPRAY_OFF",
+            "row_semantics": (
+                "Spray state commanded at that pose. Duplicate poses at "
+                "stroke boundaries encode OFF and ON state transitions."
+            ),
+        },
         "robot_profile": dict(robot_settings),
         "robot_painting_speed_mm_s": speed,
         "off_connector_speed_mm_s": speed,
@@ -104,9 +175,9 @@ def build_product_pose_trajectory(
             "Source poses retain the spray footprint and overlap-derived spacing."
         ),
         "row_count": int(len(trajectory)),
-        "stroke_ids_per_row": stroke_ids.tolist(),
+        "stroke_ids_per_row": row_stroke_ids,
         "segment_spray_on": segment_spray_on,
         "transitions": transitions,
-        "duration_s": float(times[-1]),
+        "duration_s": float(trajectory[-1, 0]),
     }
     return trajectory, metadata
