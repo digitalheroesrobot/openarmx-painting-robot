@@ -4573,7 +4573,7 @@ def generate_spray_trajectory(
                 np.diff(ordered["nozzle_points"][indices], axis=0), axis=1
             ) * MM_PER_UNIT[source_unit]
             trajectory_time_s[indices[1:]] = np.cumsum(distances_mm / base_travel_speed)
-    adaptive_speed_analysis = {
+    robot_speed_profile = {
         "method": "constant_robot_painting_speed",
         "base_speed_mm_s": base_travel_speed,
     }
@@ -4721,7 +4721,7 @@ def generate_spray_trajectory(
             "spray_angle_deg": spray_angle_deg,
             "sprayer_profile": profile_data,
             "coating_process": coating_process_data,
-            "adaptive_speed": adaptive_speed_analysis,
+            "robot_speed_profile": robot_speed_profile,
             "product_transform_4x4": product_transform_matrix.tolist(),
             "product_coordinate_frame": "PRODUCT_CAD",
             "world_coordinate_frame": "WORLD_XYZ",
