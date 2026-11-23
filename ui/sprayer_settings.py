@@ -46,9 +46,6 @@ DEFAULT_SPRAYER_PROFILE = {
     "spray_cone_angle_deg": 50.0,
     "overlap_percent": 50.0,
     "sampling_spacing_mm": 20.0,
-    "travel_speed_mm_s": 150.0,
-    "min_travel_speed_mm_s": 40.0,
-    "max_travel_acceleration_mm_s2": 500.0,
     "fan_air_pressure_bar": 1.7,
     "atomizing_air_pressure_bar": 1.7,
     "fluid_pressure_bar": 0.0,
@@ -90,9 +87,17 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
                 continue
             merged = deepcopy(DEFAULT_SPRAYER_PROFILE)
             merged.update(deepcopy(item))
+            profile_migrated = False
+            for obsolete_key in (
+                "travel_speed_mm_s",
+                "min_travel_speed_mm_s",
+                "max_travel_acceleration_mm_s2",
+            ):
+                if obsolete_key in merged:
+                    merged.pop(obsolete_key, None)
+                    profile_migrated = True
             # This simplified workflow supports circular cone spray only.
             # A legacy flat-fan angle is not a measured cone angle.
-            profile_migrated = False
             if str(item.get("pattern_type", "round_cone")) != "round_cone":
                 merged["spray_cone_angle_deg"] = 50.0
                 profile_migrated = True
@@ -509,9 +514,6 @@ class SprayerSettingsDialog(QDialog):
             ("overspray_tail_fraction", "Overspray tail fraction (%)", 0.0, 100.0, 1),
             ("overspray_tail_sigma_fraction", "Overspray tail sigma / R", 0.05, 2.0, 2),
             ("tcp_to_nozzle_tip_mm", "TCP to nozzle tip (mm)", 0.0, 500.0, 1),
-            ("travel_speed_mm_s", "Base gun travel speed (mm/s)", 1.0, 2000.0, 1),
-            ("min_travel_speed_mm_s", "Minimum curved/corner speed (mm/s)", 1.0, 2000.0, 1),
-            ("max_travel_acceleration_mm_s2", "Maximum travel acceleration (mm/s²)", 1.0, 10000.0, 1),
             ("fan_air_pressure_bar", "Fan air pressure (bar)", 0.0, 10.0, 2),
             ("atomizing_air_pressure_bar", "Atomizing air pressure (bar)", 0.0, 10.0, 2),
             ("fluid_pressure_bar", "Fluid pressure (bar)", 0.0, 500.0, 2),
@@ -528,9 +530,6 @@ class SprayerSettingsDialog(QDialog):
         # in the stored JSON for backward compatibility, but are now edited
         # only in the independent Coating Process Parameters dialog.
         process_only_keys = {
-            "travel_speed_mm_s",
-            "min_travel_speed_mm_s",
-            "max_travel_acceleration_mm_s2",
             "fluid_flow_ml_min",
         }
 
