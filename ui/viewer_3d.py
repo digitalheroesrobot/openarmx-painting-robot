@@ -730,24 +730,60 @@ class ProductViewer(QWidget):
         return panel
 
     def _rotate_camera_quarter_turn(self, local_axis_index, sign):
-        """Rotate the camera by exactly 90 degrees around a product-local axis."""
+        """Snap to a product face, then rotate exactly 90 degrees locally."""
         if self.current_mesh is None:
             return
 
         transform = np.asarray(self._actor_matrix_array(), dtype=np.float64)
-        basis = transform[:3, :3].copy()
-        scales = np.linalg.norm(basis, axis=0)
-        if not np.all(np.isfinite(scales)) or np.any(scales <= 1e-12):
+        raw_basis = transform[:3, :3]
+        if not np.all(np.isfinite(raw_basis)):
             return
-        basis /= scales[np.newaxis, :]
+
+        # Extract the rigid product orientation, removing any actor scale.
+        u, _, vh = np.linalg.svd(raw_basis)
+        basis = u @ vh
+        if np.linalg.det(basis) < 0.0:
+            u[:, -1] *= -1.0
+            basis = u @ vh
+
+        camera = self.plotter.camera
+        focal = np.asarray(camera.focal_point, dtype=np.float64)
+        offset = np.asarray(camera.position, dtype=np.float64) - focal
+        distance = float(np.linalg.norm(offset))
+        if not np.isfinite(distance) or distance <= 1e-9:
+            return
+
+        # First remove any initial isometric/oblique view: align the camera
+        # normal to the nearest product-local axis and camera-up to one of
+        # the two remaining axes. This makes the visible coordinate plane
+        # exactly XY, XZ, or YZ before applying the requested quarter-turn.
+        view_direction = offset / distance
+        local_view = basis.T @ view_direction
+        normal_index = int(np.argmax(np.abs(local_view)))
+        normal_sign = 1.0 if local_view[normal_index] >= 0.0 else -1.0
+        normal = basis[:, normal_index] * normal_sign
+
+        current_up = np.asarray(camera.up, dtype=np.float64)
+        up_candidates = [
+            i for i in range(3) if i != normal_index
+        ]
+        up_index = max(
+            up_candidates,
+            key=lambda i: abs(float(np.dot(current_up, basis[:, i])))
+        )
+        up_sign = (
+            1.0
+            if float(np.dot(current_up, basis[:, up_index])) >= 0.0
+            else -1.0
+        )
+        snapped_up = basis[:, up_index] * up_sign
+
+        # Set an exact face-on starting orientation, preserving focal point
+        # and camera distance. Subsequent 90-degree turns remain face-on.
+        offset = normal * distance
+        up = snapped_up
 
         axis = basis[:, int(local_axis_index)]
-        axis_norm = float(np.linalg.norm(axis))
-        if not np.isfinite(axis_norm) or axis_norm <= 1e-12:
-            return
-        axis /= axis_norm
-
-        # Rodrigues' formula with an exact quarter-turn angle.
         angle = math.radians(90.0 * float(sign))
         c = math.cos(angle)
         sn = math.sin(angle)
@@ -761,11 +797,6 @@ class ProductViewer(QWidget):
             + (1.0 - c) * np.outer(axis, axis)
             + sn * cross
         )
-
-        camera = self.plotter.camera
-        focal = np.asarray(camera.focal_point, dtype=np.float64)
-        offset = np.asarray(camera.position, dtype=np.float64) - focal
-        up = np.asarray(camera.up, dtype=np.float64)
 
         rotated_offset = rotation @ offset
         rotated_up = rotation @ up
