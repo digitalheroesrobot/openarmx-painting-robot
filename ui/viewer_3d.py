@@ -2135,9 +2135,14 @@ class ProductViewer(QWidget):
                     "safe_connector_paths": safe_connector_paths,
                     "safety_status": "BLOCKED_NO_COLLISION_FREE_CONNECTOR",
                     "blocked_transition": int(index),
-                    "safety_reason": getattr(
-                        self, "_interactive_last_connector_failure_reason",
-                        "connector planning failed",
+                    "safety_reason": (
+                        "Manual connector not defined: select the previous stroke end "
+                        "and the next stroke start"
+                        if getattr(self, "_interactive_manual_connector_required", False)
+                        else getattr(
+                            self, "_interactive_last_connector_failure_reason",
+                            "connector planning failed",
+                        )
                     ),
                 }
             safe_connector_paths.append(connector_records)
@@ -4772,6 +4777,16 @@ class ProductViewer(QWidget):
         # been sprayed and add only the missing coverage.
         preserve_existing = bool(resume_existing)
         existing_records = list(self._interactive_spray_records) if preserve_existing else []
+        self._interactive_manual_connector_required = True
+        self._interactive_manual_connector_mode = False
+        self._interactive_manual_connector_selection = []
+        if not preserve_existing:
+            self._interactive_precomputed_connector_paths = {}
+        connect_button = getattr(self, "recorded_path_connect_button", None)
+        if connect_button is not None:
+            connect_button.blockSignals(True)
+            connect_button.setChecked(False)
+            connect_button.blockSignals(False)
         existing_thickness = (
             self._interactive_spray_face_thickness_um.copy()
             if preserve_existing
@@ -8532,7 +8547,6 @@ class ProductViewer(QWidget):
             self._interactive_spray_records = list(records)
             if len(records) >= 2:
                 self._interactive_manual_connector_required = True
-                self._interactive_precomputed_connector_paths = {}
                 self.interactive_recorded_path_panel.show()
                 self.recorded_path_replay_button.setEnabled(True)
                 self._optimize_interactive_recorded_path()
