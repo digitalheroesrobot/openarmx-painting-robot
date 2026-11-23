@@ -35,7 +35,10 @@ from PySide6.QtWidgets import (
 from core.step_loader import load_step, convert_step_report_units
 from core.result_manager import ResultManager
 from core.geometry_analyzer import detect_hole_candidates
-from core.coating_process import load_coating_process
+from core.coating_process import (
+    calculate_robot_waypoint_spacing_mm,
+    load_coating_process,
+)
 
 from stages.stage1_geometry import execute_stage1
 from stages.stage2_surface_identification import execute_stage2
@@ -2424,12 +2427,22 @@ class MainWindow(QMainWindow):
 
     def _get_current_spray_parameters(self):
         profile = dict(self.sprayer_profile)
+        coating_process = dict(self.coating_process)
+        robot_waypoint_spacing_mm = calculate_robot_waypoint_spacing_mm(
+            coating_process["base_travel_speed_mm_s"],
+            coating_process["robot_control_frequency_hz"],
+        )
         return {
             "standoff_mm": float(profile["standoff_mm"]),
+            # Stage 3's surface coverage grid uses the spray footprint and
+            # overlap; this configured value remains its fallback only.
             "sampling_spacing_mm": float(profile["sampling_spacing_mm"]),
+            # Interactive robot route samples are placed once per control
+            # cycle at the configured base speed.
+            "robot_waypoint_spacing_mm": float(robot_waypoint_spacing_mm),
             "spray_angle_deg": float(profile.get("spray_cone_angle_deg", 0.0)),
             "sprayer_profile": profile,
-            "coating_process": dict(self.coating_process),
+            "coating_process": coating_process,
             # Capture the operator-confirmed CAD-to-World pose before
             # the background Stage 3 worker starts.
             "product_transform_4x4": self.viewer.get_product_transform().tolist(),
@@ -4152,7 +4165,7 @@ class MainWindow(QMainWindow):
             self.viewer.start_interactive_spray_path(
                 standoff=float(parameters["standoff_mm"]) / mm_per_unit,
                 cone_angle_deg=float(footprint["included_angle_deg"]),
-                sampling_spacing=float(parameters["sampling_spacing_mm"]) / mm_per_unit,
+                sampling_spacing=float(parameters["robot_waypoint_spacing_mm"]) / mm_per_unit,
                 sprayer_profile=parameters["sprayer_profile"],
                 coating_process=parameters["coating_process"],
                 excluded_face_mask=(
