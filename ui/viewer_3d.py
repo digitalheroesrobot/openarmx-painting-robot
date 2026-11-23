@@ -3455,6 +3455,19 @@ class ProductViewer(QWidget):
             self.interactive_recorded_path_panel.show()
             self.recorded_path_replay_button.setEnabled(len(existing_records) >= 2)
         self._interactive_spray_transform = self._actor_matrix_array().copy()
+        self._interactive_spray_work_plane_origin_world = None
+        self._interactive_spray_work_plane_normal_world = None
+        self._interactive_spray_latest_display_position = None
+        if existing_records:
+            last_record = existing_records[-1]
+            last_direction = np.asarray(
+                last_record["spray_direction_world"], dtype=np.float64
+            )
+            last_direction /= max(float(np.linalg.norm(last_direction)), 1e-12)
+            self._interactive_spray_work_plane_origin_world = np.asarray(
+                last_record["nozzle_point_world"], dtype=np.float64
+            ).copy()
+            self._interactive_spray_work_plane_normal_world = -last_direction
         self._interactive_spray_surface = self._to_polydata(self.current_mesh).clean()
         self._interactive_spray_locator = vtkOBBTree()
         self._interactive_spray_locator.SetDataSet(self._interactive_spray_surface)
@@ -3894,7 +3907,20 @@ class ProductViewer(QWidget):
         if distance_source <= 0.0:
             return
 
+        previous_distance_source = float(self._interactive_spray_standoff)
         self._interactive_spray_standoff = distance_source
+
+        # Translate the entire work plane along its outward normal. It is
+        # deliberately not re-anchored to the currently picked face.
+        plane_normal = self._interactive_spray_work_plane_normal_world
+        if plane_normal is not None:
+            plane_normal = np.asarray(plane_normal, dtype=np.float64)
+            plane_normal /= max(float(np.linalg.norm(plane_normal)), 1e-12)
+            if self._interactive_spray_work_plane_origin_world is not None:
+                self._interactive_spray_work_plane_origin_world = (
+                    np.asarray(self._interactive_spray_work_plane_origin_world, dtype=np.float64)
+                    + plane_normal * (distance_source - previous_distance_source)
+                )
 
         # Changing the working distance is a discontinuous nozzle motion.
         if self._interactive_spray_recording:
@@ -3906,18 +3932,16 @@ class ProductViewer(QWidget):
         if pose is None:
             return
 
-        surface_point = np.asarray(pose["surface_point_world"], dtype=np.float64)
-        normal = np.asarray(pose["surface_normal_world"], dtype=np.float64)
-        normal /= max(float(np.linalg.norm(normal)), 1e-12)
-
+        updated = dict(pose)
         direction = np.asarray(
-            pose["spray_direction_world"], dtype=np.float64
+            updated["spray_direction_world"], dtype=np.float64
         )
         direction /= max(float(np.linalg.norm(direction)), 1e-12)
-        updated = dict(pose)
-        # Working distance is measured along the current cone centerline,
-        # preserving its surface intersection even when the cone is tilted.
-        updated["nozzle_point_world"] = surface_point - direction * distance_source
+        if self._interactive_spray_work_plane_origin_world is not None:
+            updated["nozzle_point_world"] = (
+                np.asarray(updated["nozzle_point_world"], dtype=np.float64)
+                - direction * (distance_source - previous_distance_source)
+            )
         updated["timestamp"] = time.monotonic()
         self._interactive_update_cursor(updated)
 
@@ -5937,6 +5961,10 @@ class ProductViewer(QWidget):
         pose["surface_point_world"] = pivot.copy()
         pose["spray_direction_world"] = rotated_direction
         pose["nozzle_point_world"] = pivot - rotated_direction * distance_source
+        self._interactive_spray_work_plane_origin_world = (
+            pose["nozzle_point_world"].copy()
+        )
+        self._interactive_spray_work_plane_normal_world = -rotated_direction.copy()
         pose["timestamp"] = time.monotonic()
         self._interactive_update_cursor(pose)
 
@@ -5982,10 +6010,8 @@ class ProductViewer(QWidget):
             self._interactive_spray_previous_nozzle_world = None
             self._interactive_spray_last_speed_mm_s = 0.0
 
-        pose = self._interactive_spray_latest_pose
-        if pose is not None:
-            self._interactive_update_cursor(dict(pose))
-        else:
+        # valueChanged moves and redraws the work plane exactly once.
+        if self._interactive_spray_latest_pose is None:
             self.plotter.render()
 
     def _on_interactive_spray_mouse_move(self, interactor, event):
