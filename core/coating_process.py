@@ -18,10 +18,6 @@ DEFAULT_COATING_PROCESS = {
     "fluid_flow_ml_min": 300.0,
     "transfer_efficiency_percent": 50.0,
     "volume_solids_percent": 50.0,
-    "base_travel_speed_mm_s": 500.0,
-    "robot_control_frequency_hz": 100.0,
-    "min_travel_speed_mm_s": 300.0,
-    "max_travel_acceleration_mm_s2": 1000.0,
     "number_of_coats": 1,
     "spray_on_delay_ms": 0.0,
     "spray_off_delay_ms": 0.0,
@@ -40,10 +36,6 @@ def validate_coating_process(parameters: dict) -> dict:
         "fluid_flow_ml_min": (0.0, 10000.0),
         "transfer_efficiency_percent": (0.0, 100.0),
         "volume_solids_percent": (0.0, 100.0),
-        "base_travel_speed_mm_s": (0.1, 2000.0),
-        "robot_control_frequency_hz": (1.0, 1000.0),
-        "min_travel_speed_mm_s": (0.1, 2000.0),
-        "max_travel_acceleration_mm_s2": (0.1, 10000.0),
         "spray_on_delay_ms": (0.0, 10000.0),
         "spray_off_delay_ms": (0.0, 10000.0),
     }
@@ -62,8 +54,8 @@ def validate_coating_process(parameters: dict) -> dict:
     if coats < 1 or coats > 20 or float(values["number_of_coats"]) != coats:
         raise ValueError("number_of_coats must be an integer from 1 to 20.")
     values["number_of_coats"] = coats
-    if values["min_travel_speed_mm_s"] > values["base_travel_speed_mm_s"]:
-        raise ValueError("Minimum travel speed cannot exceed base travel speed.")
+    for obsolete_key in ("base_travel_speed_mm_s", "robot_control_frequency_hz", "min_travel_speed_mm_s", "max_travel_acceleration_mm_s2", "max_linear_speed_mm_s", "max_angular_speed_deg_s"):
+        values.pop(obsolete_key, None)
     values["name"] = str(values.get("name", "default coating process")).strip()
     if not values["name"]:
         raise ValueError("Coating process name cannot be empty.")
@@ -137,12 +129,6 @@ def load_coating_process(config_path: str | Path, legacy_sprayer_profile: dict |
     if not path.exists():
         legacy = legacy_sprayer_profile if isinstance(legacy_sprayer_profile, dict) else {}
         values = deepcopy(DEFAULT_COATING_PROCESS)
-        values["base_travel_speed_mm_s"] = legacy.get("travel_speed_mm_s", values["base_travel_speed_mm_s"])
-        values["min_travel_speed_mm_s"] = min(
-            float(legacy.get("min_travel_speed_mm_s", values["min_travel_speed_mm_s"])),
-            float(values["base_travel_speed_mm_s"]),
-        )
-        values["max_travel_acceleration_mm_s2"] = legacy.get("max_travel_acceleration_mm_s2", values["max_travel_acceleration_mm_s2"])
         values["fluid_flow_ml_min"] = legacy.get("fluid_flow_ml_min", values["fluid_flow_ml_min"])
         save_coating_process(path, values)
         return validate_coating_process(values)
@@ -171,14 +157,6 @@ def load_coating_process(config_path: str | Path, legacy_sprayer_profile: dict |
                 values[key] = DEFAULT_COATING_PROCESS[key]
             # Update motion values only when they still equal the previous
             # untouched factory defaults; retain any customized legacy values.
-            old_motion_defaults = {
-                "base_travel_speed_mm_s": 150.0,
-                "min_travel_speed_mm_s": 40.0,
-                "max_travel_acceleration_mm_s2": 500.0,
-            }
-            for key, old_value in old_motion_defaults.items():
-                if values[key] == old_value:
-                    values[key] = DEFAULT_COATING_PROCESS[key]
             save_coating_process(path, values)
         return values
     except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
