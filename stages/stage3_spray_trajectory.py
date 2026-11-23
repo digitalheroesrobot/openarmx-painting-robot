@@ -4084,7 +4084,7 @@ def generate_spray_trajectory(
         # A zero cone angle has no defined footprint. Retain the user spacing,
         # but explicitly mark physical coverage spacing as unavailable.
         coverage_spacing_mm = float(sampling_spacing_mm)
-        coverage_spacing_basis = "USER_SPACING_FALLBACK_NO_FOOTPRINT"
+        coverage_spacing_basis = "INTERNAL_FALLBACK_NO_PHYSICAL_FOOTPRINT"
 
     spacing_coordinate_units = _mm_to_coordinate_units(
         coverage_spacing_mm,
@@ -4211,10 +4211,8 @@ def generate_spray_trajectory(
         effective_lane_spacing_mm, source_unit
     )
     sweep_config = SweepPlanningConfig(
-        # Use the same working-distance / spray-angle / overlap-derived pitch
-        # along and across the spray path, matching the backup trajectory logic.
-        # Robot control-cycle spacing remains available separately as motion
-        # metadata; it must not override the physical spray-point interval.
+        # Use the working-distance / circular-angle / overlap-derived pitch
+        # along and across the spray path. No robot timing or speed is applied.
         lane_spacing=path_track_spacing_units,
         sample_spacing=spacing_coordinate_units,
         max_gap_factor=2.75,
@@ -4649,7 +4647,7 @@ def generate_spray_trajectory(
             "coverage_spacing_status": (
                 "FOOTPRINT_AND_OVERLAP_BASED"
                 if path_track_spacing_mm > 0.0
-                else "SAMPLING_SPACING_FALLBACK_NO_PHYSICAL_FOOTPRINT"
+                else "INTERNAL_SPACING_FALLBACK_NO_PHYSICAL_FOOTPRINT"
             ),
             "travel_moves_between_segments": "DIRECT_STRAIGHT_LINE_VISUALIZATION_ONLY",
             "coverage_verified": False,
