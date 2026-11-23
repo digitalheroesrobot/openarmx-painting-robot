@@ -2457,6 +2457,23 @@ class MainWindow(QMainWindow):
         self.robot_settings = dict(dialog.settings)
         save_robot_settings(self.robot_settings_path, self.robot_settings)
         self.viewer.set_robot_motion_settings(self.robot_settings)
+        if len(getattr(self.viewer, "_interactive_spray_records", [])) >= 2:
+            self.viewer._optimize_interactive_recorded_path()
+            if self.interactive_spray_path is not None:
+                self.interactive_spray_path.update({
+                    "total_route_distance_mm": float(
+                        self.viewer._interactive_recorded_replay_timing.get(
+                            "total_route_distance_mm", 0.0
+                        )
+                    ) if self.viewer._interactive_recorded_replay_timing else 0.0,
+                    "estimated_duration_s": float(
+                        self.viewer._interactive_recorded_replay_timing.get(
+                            "estimated_duration_s", 0.0
+                        )
+                    ) if self.viewer._interactive_recorded_replay_timing else 0.0,
+                    "robot_motion_settings": dict(self.robot_settings),
+                })
+                self._show_interactive_route_summary(self.interactive_spray_path)
         self.status_bar.showMessage(
             "ROBOT SETTINGS SAVED | "
             f"PAINTING SPEED: {self.robot_settings['painting_speed_mm_s']:.1f} mm/s | "
@@ -4292,9 +4309,10 @@ class MainWindow(QMainWindow):
             f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\n\n"
             f"ROUTING: {route_algorithm}\n"
             "GREEN: SPRAY-ON STROKES  |  BLUE: SPRAY-OFF CONNECTORS\n"
-            "Route order is heuristic, not a guaranteed global optimum.\n"
-            "Connectors are geometric previews, not collision-checked robot paths.\n"
-            "No robot speed or controller timing is assumed."
+            "Stroke order uses collision-checked exterior connector lengths; "
+            "the search is heuristic, not a proof of global optimum.\n"
+            "All route segments are timed at the configured constant painting speed.\n"
+            "Control frequency is reserved for future spray-point export."
         )
         self.status_bar.showMessage(
             f"ROUTE GENERATED | {len(np.unique(result.get('stroke_ids', [])))} STROKES | "
@@ -4328,7 +4346,8 @@ class MainWindow(QMainWindow):
             f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\n"
             f"ROUTING: {route_info.get('algorithm', 'STROKE ORDER RETAINED')}\n\n"
             "Review the optimized route in the 3D view.\n"
-            "Robot speed, controller frequency and execution time are not configured."
+            f"Simulation duration is calculated at {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s. "
+            "Control frequency is stored for future spray-point export."
         )
 
     def _show_spray_simulation_summary(self):
