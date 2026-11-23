@@ -2808,7 +2808,7 @@ class ProductViewer(QWidget):
             (
                 f"SPRAY CURSOR ACTIVE  |  WORK DIST {self._interactive_spray_standoff * (self._get_source_mm_factor() or 1.0):.1f} mm "
                 f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
-                "MOVE: PREVIEW  |  LEFT: PAINT  |  MIDDLE: ANGLE  |  RIGHT: CAMERA PAN"
+                "MOVE: PREVIEW  |  LEFT: PAINT  |  MIDDLE: ANGLE  |  RIGHT: CAMERA ORBIT"
             ),
             position="upper_left",
             font_size=10,
@@ -5137,8 +5137,8 @@ class ProductViewer(QWidget):
         self._interactive_camera_pan_dragging = False
         self._interactive_camera_pan_last_position = None
 
-    def _pan_camera_from_right_drag(self, interactor):
-        """Translate camera position and focal point together, without orbiting."""
+    def _orbit_camera_from_right_drag(self, interactor):
+        """Orbit the camera around the product without changing product pose."""
         if not self._interactive_camera_pan_dragging:
             return
         current = tuple(int(value) for value in interactor.GetEventPosition())
@@ -5153,41 +5153,46 @@ class ProductViewer(QWidget):
             return
 
         camera = self.plotter.camera
-        viewport_height = max(int(self.plotter.render_window.GetSize()[1]), 1)
         position = np.asarray(camera.GetPosition(), dtype=np.float64)
         focal_point = np.asarray(camera.GetFocalPoint(), dtype=np.float64)
         view_up = np.asarray(camera.GetViewUp(), dtype=np.float64)
-        view_direction = focal_point - position
-        distance = float(np.linalg.norm(view_direction))
-        up_length = float(np.linalg.norm(view_up))
-        if distance <= 1e-12 or up_length <= 1e-12:
+        offset = position - focal_point
+        if float(np.linalg.norm(offset)) <= 1e-12:
             return
 
-        view_direction /= distance
-        view_up /= up_length
-        view_right = np.cross(view_direction, view_up)
-        right_length = float(np.linalg.norm(view_right))
-        if right_length <= 1e-12:
-            return
-        view_right /= right_length
+        # Use the product's local axes so camera orbit directions remain
+        # intuitive relative to the CAD object, even after a product pose change.
+        product_matrix = self._actor_matrix_array()
+        local_x = product_matrix[:3, 0].astype(np.float64)
+        local_z = product_matrix[:3, 2].astype(np.float64)
+        local_x /= max(float(np.linalg.norm(local_x)), 1e-12)
+        local_z /= max(float(np.linalg.norm(local_z)), 1e-12)
 
-        if camera.GetParallelProjection():
-            world_per_pixel = (
-                2.0 * float(camera.GetParallelScale()) / viewport_height
-            )
-        else:
-            world_per_pixel = (
-                2.0 * distance
-                * math.tan(math.radians(float(camera.GetViewAngle())) * 0.5)
-                / viewport_height
+        def rotate_vector(vector, axis, angle_rad):
+            axis = axis / max(float(np.linalg.norm(axis)), 1e-12)
+            cosine = math.cos(angle_rad)
+            sine = math.sin(angle_rad)
+            return (
+                vector * cosine
+                + np.cross(axis, vector) * sine
+                + axis * float(np.dot(axis, vector)) * (1.0 - cosine)
             )
 
-        translation = (
-            -dx * world_per_pixel * view_right
-            + dy * world_per_pixel * view_up
-        )
-        camera.SetPosition(*(position + translation).tolist())
-        camera.SetFocalPoint(*(focal_point + translation).tolist())
+        sensitivity = math.radians(0.5)
+        yaw = -dx * sensitivity
+        pitch = dy * sensitivity
+
+        # Horizontal drag orbits around product-local Z; vertical drag orbits
+        # around product-local X. Both camera position and view-up are rotated.
+        offset = rotate_vector(offset, local_z, yaw)
+        view_up = rotate_vector(view_up, local_z, yaw)
+        offset = rotate_vector(offset, local_x, pitch)
+        view_up = rotate_vector(view_up, local_x, pitch)
+
+        camera.SetPosition(*(focal_point + offset).tolist())
+        camera.SetFocalPoint(*focal_point.tolist())
+        camera.SetViewUp(*view_up.tolist())
+        camera.OrthogonalizeViewUp()
         self.plotter.render()
 
     def _on_interactive_spray_wheel(self, interactor, event):
@@ -5252,7 +5257,7 @@ class ProductViewer(QWidget):
                 self._interactive_camera_pan_dragging = False
                 self._interactive_camera_pan_last_position = None
             else:
-                self._pan_camera_from_right_drag(interactor)
+                self._orbit_camera_from_right_drag(interactor)
                 return
 
         # Middle-drag exclusively controls spray direction.
