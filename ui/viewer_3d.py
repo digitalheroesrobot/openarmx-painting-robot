@@ -468,6 +468,8 @@ class ProductViewer(QWidget):
         self._interactive_manual_connector_mode = False
         self._interactive_manual_connector_required = True
         self._interactive_manual_connector_selection = []
+        self._interactive_manual_connector_saved_style = None
+        self._interactive_manual_connector_input_style = None
         self._interactive_precomputed_connector_paths = {}
         self._interactive_recorded_replay_timer = QTimer(self)
         self._interactive_recorded_replay_timer.setInterval(40)
@@ -2394,14 +2396,31 @@ class ProductViewer(QWidget):
             )
         self._interactive_manual_connector_mode = enabled
         self._interactive_manual_connector_selection = []
+        interactor = self.plotter.iren.interactor
         if enabled:
+            if self._interactive_manual_connector_input_style is None:
+                self._interactive_manual_connector_saved_style = (
+                    interactor.GetInteractorStyle()
+                )
+                self._interactive_manual_connector_input_style = vtkInteractorStyleUser()
+            interactor.SetInteractorStyle(
+                self._interactive_manual_connector_input_style
+            )
+            self._interactive_manual_connector_input_style.SetEnabled(1)
             self.recorded_path_status_label.setText(
                 "CONNECT: CLICK THE END OF STROKE 1, THEN THE START OF STROKE 2"
             )
-        elif getattr(self, "_interactive_spray_records", None):
-            self.recorded_path_status_label.setText(
-                "MANUAL CONNECT MODE OFF"
-            )
+        else:
+            if self._interactive_manual_connector_saved_style is not None:
+                interactor.SetInteractorStyle(
+                    self._interactive_manual_connector_saved_style
+                )
+                self._interactive_manual_connector_saved_style = None
+                self._interactive_manual_connector_input_style = None
+            if getattr(self, "_interactive_spray_records", None):
+                self.recorded_path_status_label.setText(
+                    "MANUAL CONNECT MODE OFF"
+                )
         self._refresh_interactive_endpoint_markers()
         return enabled
 
@@ -2733,7 +2752,7 @@ class ProductViewer(QWidget):
                 button.blockSignals(True)
                 button.setChecked(False)
                 button.blockSignals(False)
-            self._interactive_manual_connector_mode = False
+            self._toggle_manual_connector_mode(False)
             self.recorded_path_status_label.setText(
                 "ALL MANUAL CONNECTORS VALIDATED · ROUTE READY"
             )
