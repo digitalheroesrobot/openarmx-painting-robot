@@ -986,6 +986,19 @@ class ProductViewer(QWidget):
             "color: #69C8D5; font-size: 9px; padding-left: 8px;"
         )
         row.addWidget(self.interaction_mode_status)
+
+        self.spray_perpendicular_status = QLabel("SURFACE ANGLE: --")
+        self.spray_perpendicular_status.setMinimumWidth(178)
+        self.spray_perpendicular_status.setToolTip(
+            "Angle between the spray centerline and the picked surface normal. "
+            "0 degrees means perpendicular spraying. This is an indicator only; "
+            "it never changes the manually selected spray direction."
+        )
+        self.spray_perpendicular_status.setStyleSheet(
+            "color: #9AAAB5; font-size: 9px; padding-left: 6px;"
+        )
+        row.addWidget(self.spray_perpendicular_status)
+
         self.interactive_paint_color_view_button = QPushButton("ACTUAL PAINT COLOR")
         self.interactive_paint_color_view_button.setCheckable(True)
         self.interactive_paint_color_view_button.setToolTip(
@@ -4500,7 +4513,61 @@ class ProductViewer(QWidget):
             )
             self._interactive_spray_live_actors.append(actor)
 
+    def _interactive_update_surface_angle_indicator(self, pose):
+        """Display spray-to-surface angular error without steering the nozzle."""
+        label = getattr(self, "spray_perpendicular_status", None)
+        if label is None:
+            return
+        if pose is None:
+            label.setText("SURFACE ANGLE: --")
+            label.setStyleSheet(
+                "color: #9AAAB5; font-size: 9px; padding-left: 6px;"
+            )
+            return
+
+        direction = np.asarray(
+            pose.get("spray_direction_world"), dtype=np.float64
+        )
+        normal = np.asarray(
+            pose.get("surface_normal_world"), dtype=np.float64
+        )
+        direction_length = float(np.linalg.norm(direction))
+        normal_length = float(np.linalg.norm(normal))
+        if (
+            direction.shape != (3,)
+            or normal.shape != (3,)
+            or not np.isfinite(direction_length)
+            or not np.isfinite(normal_length)
+            or direction_length <= 1e-12
+            or normal_length <= 1e-12
+        ):
+            label.setText("SURFACE ANGLE: --")
+            return
+
+        # Spray direction points toward the surface; the outward normal points
+        # away from it. Therefore -direction should align with the normal.
+        alignment = float(np.clip(
+            np.dot(-direction / direction_length, normal / normal_length),
+            -1.0, 1.0,
+        ))
+        angle_deg = math.degrees(math.acos(alignment))
+        if angle_deg <= 5.0:
+            state, color = "PERPENDICULAR", "#65D68A"
+        elif angle_deg <= 15.0:
+            state, color = "SLIGHT ANGLE", "#E7C66A"
+        else:
+            state, color = "OFF-ANGLE", "#FF8A75"
+        label.setText(f"SURFACE ANGLE: {angle_deg:.1f}° | {state}")
+        label.setStyleSheet(
+            f"color: {color}; font-size: 9px; padding-left: 6px; "
+            "font-weight: 700;"
+        )
+
     def _interactive_update_cursor(self, pose):
+        # Keep the indicator responsive even when the expensive spray renderer
+        # is throttled. The indicator is diagnostic only and never modifies pose.
+        self._interactive_update_surface_angle_indicator(pose)
+
         # Mouse-move events can arrive much faster than the renderer can
         # rebuild spray geometry. Cap the complete cursor/deposition/render
         # pipeline at 30 Hz; this also bounds recorded trajectory sampling.
@@ -5134,6 +5201,7 @@ class ProductViewer(QWidget):
         if pose is None:
             self._interactive_remove_live_actors()
             self._interactive_spray_latest_pose = None
+            self._interactive_update_surface_angle_indicator(None)
             self._interactive_spray_recording = False
             self.plotter.render()
             return
@@ -5211,6 +5279,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_latest_pose = None
+        self._interactive_update_surface_angle_indicator(None)
 
     def finish_interactive_spray_path(self):
         """Finish input and return the recorded path without changing Stage 3 data."""
