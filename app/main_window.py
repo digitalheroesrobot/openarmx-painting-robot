@@ -4270,6 +4270,22 @@ class MainWindow(QMainWindow):
         ready = bool(ready)
         self.stage_completed[STAGE_SPRAY_TRAJECTORY] = ready
         if ready:
+            timing = getattr(
+                self.viewer, "_interactive_recorded_replay_timing", None
+            ) or {}
+            route = getattr(self, "interactive_spray_path", None)
+            if isinstance(route, dict):
+                route["spray_length_mm"] = float(timing.get("spray_distance_mm", 0.0))
+                route["travel_length_mm"] = float(timing.get("connector_distance_mm", 0.0))
+                route["total_route_distance_mm"] = float(timing.get("total_route_distance_mm", 0.0))
+                route["estimated_duration_s"] = float(timing.get("estimated_duration_s", 0.0))
+                route["route_timing"] = {
+                    key: value for key, value in timing.items() if key != "timeline"
+                }
+                route["route_optimization"] = dict(
+                    getattr(self.viewer, "_interactive_spray_route_optimization", {})
+                )
+                self._show_interactive_route_summary(route)
             self.status_bar.showMessage(
                 "ALL MANUAL CONNECTORS VALIDATED · SPRAY ROUTE READY"
             )
@@ -4351,8 +4367,8 @@ class MainWindow(QMainWindow):
                 "SPRAY-OFF CONNECTORS: PENDING MANUAL ENDPOINT CONNECTION\n"
                 "TOTAL ROUTE LENGTH / TIME: AVAILABLE AFTER ALL CONNECTORS PASS SAFETY CHECK\n"
             )
-            f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\n\n"
-            f"ROUTING: {route_algorithm}\n"
+            + f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\n\n"
+            + f"ROUTING: {route_algorithm}\n"
             "PALE GREEN: SPRAY-ON STROKES  |  PALE BLUE: MANUAL SPRAY-OFF CONNECTORS\n"
             "Spray points are highlighted. Stroke order and direction are preserved.\n"
             "Each connector follows the CAD surface at the configured spray distance and "
