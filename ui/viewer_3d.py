@@ -728,15 +728,33 @@ class ProductViewer(QWidget):
         if self.current_mesh is None:
             return
 
-        view_directions = {
+        local_view_directions = {
             Qt.Key_W: np.array([0.0, 0.0, 1.0], dtype=np.float64),
             Qt.Key_S: np.array([0.0, 0.0, -1.0], dtype=np.float64),
             Qt.Key_A: np.array([-1.0, 0.0, 0.0], dtype=np.float64),
             Qt.Key_D: np.array([1.0, 0.0, 0.0], dtype=np.float64),
         }
-        direction = view_directions.get(key)
-        if direction is None:
+        local_direction = local_view_directions.get(key)
+        if local_direction is None:
             return
+
+        # Transform the selected local face normal into World coordinates.
+        # This makes the camera follow the product's current Roll/Pitch/Yaw
+        # instead of incorrectly aligning to the fixed World axes.
+        product_transform = self._actor_matrix_array()
+        rotation = np.asarray(product_transform[:3, :3], dtype=np.float64)
+        axis_scales = np.linalg.norm(rotation, axis=0)
+        if (
+            not np.all(np.isfinite(axis_scales))
+            or np.any(axis_scales <= 1e-12)
+        ):
+            return
+        rotation = rotation / axis_scales[np.newaxis, :]
+        direction = rotation @ local_direction
+        direction_length = float(np.linalg.norm(direction))
+        if not np.isfinite(direction_length) or direction_length <= 1e-12:
+            return
+        direction /= direction_length
 
         # Use the product actor bounds, not all visible props: HUD labels,
         # axes and spray overlays must not shift the camera's target.
@@ -765,13 +783,18 @@ class ProductViewer(QWidget):
         camera.position = center + direction * distance
         camera.focal_point = center
 
-        # A vertical camera view needs a horizontal up vector to avoid the
-        # undefined/rolled orientation that occurs when view direction and
-        # view-up are parallel.
-        if abs(float(direction[2])) > 0.9:
-            camera.up = (0.0, 1.0, 0.0)
+        # Keep the camera's up vector aligned with the product frame too.
+        # For top/bottom views use local +Y as up; for side views use local
+        # +Z. This avoids roll changes when the product itself is rotated.
+        if abs(float(local_direction[2])) > 0.9:
+            local_up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
         else:
-            camera.up = (0.0, 0.0, 1.0)
+            local_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        world_up = rotation @ local_up
+        up_length = float(np.linalg.norm(world_up))
+        if not np.isfinite(up_length) or up_length <= 1e-12:
+            return
+        camera.up = tuple((world_up / up_length).tolist())
 
         self.plotter.renderer.ResetCameraClippingRange()
         self.plotter.render()
