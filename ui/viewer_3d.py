@@ -489,6 +489,10 @@ class ProductViewer(QWidget):
         self._interactive_spray_paint_state_dirty = False
         self._interactive_spray_live_actors = []
         self._interactive_spray_path_actor = None
+        # The recorded route is also rendered live while the operator holds
+        # the left mouse button. This is visualization only; recording and
+        # deposition remain full-rate and use the existing trajectory schema.
+        self._interactive_spray_live_route_refresh_at = 0.0
         self._interactive_saved_style_enabled = True
         self._interactive_saved_style = None
         self._interactive_spray_input_style = None
@@ -5394,6 +5398,13 @@ class ProductViewer(QWidget):
         self._interactive_spray_live_actors.extend(gun_actors)
         if recorded_new_pose:
             self._interactive_refresh_paint_visual(render=False)
+            # Show the exact recorded trajectory during the stroke. The route
+            # renderer already draws the green path and the yellow arrows that
+            # follow each sample's actual spray direction. Refreshing only at
+            # the existing 30 Hz visual cadence keeps the cursor responsive
+            # without dropping any trajectory samples.
+            self._interactive_spray_live_route_refresh_at = now
+            self._refresh_interactive_recorded_path_actor()
 
         if footprints and footprints[0][0].n_cells:
             boundary = footprints[0][1]
