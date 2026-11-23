@@ -38,3 +38,32 @@ def test_invalid_ray_vectors_are_rejected():
             [0.0, 0.0], [0.0, 0.0, 1.0],
             [0.0, 0.0, 10.0], [0.0, 0.0, 1.0],
         )
+
+
+def test_default_spray_direction_is_perpendicular_to_surface():
+    from core.work_plane import spray_direction_from_surface_normal
+
+    normal = np.asarray([1.0, 2.0, 3.0])
+    direction = spray_direction_from_surface_normal(normal)
+    np.testing.assert_allclose(np.linalg.norm(direction), 1.0)
+    np.testing.assert_allclose(direction, -normal / np.linalg.norm(normal))
+    np.testing.assert_allclose(
+        np.dot(-direction, normal / np.linalg.norm(normal)), 1.0
+    )
+
+
+def test_surface_normal_spray_direction_supports_manual_angle_offsets():
+    from core.work_plane import spray_direction_from_surface_normal
+
+    direction = spray_direction_from_surface_normal(
+        [0.0, 0.0, 1.0], yaw_deg=15.0, pitch_deg=-10.0
+    )
+    assert np.linalg.norm(direction) == pytest.approx(1.0)
+    assert np.dot(direction, [0.0, 0.0, -1.0]) < 0.999
+
+
+def test_surface_normal_spray_direction_rejects_invalid_normal():
+    from core.work_plane import spray_direction_from_surface_normal
+
+    with pytest.raises(ValueError):
+        spray_direction_from_surface_normal([0.0, 0.0, 0.0])
