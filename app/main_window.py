@@ -47,6 +47,7 @@ from stages.stage3_spray_trajectory import (
 
 from ui.viewer_3d import ProductViewer
 from ui.coating_process_settings import CoatingProcessSettingsDialog
+from ui.robot_settings import RobotSettingsDialog, load_robot_settings, save_robot_settings
 from ui.sprayer_settings import (
     SprayerSettingsDialog,
     load_active_sprayer_profile_name,
@@ -352,6 +353,9 @@ class MainWindow(QMainWindow):
             )
         )
 
+        self.robot_settings_path = self.project_root / "config" / "robot_settings.json"
+        self.robot_settings = load_robot_settings(self.robot_settings_path)
+
         self.coating_process_config_path = (
             self.project_root / "config" / "coating_process.json"
         )
@@ -646,6 +650,7 @@ class MainWindow(QMainWindow):
 
         # 3D Viewer
         self.viewer = ProductViewer()
+        self.viewer.set_robot_motion_settings(self.robot_settings)
         self.viewer.pose_confirmed.connect(self._save_reference_pose)
         self.viewer.patch_selected.connect(
             self._on_viewer_patch_selected
@@ -922,6 +927,14 @@ class MainWindow(QMainWindow):
             self._open_sprayer_settings
         )
         layout.addWidget(self.sprayer_settings_button)
+
+        self.robot_settings_button = QPushButton("ROBOT ARM SETTINGS")
+        self.robot_settings_button.setObjectName("PrimaryButton")
+        self.robot_settings_button.setToolTip(
+            "Set painting travel speed and the future spray-point control frequency."
+        )
+        self.robot_settings_button.clicked.connect(self._open_robot_settings)
+        layout.addWidget(self.robot_settings_button)
 
         self.sprayer_profile_label = QLabel(
             f"ACTIVE PROFILE: {self.sprayer_profile.get('name', 'default sprayer')}"
@@ -2434,6 +2447,21 @@ class MainWindow(QMainWindow):
             # the background Stage 3 worker starts.
             "product_transform_4x4": self.viewer.get_product_transform().tolist(),
         }
+
+    def _open_robot_settings(self):
+        if self._operation_running:
+            return
+        dialog = RobotSettingsDialog(self.robot_settings, parent=self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.robot_settings = dict(dialog.settings)
+        save_robot_settings(self.robot_settings_path, self.robot_settings)
+        self.viewer.set_robot_motion_settings(self.robot_settings)
+        self.status_bar.showMessage(
+            "ROBOT SETTINGS SAVED | "
+            f"PAINTING SPEED: {self.robot_settings['painting_speed_mm_s']:.1f} mm/s | "
+            f"CONTROL: {self.robot_settings['control_frequency_hz']:.1f} Hz"
+        )
 
     def _open_sprayer_settings(self):
         if self._operation_running:
