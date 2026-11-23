@@ -45,7 +45,6 @@ DEFAULT_SPRAYER_PROFILE = {
     "standoff_mm": 180.0,
     "spray_cone_angle_deg": 45.0,
     "overlap_percent": 50.0,
-    "sampling_spacing_mm": 20.0,
     "atomizing_air_pressure_bar": 1.7,
     "fluid_pressure_bar": 0.0,
     "fluid_flow_ml_min": 0.0,
@@ -93,7 +92,7 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
                 "fan_reference_distance_mm",
                 "fan_thickness_at_reference_mm",
                 "fan_air_pressure_bar",
-                "travel_speed_mm_s",
+                    "travel_speed_mm_s",
                 "min_travel_speed_mm_s",
                 "max_travel_acceleration_mm_s2",
             )
@@ -222,9 +221,7 @@ class SprayPatternPreview(QWidget):
             overlap = max(
                 0.0, min(90.0, float(profile.get("overlap_percent", 50.0)))
             )
-            fallback_sample_spacing = max(
-                0.1, float(profile.get("sampling_spacing_mm", 20.0))
-            )
+            fallback_sample_spacing = 1.0
 
             # Full included cone angle: diameter = 2 * distance * tan(angle / 2).
             spray_width_mm = (
@@ -485,7 +482,6 @@ class SprayerSettingsDialog(QDialog):
             ("standoff_mm", "Working distance (mm)", 20.0, 1000.0, 1),
             ("spray_cone_angle_deg", "Full spray angle (deg)", 1.0, 150.0, 1),
             ("overlap_percent", "Track overlap (%)", 0.0, 90.0, 1),
-            ("sampling_spacing_mm", "Fallback point spacing (mm)", 1.0, 100.0, 1),
             ("nozzle_orifice_mm", "Nozzle orifice (mm)", 0.1, 10.0, 2),
             ("nozzle_length_mm", "Nozzle length (mm)", 0.0, 300.0, 1),
             ("gun_body_length_mm", "Gun body length (mm)", 0.0, 600.0, 1),
