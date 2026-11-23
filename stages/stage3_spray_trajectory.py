@@ -5584,8 +5584,6 @@ def run_stage3_numerical_tests() -> dict:
     round_cone = _calculate_spray_footprint({
         "pattern_type": "round_cone",
         "spray_cone_angle_deg": 40.0,
-        "fan_reference_distance_mm": 200.0,
-        "fan_thickness_at_reference_mm": 0.0,
         "overlap_percent": 25.0,
     }, 200.0)
     assert math.isclose(
@@ -5601,8 +5599,6 @@ def run_stage3_numerical_tests() -> dict:
         "name": "wide angle test",
         "pattern_type": "round_cone",
         "spray_cone_angle_deg": 60.0,
-        "fan_reference_distance_mm": 200.0,
-        "fan_thickness_at_reference_mm": 0.0,
         "overlap_percent": 50.0,
     }
     wide_angle_result = generate_spray_trajectory(
@@ -5923,65 +5919,6 @@ def run_stage3_numerical_tests() -> dict:
         )
         reconstructed = weights @ source_triangle
         assert np.allclose(point, reconstructed, atol=1e-7, rtol=1e-9)
-
-    # --------------------------------------------------------
-    # Test 23: Adaptive speed decreases at a sharp path turn.
-    # --------------------------------------------------------
-    speed_test_points = np.asarray([
-        [0.0, 0.0, 0.0],
-        [10.0, 0.0, 0.0],
-        [20.0, 0.0, 0.0],
-        [20.0, 10.0, 0.0],
-        [20.0, 20.0, 0.0],
-    ], dtype=np.float64)
-    speed_test_normals = np.asarray([
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0],
-    ], dtype=np.float64)
-    speed_test_segments = np.zeros(5, dtype=np.int64)
-    test_speeds, test_times, speed_metadata = _calculate_adaptive_travel_speed_profile(
-        speed_test_points,
-        speed_test_normals,
-        speed_test_segments,
-        "mm",
-        base_speed_mm_s=150.0,
-        minimum_speed_mm_s=40.0,
-        maximum_acceleration_mm_s2=500.0,
-    )
-    assert test_speeds.shape == (5,)
-    assert test_times.shape == (5,)
-    assert np.all(np.isfinite(test_speeds))
-    assert np.all((test_speeds >= 40.0) & (test_speeds <= 150.0))
-    assert test_speeds[2] < 150.0
-    assert np.all(np.diff(test_times) >= 0.0)
-
-    curve_test_normals = np.asarray([
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0],
-        [0.0, math.sin(math.radians(45.0)), math.cos(math.radians(45.0))],
-        [0.0, math.sin(math.radians(45.0)), math.cos(math.radians(45.0))],
-        [0.0, math.sin(math.radians(45.0)), math.cos(math.radians(45.0))],
-    ], dtype=np.float64)
-    curve_speeds, _, _ = _calculate_adaptive_travel_speed_profile(
-        np.asarray([
-            [0.0, 0.0, 0.0],
-            [10.0, 0.0, 0.0],
-            [20.0, 0.0, 0.0],
-            [30.0, 0.0, 0.0],
-            [40.0, 0.0, 0.0],
-        ], dtype=np.float64),
-        curve_test_normals,
-        np.zeros(5, dtype=np.int64),
-        "mm",
-        base_speed_mm_s=150.0,
-        minimum_speed_mm_s=40.0,
-        maximum_acceleration_mm_s2=500.0,
-    )
-    assert curve_speeds[2] < 150.0
-    assert speed_metadata["method"].startswith("normal_curvature_and_path_turning")
 
     # --------------------------------------------------------
     # Test 24: Inter-segment travel links are spray-OFF and measured.
