@@ -177,7 +177,7 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             width * 0.5 + 1e-8,
         )
 
-    def test_robot_waypoint_spacing_uses_speed_and_control_frequency(self):
+    def test_trajectory_spacing_uses_only_circular_footprint_and_overlap(self):
         result = generate_spray_trajectory(
             mesh=self.mesh.copy(),
             face_status_labels=self.status.copy(),
@@ -187,39 +187,24 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             spray_angle_deg=45.0,
             coordinate_unit="mm",
             sprayer_profile=self.profile.copy(),
-            coating_process={
-                "base_travel_speed_mm_s": 240.0,
-                "min_travel_speed_mm_s": 120.0,
-                "robot_control_frequency_hz": 120.0,
-            },
         )
-        self.assertAlmostEqual(
-            result["parameters"]["robot_waypoint_spacing_mm"],
-            2.0,
-            places=8,
-        )
-        self.assertAlmostEqual(
-            result["rasterization"]["robot_waypoint_spacing_mm"],
-            2.0,
-            places=8,
-        )
-        expected_spray_pitch = (
+        expected_spacing = (
             2.0 * 100.0 * np.tan(np.deg2rad(45.0 / 2.0)) * 0.5
         )
         self.assertAlmostEqual(
             result["rasterization"]["trajectory_sample_spacing_mm"],
-            expected_spray_pitch,
+            expected_spacing,
             places=8,
         )
-        self.assertNotAlmostEqual(
-            result["rasterization"]["trajectory_sample_spacing_mm"],
-            result["rasterization"]["robot_waypoint_spacing_mm"],
-            places=6,
+        self.assertAlmostEqual(
+            result["rasterization"]["lane_spacing_mm"],
+            expected_spacing,
+            places=8,
         )
-        self.assertEqual(
-            result["rasterization"]["robot_waypoint_sampling_basis"],
-            "BASE_TRAVEL_SPEED_DIVIDED_BY_ROBOT_CONTROL_FREQUENCY",
-        )
+        self.assertNotIn("robot_waypoint_spacing_mm", result["parameters"])
+        self.assertNotIn("robot_control_frequency_hz", result["parameters"])
+        self.assertNotIn("travel_speeds_mm_s", result)
+        self.assertNotIn("trajectory_time_s", result)
 
     def test_legacy_16_column_data_contract_is_unchanged(self):
         result = self._generate([7, 9])
