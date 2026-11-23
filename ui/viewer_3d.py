@@ -9869,6 +9869,51 @@ class ProductViewer(QWidget):
                 self._pose_actor.SetPosition(*previous_product_pose[:3, 3].tolist())
 
         # -------------------------------------------------
+        # PRODUCT CAD CONTOURS
+        # -------------------------------------------------
+        # Show real geometric boundaries and sharp CAD edges without drawing
+        # every tessellation triangle. This keeps the painted surface legible
+        # in product, route, and simulation views.
+        self._product_edge_actor = None
+        if (
+            self._pose_actor is not None
+            and self.display_mode in (
+                "product",
+                "spray_point_preview",
+                "trajectory",
+            )
+        ):
+            try:
+                edge_mesh = self.current_mesh.extract_feature_edges(
+                    feature_angle=38.0,
+                    boundary_edges=True,
+                    non_manifold_edges=True,
+                    feature_edges=True,
+                    manifold_edges=False,
+                )
+                if edge_mesh.n_cells > 0:
+                    self._product_edge_actor = self.plotter.add_mesh(
+                        edge_mesh,
+                        color="#263640",
+                        opacity=0.92,
+                        style="wireframe",
+                        line_width=1.35,
+                        lighting=False,
+                        render_lines_as_tubes=False,
+                        pickable=False,
+                        name="product_cad_contour_edges",
+                    )
+                    self._product_edge_actor.SetOrigin(0.0, 0.0, 0.0)
+                    self._product_edge_actor.SetUserMatrix(
+                        self._pose_actor.GetMatrix()
+                    )
+            except Exception as exc:
+                print(
+                    "[PRODUCT EDGE WARNING] Could not create CAD contours: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+        # -------------------------------------------------
         # COMMON VIEWER ELEMENTS
         # -------------------------------------------------
         # Fixed World XYZ box and moving Product CAD frame.
