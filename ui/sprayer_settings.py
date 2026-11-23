@@ -357,7 +357,7 @@ class SprayPatternPreview(QWidget):
             painter.setPen(QColor("#00F5A0"))
             painter.drawText(
                 14, int(surface_y + 88),
-                f"EFFECTIVE POINT SPACING: {effective_sample_spacing:.1f} mm"
+                f"COVERAGE GRID SPACING: {effective_sample_spacing:.1f} mm"
             )
         finally:
             # Qt requires every active painter to be ended even if drawing
