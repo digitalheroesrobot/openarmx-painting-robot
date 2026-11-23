@@ -5433,113 +5433,33 @@ class ProductViewer(QWidget):
         )
 
     def _interactive_update_cursor(self, pose, force_record=False):
-        # Record and deposit from every valid mouse sample. Only the expensive
-        # 3D cursor visualization is throttled; applying the old 30 Hz limit to
-        # this entire method silently discarded intermediate spray positions.
+        """Fast route-edit cursor: record poses, but never simulate paint.
+
+        Stage 3 is deliberately geometry/input-only. Footprint generation,
+        gun collision checks, coating accumulation and paint texture updates
+        are reserved for Stage 4 verification replay.
+        """
         self._interactive_update_surface_angle_indicator(pose)
         self._interactive_spray_latest_pose = pose
-        nozzle = pose["nozzle_point_world"]
-        direction = pose["spray_direction_world"]
+        paintable = bool(pose.get("paintable", True))
+        self._interactive_spray_surface_excluded = not paintable
+        self._interactive_spray_gun_collision = False
 
-        # Evaluate the complete sprayer envelope before allowing this mouse
-        # sample to record or deposit paint.
-        gun_actors, gun_polydata = self._interactive_build_gun_visual(
-            nozzle, direction
-        )
-        self._interactive_spray_gun_actors = gun_actors
-        collision = self._interactive_check_gun_collision(gun_polydata)
-        surface_excluded = not bool(pose.get("paintable", True))
-        self._interactive_spray_gun_collision = collision
-        self._interactive_spray_surface_excluded = surface_excluded
-        spray_blocked = collision or surface_excluded
-        if spray_blocked:
-            # A blocked interval breaks both deposition continuity and the
-            # fixed-distance sampler. Never interpolate a route across it.
-            self._interactive_spray_last_deposition_timestamp = None
-            self._interactive_spray_previous_nozzle_world = None
-            self._interactive_spray_sampling_previous_pose = None
-            self._interactive_spray_sampling_distance_accumulator = 0.0
-            self._interactive_spray_last_speed_mm_s = 0.0
-
-        local_pose = self._interactive_pose_to_product_frame(pose)
-        footprints = _build_spray_footprint_overlay(
-            self.current_mesh,
-            local_pose["nozzle_point"].reshape(1, 3),
-            local_pose["spray_direction"].reshape(1, 3),
-            self._interactive_spray_paint_footprint_angle_deg,
-            rays_per_ring=8,
-            radial_rings=(0.40, 0.75, 1.0),
-            surface=self._interactive_spray_surface,
-            locator=self._interactive_spray_locator,
-        )
         recorded_samples = []
-        if footprints and footprints[0][0].n_cells:
-            patch, boundary = footprints[0]
-            patch.points = (
-                np.asarray(patch.points) @ self._interactive_spray_transform[:3, :3].T
-                + self._interactive_spray_transform[:3, 3]
-            )
-            # Generate and coat every fixed-distance sample. The cursor event
-            # rate is deliberately not used as the trajectory spacing.
-            if self._interactive_spray_recording and not spray_blocked:
+        if self._interactive_spray_recording:
+            if paintable:
                 recorded_samples = self._interactive_append_record(
-                    pose, local_pose, force=bool(force_record)
+                    pose, force=bool(force_record)
                 )
-                for sample_pose, sample_local in recorded_samples:
-                    sample_footprints = _build_spray_footprint_overlay(
-                        self.current_mesh,
-                        sample_local["nozzle_point"].reshape(1, 3),
-                        sample_local["spray_direction"].reshape(1, 3),
-                        self._interactive_spray_paint_footprint_angle_deg,
-                        rays_per_ring=8,
-                        radial_rings=(0.40, 0.75, 1.0),
-                        surface=self._interactive_spray_surface,
-                        locator=self._interactive_spray_locator,
-                    )
-                    if not sample_footprints or not sample_footprints[0][0].n_cells:
-                        # Match replay behavior: a sample with no valid surface
-                        # footprint breaks deposition continuity.
-                        self._interactive_spray_last_deposition_timestamp = None
-                        self._interactive_spray_previous_nozzle_world = None
-                        self._interactive_spray_last_speed_mm_s = 0.0
-                        continue
-                    sample_patch = sample_footprints[0][0]
-                    sample_patch.points = (
-                        np.asarray(sample_patch.points)
-                        @ self._interactive_spray_transform[:3, :3].T
-                        + self._interactive_spray_transform[:3, 3]
-                    )
-                    sample_gun_actors, sample_gun_polydata = self._interactive_build_gun_visual(
-                        sample_pose["nozzle_point_world"],
-                        sample_pose["spray_direction_world"],
-                    )
-                    self._interactive_spray_gun_collision = (
-                        self._interactive_check_gun_collision(sample_gun_polydata)
-                    )
-                    self._interactive_spray_surface_excluded = not bool(
-                        sample_pose.get("paintable", True)
-                    )
-                    self._interactive_apply_paint_deposition(
-                        sample_patch, sample_pose
-                    )
-                    for sample_actor in sample_gun_actors:
-                        try:
-                            self.plotter.remove_actor(sample_actor, render=False)
-                        except Exception:
-                            pass
-            recorded_new_pose = bool(recorded_samples)
-        else:
-            recorded_new_pose = False
-            if self._interactive_spray_recording:
-                # A missing footprint is a real discontinuity; do not bridge
-                # the invalid area with a later interpolated spray segment.
+            else:
+                # Preserve Stage 2 exclusion: do not create a route through a
+                # face that was classified as non-paintable.
                 self._interactive_spray_sampling_previous_pose = None
                 self._interactive_spray_sampling_distance_accumulator = 0.0
-                self._interactive_spray_last_deposition_timestamp = None
-                self._interactive_spray_previous_nozzle_world = None
 
-        # Keep full-rate trajectory/deposition sampling above, but cap only
-        # actor rebuilding and rendering to 30 Hz for interactive responsiveness.
+        # Only cursor/path actors are refreshed at 30 Hz. No paint footprint,
+        # deposition calculation, collision mesh, or coating texture is built
+        # while the operator is drawing the route.
         now = time.monotonic()
         previous = getattr(
             self, "_interactive_spray_last_cursor_update_time", None
@@ -5548,239 +5468,54 @@ class ProductViewer(QWidget):
             return
         self._interactive_spray_last_cursor_update_time = now
         self._interactive_remove_live_actors()
-        self._interactive_spray_live_actors.extend(gun_actors)
-        if recorded_new_pose:
-            self._interactive_refresh_paint_visual(render=False)
-            # Show the exact recorded trajectory during the stroke. The route
-            # renderer already draws the green path and the yellow arrows that
-            # follow each sample's actual spray direction. Refreshing only at
-            # the existing 30 Hz visual cadence keeps the cursor responsive
-            # without dropping any trajectory samples.
-            self._interactive_spray_live_route_refresh_at = now
-            self._refresh_interactive_recorded_path_actor()
 
-        if footprints and footprints[0][0].n_cells:
-            boundary = footprints[0][1]
-            if boundary.n_cells:
-                boundary.points = (
-                    np.asarray(boundary.points) @ self._interactive_spray_transform[:3, :3].T
-                    + self._interactive_spray_transform[:3, 3]
-                )
-                actor = self.plotter.add_mesh(
-                    boundary, color="#FF9F1C", line_width=2.0,
-                    lighting=False, pickable=False,
-                )
-                self._interactive_spray_live_actors.append(actor)
+        nozzle = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
+        surface_point = np.asarray(pose["surface_point_world"], dtype=np.float64)
+        direction = np.asarray(pose["spray_direction_world"], dtype=np.float64)
+        direction /= max(float(np.linalg.norm(direction)), 1e-12)
 
-        nozzle = pose["nozzle_point_world"]
-        hit = pose["surface_point_world"]
-        direction = pose["spray_direction_world"]
-
-        # Keep exactly one nominal cone. Construct its topology explicitly:
-        # point 0 is the nozzle apex; the circular rim is downstream toward
-        # the product. This avoids vtk/PyVista cone-axis sign ambiguity.
-        half_angle = math.radians(self._interactive_spray_cone_angle_deg) * 0.5
-        nominal_radius = self._interactive_spray_standoff * math.tan(half_angle)
-        spray_axis = np.asarray(direction, dtype=np.float64)
-        spray_axis /= max(float(np.linalg.norm(spray_axis)), 1e-12)
-        reference_axis = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-        if abs(float(np.dot(reference_axis, spray_axis))) > 0.92:
-            reference_axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-        radial_u = np.cross(spray_axis, reference_axis)
-        radial_u /= max(float(np.linalg.norm(radial_u)), 1e-12)
-        radial_v = np.cross(spray_axis, radial_u)
-        radial_v /= max(float(np.linalg.norm(radial_v)), 1e-12)
-        ring_angles = np.linspace(0.0, 2.0 * math.pi, 49)[:-1]
-        base_center = nozzle + spray_axis * self._interactive_spray_standoff
-        rim = (
-            base_center[None, :]
-            + nominal_radius
-            * (
-                np.cos(ring_angles)[:, None] * radial_u[None, :]
-                + np.sin(ring_angles)[:, None] * radial_v[None, :]
-            )
+        marker = pv.Sphere(
+            radius=max(self._interactive_spray_standoff * 0.012, 0.35),
+            center=nozzle,
+            theta_resolution=10,
+            phi_resolution=8,
         )
-        cone_points = np.vstack((nozzle, rim))
-        cone_faces = []
-        for i in range(len(rim)):
-            j = (i + 1) % len(rim)
-            cone_faces.extend((3, 0, i + 1, j + 1))
-        cone = pv.PolyData(
-            cone_points,
-            faces=np.asarray(cone_faces, dtype=np.int64),
-        )
-        actor = self.plotter.add_mesh(
-            cone,
-            color="#FFE082",
-            opacity=0.16,
-            style="wireframe",
-            line_width=1.25,
+        marker_actor = self.plotter.add_mesh(
+            marker,
+            color="#FF3B30" if not paintable else "#00E676",
             lighting=False,
             pickable=False,
         )
-        self._interactive_spray_live_actors.append(actor)
+        self._interactive_spray_live_actors.append(marker_actor)
 
-        # Trace the nominal cone's outer generators against the product.
-        # Their first-hit points form the visible contact boundary on the
-        # actual surface (rather than a flat circle floating at standoff).
-        contact_boundary_segments = []
-        if (
-            self._interactive_spray_locator is not None
-            and self._interactive_spray_surface is not None
-        ):
-            inverse = np.linalg.inv(self._interactive_spray_transform)
-            nozzle_local = (
-                inverse @ np.append(nozzle, 1.0)
-            )[:3]
-            axis_local = inverse[:3, :3] @ spray_axis
-            axis_local /= max(float(np.linalg.norm(axis_local)), 1e-12)
-            ref_local = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-            if abs(float(np.dot(ref_local, axis_local))) > 0.92:
-                ref_local = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-            edge_u = np.cross(axis_local, ref_local)
-            edge_u /= max(float(np.linalg.norm(edge_u)), 1e-12)
-            edge_v = np.cross(axis_local, edge_u)
-            edge_v /= max(float(np.linalg.norm(edge_v)), 1e-12)
-
-            contact_points_world = []
-            contact_hit = []
-            edge_ray_count = 12
-            edge_ray_length = (
-                self._interactive_spray_standoff
-                / max(math.cos(half_angle), 1e-6)
-            ) * 1.02
-            for ray_index in range(edge_ray_count):
-                phi = 2.0 * math.pi * ray_index / edge_ray_count
-                radial = math.cos(phi) * edge_u + math.sin(phi) * edge_v
-                edge_direction = (
-                    math.cos(half_angle) * axis_local
-                    + math.sin(half_angle) * radial
-                )
-                edge_direction /= max(
-                    float(np.linalg.norm(edge_direction)), 1e-12
-                )
-                endpoint = nozzle_local + edge_direction * edge_ray_length
-                intersections = vtkPoints()
-                intersected_cells = vtkIdList()
-                hit = self._interactive_spray_locator.IntersectWithLine(
-                    nozzle_local.tolist(),
-                    endpoint.tolist(),
-                    intersections,
-                    intersected_cells,
-                )
-                nearest_point = None
-                if hit and intersections.GetNumberOfPoints() > 0:
-                    nearest_distance = float("inf")
-                    for hit_index in range(intersections.GetNumberOfPoints()):
-                        candidate = np.asarray(
-                            intersections.GetPoint(hit_index),
-                            dtype=np.float64,
-                        )
-                        candidate_distance = float(
-                            np.linalg.norm(candidate - nozzle_local)
-                        )
-                        if candidate_distance < nearest_distance:
-                            nearest_distance = candidate_distance
-                            nearest_point = candidate
-                contact_hit.append(nearest_point is not None)
-                if nearest_point is None:
-                    contact_points_world.append(None)
-                else:
-                    contact_points_world.append(
-                        (
-                            self._interactive_spray_transform
-                            @ np.append(nearest_point, 1.0)
-                        )[:3]
-                    )
-
-            # Draw only adjacent hit pairs. Missing rays remain gaps instead
-            # of creating misleading chords across openings or silhouette gaps.
-            for ray_index in range(edge_ray_count):
-                next_index = (ray_index + 1) % edge_ray_count
-                if contact_hit[ray_index] and contact_hit[next_index]:
-                    contact_boundary_segments.append(
-                        (
-                            contact_points_world[ray_index],
-                            contact_points_world[next_index],
-                        )
-                    )
-
-        if contact_boundary_segments:
-            contact_boundary = self._build_line_polydata(
-                contact_boundary_segments
-            )
-            if contact_boundary is not None:
-                contact_actor = self.plotter.add_mesh(
-                    contact_boundary,
-                    color="#FFF4CC",
-                    opacity=0.62,
-                    line_width=2.0,
-                    lighting=False,
-                    pickable=False,
-                )
-                self._interactive_spray_live_actors.append(contact_actor)
-
-        # Extend the spray visually with a weak, distance-decaying distribution.
-        # Each ray stops at the first product surface; a ray with no hit fades
-        # out at the configured distribution cutoff.
-        self._interactive_add_distribution_tail_visual(pose)
-
-        # Faint centerline direction vector: always points from the nozzle
-        # toward the painted surface / spray direction.
-        centerline_end = nozzle + direction * self._interactive_spray_standoff
-        centerline = pv.Arrow(
+        arrow_length = max(self._interactive_spray_standoff * 0.75, 1.0)
+        direction_arrow = pv.Arrow(
             start=nozzle,
             direction=direction,
-            scale=self._interactive_spray_standoff,
-            tip_length=0.10,
-            tip_radius=0.018,
-            shaft_radius=0.006,
+            scale=arrow_length,
+            tip_length=0.18,
+            tip_radius=0.045,
+            shaft_radius=0.012,
         )
-        centerline_actor = self.plotter.add_mesh(
-            centerline,
-            color="#FFF3C4",
-            opacity=0.32,
+        arrow_actor = self.plotter.add_mesh(
+            direction_arrow,
+            color="#FFF0B8",
+            opacity=0.78,
             lighting=False,
             pickable=False,
         )
-        self._interactive_spray_live_actors.append(centerline_actor)
-
-        # Faint nozzle-to-surface direction vector.
-        arrow_length = max(self._interactive_spray_standoff * 0.92, 1e-6)
-        hit_vector = hit - nozzle
-        arrow = pv.Arrow(
-            start=nozzle,
-            direction=hit_vector,
-            tip_length=0.10,
-            tip_radius=max(arrow_length * 0.012, 0.1),
-            shaft_radius=max(arrow_length * 0.004, 0.04),
-            scale=arrow_length / max(float(np.linalg.norm(hit_vector)), 1e-12),
-        )
-        actor = self.plotter.add_mesh(
-            arrow, color="#B8D7E3", opacity=0.30,
-            lighting=False, pickable=False,
-        )
-        self._interactive_spray_live_actors.append(actor)
-
-        if surface_excluded:
-            status_text = "STAGE 2 EXCLUDED - SPRAY DISABLED"
-        elif collision:
-            status_text = "COLLISION - SPRAY BLOCKED"
-        else:
-            status_text = (
-                f"SPRAYER CLEAR | SPEED "
-                f"{self._interactive_spray_last_speed_mm_s:.1f} mm/s"
-            )
+        self._interactive_spray_live_actors.append(arrow_actor)
 
         if self._interactive_hud_actor is not None:
             hud_text = (
-                "SPRAY CURSOR | "
-                + ("HOLD LEFT MOUSE TO PAINT | " if not spray_blocked else "")
-                + status_text
+                "ROUTE RECORDING | "
+                + (
+                    "STAGE 2 EXCLUDED - ROUTE DISABLED"
+                    if not paintable
+                    else "NO PAINT SIMULATION - PRESS FINISH TO OPTIMIZE"
+                )
             )
             try:
-                # PyVista's CornerAnnotation exposes SetText(), while the
-                # underlying vtkCornerAnnotation uses SetText(index, text).
                 if hasattr(self._interactive_hud_actor, "SetText"):
                     self._interactive_hud_actor.SetText(2, hud_text)
                 elif hasattr(self._interactive_hud_actor, "SetInput"):
@@ -5788,27 +5523,9 @@ class ProductViewer(QWidget):
             except (AttributeError, TypeError):
                 pass
 
-        marker = pv.Sphere(
-            radius=max(self._interactive_spray_standoff * 0.018, 0.5),
-            center=nozzle, theta_resolution=16, phi_resolution=16,
-        )
-        actor = self.plotter.add_mesh(
-            marker,
-            color="#FF3B30" if spray_blocked else "#00E676",
-            smooth_shading=True,
-            pickable=False,
-        )
-        self._interactive_spray_live_actors.append(actor)
-
-        gun_color = "#FF3B30" if spray_blocked else "#B9C4CC"
-        for gun_actor in gun_actors:
-            try:
-                color = QColor(gun_color)
-                gun_actor.GetProperty().SetColor(
-                    color.redF(), color.greenF(), color.blueF()
-                )
-            except Exception:
-                pass
+        if recorded_samples:
+            self._interactive_spray_live_route_refresh_at = now
+            self._refresh_interactive_recorded_path_actor()
 
         self.plotter.render()
 
