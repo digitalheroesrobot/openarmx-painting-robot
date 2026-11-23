@@ -4096,7 +4096,7 @@ def _inspect_generated_trajectory(
 
 
 # ------------------------------------------------------------
-# Adaptive spray travel-speed profile
+# Spray trajectory generation and fixed preview timing
 # ------------------------------------------------------------
 
 def generate_spray_trajectory(
@@ -6578,9 +6578,6 @@ def run_stage3_numerical_tests() -> dict:
             "invalid_product_transform_rejected": "PASS",
             "planar_raster_spacing_and_clipping": "PASS",
             "planar_raster_standoff_preserved": "PASS",
-            "adaptive_speed_turn_reduction": "PASS",
-            "adaptive_speed_curvature_reduction": "PASS",
-            "adaptive_speed_time_monotonicity": "PASS",
             "trajectory_coverage_continuity_orientation_and_spray_boundaries": "PASS",
             "inter_segment_spray_off_travel_estimates": "PASS",
             "greedy_stroke_travel_ordering": "PASS",
