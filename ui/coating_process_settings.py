@@ -45,8 +45,6 @@ class CoatingProcessSettingsDialog(QDialog):
             ("transfer_efficiency_percent", "Transfer efficiency (%)", 0.0, 100.0, 1),
             ("volume_solids_percent", "Volume solids (%)", 0.0, 100.0, 1),
             ("number_of_coats", "Number of coats", 1, 20, 0),
-            ("spray_on_delay_ms", "Spray ON delay (ms)", 0.0, 10000.0, 1),
-            ("spray_off_delay_ms", "Spray OFF delay (ms)", 0.0, 10000.0, 1),
         ]
         for key, label, low, high, decimals in specs:
             spin = QDoubleSpinBox()
@@ -102,8 +100,8 @@ class CoatingProcessSettingsDialog(QDialog):
                 self.readiness_label.setStyleSheet("color:#FFD740;")
             else:
                 self.readiness_label.setText(
-                    "MODEL STATUS: INPUTS READY — UNCALIBRATED PREDICTION. "
-                    "Calibration against measured coating coupons is still required."
+                    "MATERIAL INPUTS READY. FILM-THICKNESS SIMULATION REMAINS N/A "
+                    "UNTIL ROBOT MOTION TIMING IS IMPLEMENTED."
                 )
                 self.readiness_label.setStyleSheet("color:#00E5FF;")
         except (ValueError, TypeError) as exc:
