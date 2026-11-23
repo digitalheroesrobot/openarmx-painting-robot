@@ -54,8 +54,9 @@ from stages.spray_footprint_optimizer import optimize_redundant_spray_points
 
 DEFAULT_STANDOFF_MM = 200.0
 
-MIN_STANDOFF_MM = 50.0
-MAX_STANDOFF_MM = 500.0
+# Keep Stage 3 validation identical to the sprayer-settings UI range.
+MIN_STANDOFF_MM = 20.0
+MAX_STANDOFF_MM = 1000.0
 
 MAX_TOTAL_SAMPLES = 250_000
 
