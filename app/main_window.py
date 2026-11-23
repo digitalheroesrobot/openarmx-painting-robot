@@ -4094,13 +4094,15 @@ class MainWindow(QMainWindow):
         self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
         self.interactive_spray_path_button.setEnabled(True)
         self.status_bar.showMessage(
-            "INTERACTIVE SPRAY ACTIVE | MOVE THE MOUSE OVER THE PRODUCT TO RECORD"
+            "CAMERA VIEW ACTIVE | PRESS SPACE TO ENTER SPRAY MODE"
         )
         self.analysis_summary.setText(
-            "INTERACTIVE SPRAY RECORDING\n\n"
-            "Move the mouse over the product surface.\n"
-            "The nozzle follows the surface at the configured standoff.\n"
-            "Valid surface poses are recorded automatically.\n"
+            "SPRAY TRAJECTORY\n\n"
+            "Camera navigation is active on entry.\n"
+            "Press SPACE to switch to spray mode.\n"
+            "Move the mouse over paintable Stage 2 surfaces.\n"
+            "Stage 2 excluded surfaces show a red, disabled sprayer.\n"
+            "Hold the left mouse button to paint and record the path.\n"
             "Use FINISH SPRAY PATH in this panel to complete recording."
         )
 
