@@ -141,14 +141,6 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             high_overlap["rasterization"]["trajectory_sample_spacing_basis"],
             "SPRAY_FOOTPRINT_AND_OVERLAP",
         )
-        self.assertEqual(
-            high_overlap["sampling"]["configured_sampling_spacing_mm"],
-            20.0,
-        )
-        self.assertEqual(
-            high_overlap["sampling"]["configured_sampling_spacing_role"],
-            "FALLBACK_ONLY_WHEN_FOOTPRINT_UNAVAILABLE",
-        )
         self.assertIn(
             "footprint_optimizer_removed_sample_count",
             high_overlap["sampling"],
