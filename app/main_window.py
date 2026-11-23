@@ -2427,8 +2427,7 @@ class MainWindow(QMainWindow):
         coating_process = dict(self.coating_process)
         return {
             "standoff_mm": float(profile["standoff_mm"]),
-            # Stage 3's surface coverage grid uses the spray footprint and
-            # overlap; this configured value remains its fallback only.
+            # Geometric spacing is calculated from the active circular footprint.
             "spray_angle_deg": float(profile.get("spray_cone_angle_deg", 0.0)),
             "sprayer_profile": profile,
             "coating_process": coating_process,
