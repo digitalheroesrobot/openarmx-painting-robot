@@ -2733,7 +2733,7 @@ class MainWindow(QMainWindow):
     
     def _refresh_workflow_ui(self):
         # Product loading remains available from the top-level LOAD button.
-        # Do not show a redundant LOAD STL PRODUCT action in the right sidebar.
+        # Product import is handled by the persistent top-level LOAD button.
         self.start_analysis_button.setVisible(
             self.active_stage not in (
                 STAGE_PRODUCT_SETUP,
