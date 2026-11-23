@@ -9638,27 +9638,20 @@ class ProductViewer(QWidget):
 
             # Keep every original triangle in this actor so direct picking
             # still maps its cell ID to the original patch_labels array.
-            # The selected patch is made transparent here and drawn once,
-            # at its exact original surface location, by the highlight actor.
-            # Before a Stage 2 patch is selected, keep the complete
-            # product fully opaque. Fade the surrounding surfaces only
-            # while an individual paintable candidate is being inspected.
-            surface_opacity = np.ones(
-                len(self.patch_labels), dtype=float
+            # Use a uniform actor opacity for the faded background: VTK's
+            # per-cell opacity mapping can be backend-dependent when combined
+            # with categorical patch scalars. The selected patch is rendered
+            # separately at full opacity immediately below.
+            background_opacity = (
+                0.16 if self.selected_patch_id is not None else 1.0
             )
-            if self.selected_patch_id is not None:
-                surface_opacity.fill(0.16)
-                surface_opacity[
-                    self.patch_labels == self.selected_patch_id
-                ] = 0.0
-            polydata.cell_data["Surface Opacity"] = surface_opacity
 
             self._pose_actor = self.plotter.add_mesh(
                 polydata,
                 scalars="Surface Patch",
                 cmap=PATCH_COLORS,
                 categories=True,
-                opacity="Surface Opacity",
+                opacity=background_opacity,
                 show_edges=False,
                 smooth_shading=True,
                 ambient=0.28,
