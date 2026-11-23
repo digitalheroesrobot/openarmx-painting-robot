@@ -5405,7 +5405,7 @@ class ProductViewer(QWidget):
                         # footprint breaks deposition continuity.
                         self._interactive_spray_last_deposition_timestamp = None
                         self._interactive_spray_previous_nozzle_world = None
-                                        continue
+                        continue
                     sample_patch = sample_footprints[0][0]
                     sample_patch.points = (
                         np.asarray(sample_patch.points)
