@@ -2107,16 +2107,13 @@ class ProductViewer(QWidget):
         )
         playback_layout.addWidget(self.trajectory_playback_slider)
 
-        self.trajectory_time_label = QLabel(
-            "VISUAL POINT -- / -- | ROBOT TIMING NOT CONFIGURED"
-        )
+        self.trajectory_time_label = QLabel("VISUAL POINT -- / --")
         self.trajectory_time_label.setMinimumWidth(0)
         self.trajectory_time_label.setStyleSheet(
             "color: #B9CCD5; font-size: 9px; font-weight: 700; padding-left: 4px;"
         )
         self.trajectory_time_label.setToolTip(
-            "This is visual point-index playback only. Robot execution speed, "
-            "controller frequency and cycle time are intentionally not configured."
+            "Visual playback follows the generated trajectory point sequence."
         )
         playback_layout.addWidget(self.trajectory_time_label)
 
@@ -2377,7 +2374,6 @@ class ProductViewer(QWidget):
                 "SPRAY-OFF INTER-STROKE TRAVEL (straight-line estimate only):",
                 f"Transitions: {int(travel_plan.get('transition_count', 0))}",
                 f"Total travel distance: {float(travel_plan.get('total_distance_mm', 0.0)):.1f} mm",
-                f"Estimated travel time: {float(travel_plan.get('estimated_time_s', 0.0)):.2f} s",
                 f"Safety: {travel_plan.get('safety_status', 'NOT_CHECKED')}",
                 str(travel_plan.get("note", "")),
             ])
@@ -7169,8 +7165,7 @@ class ProductViewer(QWidget):
             total = len(self.trajectory_data.get("nozzle_points", []))
         current = self._playback_index if index is None else int(index)
         label.setText(
-            f"VISUAL POINT {max(0, current) + 1:,} / {total:,} "
-            "| ROBOT TIMING NOT CONFIGURED"
+            f"VISUAL POINT {max(0, current) + 1:,} / {total:,}"
         )
 
     def is_trajectory_playing(self):
@@ -7682,7 +7677,7 @@ class ProductViewer(QWidget):
             cache["deposition_processed_index"] = int(path_index)
             if hasattr(self, "trajectory_thickness_label"):
                 self.trajectory_thickness_label.setText(
-                    "PREDICTED DRY FILM THICKNESS | N/A — ROBOT SPEED/TIMING NOT CONFIGURED"
+                    "PREDICTED DRY FILM THICKNESS | N/A — MOTION TIMING NOT PROVIDED"
                 )
         return
 
