@@ -74,6 +74,30 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             places=8,
         )
 
+        generated = generate_spray_trajectory(
+            mesh=self.mesh.copy(),
+            face_status_labels=self.status.copy(),
+            patch_labels=np.asarray([7, 9], dtype=np.int64),
+            standoff_mm=180.0,
+            coordinate_unit="mm",
+            sprayer_profile=profile.copy(),
+        )
+        self.assertAlmostEqual(
+            generated["sampling"]["coverage_spacing_mm"],
+            expected_spacing,
+            places=8,
+        )
+        self.assertAlmostEqual(
+            generated["rasterization"]["lane_spacing_mm"],
+            expected_spacing,
+            places=8,
+        )
+        self.assertAlmostEqual(
+            generated["parameters"]["spray_footprint"]["working_distance_mm"],
+            180.0,
+            places=8,
+        )
+
     def test_face_and_patch_boundaries_do_not_change_sweep_order(self):
         one_patch = self._generate([7, 7])
         two_patches = self._generate([7, 9])
@@ -130,7 +154,6 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             "face_status_labels": self.status.copy(),
             "patch_labels": np.asarray([7, 9], dtype=np.int64),
             "standoff_mm": 100.0,
-            "spray_angle_deg": 45.0,
             "coordinate_unit": "mm",
         }
         half_overlap = generate_spray_trajectory(
