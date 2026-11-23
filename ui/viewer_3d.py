@@ -445,6 +445,9 @@ class ProductViewer(QWidget):
         self._interactive_spray_transform = np.eye(4, dtype=float)
         self._interactive_spray_latest_pose = None
         self._interactive_spray_records = []
+        # Raw surface-following control poses are collected during a mouse drag.
+        # Final route poses are generated only after the mouse button is released.
+        self._interactive_spray_stroke_input_poses = []
         self._interactive_spray_display_mode = "thickness"
         self._interactive_recorded_replay_index = 0
         self._interactive_recorded_replay_actor = None
@@ -5485,56 +5488,57 @@ class ProductViewer(QWidget):
             # Generate and coat every fixed-distance sample. The cursor event
             # rate is deliberately not used as the trajectory spacing.
             if self._interactive_spray_recording and not spray_blocked:
-                recorded_samples = self._interactive_append_record(
-                    pose, local_pose, force=bool(force_record)
-                )
-                for sample_pose, sample_local in recorded_samples:
-                    if getattr(self, "_interactive_route_generation_only", False):
-                        # Keep the sampled nozzle pose; simulation alone builds
-                        # per-sample surface patches and computes deposition.
-                        continue
+                if getattr(self, "_interactive_route_generation_only", False):
+                    # Route editing collects raw surface control poses only.
+                    # Smoothing and fixed-distance point generation happen on
+                    # mouse release, never at the mouse-event frequency.
+                    self._interactive_spray_stroke_input_poses.append(
+                        self._interactive_copy_input_pose(pose)
+                    )
+                else:
+                    recorded_samples = self._interactive_append_record(
+                        pose, local_pose, force=bool(force_record)
+                    )
+                    for sample_pose, sample_local in recorded_samples:
+                        sample_footprints = _build_spray_footprint_overlay(
+                            self.current_mesh,
+                            sample_local["nozzle_point"].reshape(1, 3),
+                            sample_local["spray_direction"].reshape(1, 3),
+                            self._interactive_spray_paint_footprint_angle_deg,
+                            rays_per_ring=8,
+                            radial_rings=(0.40, 0.75, 1.0),
+                            surface=self._interactive_spray_surface,
+                            locator=self._interactive_spray_locator,
+                        )
+                        if not sample_footprints or not sample_footprints[0][0].n_cells:
+                            self._interactive_spray_last_deposition_timestamp = None
+                            self._interactive_spray_previous_nozzle_world = None
+                            continue
 
-                    sample_footprints = _build_spray_footprint_overlay(
-                        self.current_mesh,
-                        sample_local["nozzle_point"].reshape(1, 3),
-                        sample_local["spray_direction"].reshape(1, 3),
-                        self._interactive_spray_paint_footprint_angle_deg,
-                        rays_per_ring=8,
-                        radial_rings=(0.40, 0.75, 1.0),
-                        surface=self._interactive_spray_surface,
-                        locator=self._interactive_spray_locator,
-                    )
-                    if not sample_footprints or not sample_footprints[0][0].n_cells:
-                        # Match replay behavior: a sample with no valid surface
-                        # footprint breaks deposition continuity.
-                        self._interactive_spray_last_deposition_timestamp = None
-                        self._interactive_spray_previous_nozzle_world = None
-                        continue
-
-                    sample_patch = sample_footprints[0][0]
-                    sample_patch.points = (
-                        np.asarray(sample_patch.points)
-                        @ self._interactive_spray_transform[:3, :3].T
-                        + self._interactive_spray_transform[:3, 3]
-                    )
-                    sample_gun_actors, sample_gun_polydata = self._interactive_build_gun_visual(
-                        sample_pose["nozzle_point_world"],
-                        sample_pose["spray_direction_world"],
-                    )
-                    self._interactive_spray_gun_collision = (
-                        self._interactive_check_gun_collision(sample_gun_polydata)
-                    )
-                    self._interactive_spray_surface_excluded = not bool(
-                        sample_pose.get("paintable", True)
-                    )
-                    self._interactive_apply_paint_deposition(
-                        sample_patch, sample_pose
-                    )
-                    for sample_actor in sample_gun_actors:
-                        try:
-                            self.plotter.remove_actor(sample_actor, render=False)
-                        except Exception:
-                            pass
+                        sample_patch = sample_footprints[0][0]
+                        sample_patch.points = (
+                            np.asarray(sample_patch.points)
+                            @ self._interactive_spray_transform[:3, :3].T
+                            + self._interactive_spray_transform[:3, 3]
+                        )
+                        sample_gun_actors, sample_gun_polydata = self._interactive_build_gun_visual(
+                            sample_pose["nozzle_point_world"],
+                            sample_pose["spray_direction_world"],
+                        )
+                        self._interactive_spray_gun_collision = (
+                            self._interactive_check_gun_collision(sample_gun_polydata)
+                        )
+                        self._interactive_spray_surface_excluded = not bool(
+                            sample_pose.get("paintable", True)
+                        )
+                        self._interactive_apply_paint_deposition(
+                            sample_patch, sample_pose
+                        )
+                        for sample_actor in sample_gun_actors:
+                            try:
+                                self.plotter.remove_actor(sample_actor, render=False)
+                            except Exception:
+                                pass
             recorded_new_pose = bool(recorded_samples)
         else:
             recorded_new_pose = False
@@ -6201,6 +6205,263 @@ class ProductViewer(QWidget):
         # face normal. Only the target point translates with the cursor.
         self._interactive_update_cursor(pose)
 
+    def _interactive_project_smoothed_surface_point(self, point_world):
+        """Project a smoothed world-space curve point back onto the CAD surface."""
+        if self._interactive_spray_surface is None or self.current_mesh is None:
+            return None
+        inverse = np.linalg.inv(self._interactive_spray_transform)
+        point_local = (inverse @ np.append(
+            np.asarray(point_world, dtype=np.float64), 1.0
+        ))[:3]
+        try:
+            cell_id, closest_local = self._interactive_spray_surface.find_closest_cell(
+                point_local, return_closest_point=True
+            )
+            cell_id = int(np.asarray(cell_id).reshape(-1)[0])
+            closest_local = np.asarray(closest_local, dtype=np.float64).reshape(3)
+        except (AttributeError, TypeError, ValueError, IndexError):
+            return None
+        if (
+            cell_id < 0
+            or cell_id >= len(self.current_mesh.faces)
+            or not np.all(np.isfinite(closest_local))
+        ):
+            return None
+
+        surface_world = (
+            self._interactive_spray_transform[:3, :3] @ closest_local
+            + self._interactive_spray_transform[:3, 3]
+        )
+        normal_local = np.asarray(
+            self.current_mesh.face_normals[cell_id], dtype=np.float64
+        )
+        transform = self._actor_matrix_array()
+        normal_world = transform[:3, :3] @ normal_local
+        normal_length = float(np.linalg.norm(normal_world))
+        if not np.isfinite(normal_length) or normal_length <= 1e-12:
+            return None
+        normal_world /= normal_length
+        excluded = self._interactive_spray_excluded_face_mask
+        paintable = not (
+            excluded is not None
+            and cell_id < len(excluded)
+            and bool(excluded[cell_id])
+        )
+        return {
+            "surface_point_world": surface_world,
+            "surface_normal_world": normal_world,
+            "cell_id": cell_id,
+            "paintable": paintable,
+        }
+
+    def _interactive_catmull_rom_point(self, p0, p1, p2, p3, t):
+        """Evaluate one uniform Catmull-Rom segment for a smooth mouse path."""
+        t2 = t * t
+        t3 = t2 * t
+        return 0.5 * (
+            2.0 * p1
+            + (-p0 + p2) * t
+            + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+            + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+        )
+
+    def _interactive_finalize_smoothed_spray_stroke(self):
+        """Smooth one captured mouse stroke, project it to CAD, then arc-resample."""
+        raw = list(getattr(self, "_interactive_spray_stroke_input_poses", []))
+        self._interactive_spray_stroke_input_poses = []
+        if not raw:
+            return 0
+
+        spacing = max(float(self._interactive_spray_sampling_spacing), 1e-6)
+        direction = np.asarray(
+            raw[0]["spray_direction_world"], dtype=np.float64
+        )
+        direction_length = float(np.linalg.norm(direction))
+        if not np.isfinite(direction_length) or direction_length <= 1e-12:
+            return 0
+        direction /= direction_length
+
+        control = [
+            np.asarray(item["surface_point_world"], dtype=np.float64)
+            for item in raw
+        ]
+        dense = []
+        if len(raw) == 1:
+            projected = self._interactive_project_smoothed_surface_point(control[0])
+            if projected is not None and projected["paintable"]:
+                dense.append({
+                    **projected,
+                    "timestamp": float(raw[0]["timestamp"]),
+                })
+        else:
+            for segment_index in range(len(raw) - 1):
+                p1 = control[segment_index]
+                p2 = control[segment_index + 1]
+                p0 = control[max(segment_index - 1, 0)]
+                p3 = control[min(segment_index + 2, len(control) - 1)]
+                chord = float(np.linalg.norm(p2 - p1))
+                subdivisions = int(np.clip(
+                    math.ceil(chord / max(spacing * 0.12, 1e-4)),
+                    8, 256,
+                ))
+                for step in range(subdivisions):
+                    t = float(step) / float(subdivisions)
+                    curve_point = self._interactive_catmull_rom_point(
+                        p0, p1, p2, p3, t
+                    )
+                    projected = self._interactive_project_smoothed_surface_point(
+                        curve_point
+                    )
+                    if projected is None:
+                        dense.append(None)
+                        continue
+                    timestamp = (
+                        float(raw[segment_index]["timestamp"])
+                        + (
+                            float(raw[segment_index + 1]["timestamp"])
+                            - float(raw[segment_index]["timestamp"])
+                        ) * t
+                    )
+                    dense.append({**projected, "timestamp": timestamp})
+            last = self._interactive_project_smoothed_surface_point(control[-1])
+            if last is not None:
+                dense.append({
+                    **last,
+                    "timestamp": float(raw[-1]["timestamp"]),
+                })
+            else:
+                dense.append(None)
+
+        # Split at missing or non-paintable projected surface regions. Never
+        # create a smoothed bridge across a hole or a Stage 2 excluded face.
+        runs = []
+        current_run = []
+        for item in dense:
+            if item is None or not item["paintable"]:
+                if current_run:
+                    runs.append(current_run)
+                    current_run = []
+                continue
+            point = np.asarray(item["surface_point_world"], dtype=np.float64)
+            if current_run and np.linalg.norm(
+                point - current_run[-1]["surface_point_world"]
+            ) <= 1e-10:
+                current_run[-1] = item
+            else:
+                current_run.append(item)
+        if current_run:
+            runs.append(current_run)
+
+        stored_count = 0
+        next_stroke_id = int(self._interactive_spray_stroke_id)
+        for run in runs:
+            if not run:
+                continue
+            points = np.asarray(
+                [item["surface_point_world"] for item in run],
+                dtype=np.float64,
+            )
+            if len(points) == 1:
+                distances = np.asarray([0.0], dtype=np.float64)
+            else:
+                segment_lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
+                cumulative = np.concatenate(([0.0], np.cumsum(segment_lengths)))
+                total_length = float(cumulative[-1])
+                if total_length <= 1e-10:
+                    continue
+                sample_distances = list(np.arange(
+                    0.0, total_length, spacing, dtype=np.float64
+                ))
+                if not sample_distances or total_length - sample_distances[-1] > 1e-8:
+                    sample_distances.append(total_length)
+                distances = np.asarray(sample_distances, dtype=np.float64)
+
+            if len(run) == 1:
+                pairs = [(run[0], run[0], 0.0)]
+            else:
+                pairs = []
+                for distance in distances:
+                    index = int(np.searchsorted(cumulative, distance, side="right") - 1)
+                    index = min(max(index, 0), len(run) - 2)
+                    length = float(cumulative[index + 1] - cumulative[index])
+                    fraction = (
+                        0.0 if length <= 1e-12
+                        else float((distance - cumulative[index]) / length)
+                    )
+                    pairs.append((run[index], run[index + 1], fraction))
+
+            run_has_record = False
+            for first, second, fraction in pairs:
+                surface_point = (
+                    np.asarray(first["surface_point_world"], dtype=np.float64)
+                    * (1.0 - fraction)
+                    + np.asarray(second["surface_point_world"], dtype=np.float64)
+                    * fraction
+                )
+                normal = (
+                    np.asarray(first["surface_normal_world"], dtype=np.float64)
+                    * (1.0 - fraction)
+                    + np.asarray(second["surface_normal_world"], dtype=np.float64)
+                    * fraction
+                )
+                normal_length = float(np.linalg.norm(normal))
+                if normal_length <= 1e-12:
+                    continue
+                normal /= normal_length
+                nozzle = surface_point - direction * float(
+                    self._interactive_spray_standoff
+                )
+                timestamp = (
+                    float(first["timestamp"]) * (1.0 - fraction)
+                    + float(second["timestamp"]) * fraction
+                )
+                cell_id = int(
+                    first["cell_id"] if fraction < 0.5 else second["cell_id"]
+                )
+                sample_pose = {
+                    "surface_point_world": surface_point,
+                    "surface_normal_world": normal,
+                    "nozzle_point_world": nozzle,
+                    "spray_direction_world": direction.copy(),
+                    "cell_id": cell_id,
+                    "paintable": True,
+                    "timestamp": timestamp,
+                }
+
+                # Recheck the complete sprayer envelope at the final, smoothed
+                # sample locations. A collision breaks the stroke continuity.
+                gun_actors, gun_polydata = self._interactive_build_gun_visual(
+                    nozzle, direction
+                )
+                collision = self._interactive_check_gun_collision(gun_polydata)
+                for actor in gun_actors:
+                    try:
+                        self.plotter.remove_actor(actor, render=False)
+                    except Exception:
+                        pass
+                self._interactive_spray_gun_collision = bool(collision)
+                self._interactive_spray_surface_excluded = False
+                if collision:
+                    if run_has_record:
+                        next_stroke_id += 1
+                        run_has_record = False
+                    continue
+
+                self._interactive_spray_stroke_id = next_stroke_id
+                local_pose = self._interactive_pose_to_product_frame(sample_pose)
+                self._interactive_store_record_sample(sample_pose, local_pose)
+                stored_count += 1
+                run_has_record = True
+            if run_has_record:
+                next_stroke_id += 1
+
+        self._interactive_spray_stroke_id = max(
+            int(self._interactive_spray_stroke_id), next_stroke_id - 1
+        )
+        if stored_count:
+            self._refresh_interactive_recorded_path_actor()
+        return stored_count
+
     def _interactive_begin_spray_stroke(self):
         """Start a fresh stroke exactly once when the left button goes down."""
         if self._interactive_spray_recording:
@@ -6212,6 +6473,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_start_timestamp = None
         self._interactive_spray_sampling_previous_pose = None
         self._interactive_spray_sampling_distance_accumulator = 0.0
+        self._interactive_spray_stroke_input_poses = []
 
     def _on_interactive_spray_left_press(self, interactor, event):
         if (
@@ -6338,6 +6600,8 @@ class ProductViewer(QWidget):
                 self._interactive_update_cursor(final_pose, force_record=True)
 
         self._interactive_spray_recording = False
+        if getattr(self, "_interactive_route_generation_only", False):
+            self._interactive_finalize_smoothed_spray_stroke()
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_sampling_previous_pose = None
