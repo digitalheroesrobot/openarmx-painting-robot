@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.robot_settings import (
-    DEFAULT_ROBOT_SETTINGS, save_robot_settings, validate_robot_settings,
+    save_robot_settings, validate_robot_settings,
 )
 
 
