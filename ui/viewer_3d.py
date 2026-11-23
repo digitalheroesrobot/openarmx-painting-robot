@@ -1246,6 +1246,10 @@ class ProductViewer(QWidget):
             return False
         source_ids = np.asarray([item["stroke_id"] for item in records], dtype=np.int64)
         stroke_ids = np.unique(source_ids)
+        # Compare the same recorded strokes in their original order and in
+        # optimized order using the exact same speed/delay timing model.
+        before_timing = self._build_interactive_route_timing(records)
+        optimizer_elapsed_s = 0.0
         if len(stroke_ids) > 1:
             from stages.spray_stroke_route_optimizer import optimize_stroke_order
             candidate = {
@@ -1253,11 +1257,13 @@ class ProductViewer(QWidget):
                 "spray_directions": np.asarray([item["spray_direction_product"] for item in records], dtype=float),
                 "segment_ids": source_ids,
             }
+            optimizer_started = time.perf_counter()
             optimized = optimize_stroke_order(
                 candidate,
                 orientation_weight_coordinate_units_per_rad=0.0,
                 max_2opt_passes=2 if len(stroke_ids) <= 30 else 0,
             )
+            optimizer_elapsed_s = time.perf_counter() - optimizer_started
             ordered = []
             for stroke in optimized["route_optimization"]["strokes"]:
                 indices = np.flatnonzero(source_ids == stroke["source_segment_id"])
@@ -1285,6 +1291,20 @@ class ProductViewer(QWidget):
 
         timing = self._build_interactive_route_timing(records)
         self._interactive_recorded_replay_timing = timing
+        before_seconds = float(before_timing["estimated_total_time_s"])
+        after_seconds = float(timing["estimated_total_time_s"])
+        saved_seconds = max(before_seconds - after_seconds, 0.0)
+        self._interactive_route_optimization_metrics = {
+            "before_optimization_estimated_time_s": before_seconds,
+            "after_optimization_estimated_time_s": after_seconds,
+            "estimated_time_saved_s": saved_seconds,
+            "estimated_time_saved_percent": (
+                100.0 * saved_seconds / before_seconds
+                if before_seconds > 1e-9 else 0.0
+            ),
+            "optimizer_compute_time_s": float(optimizer_elapsed_s),
+            "stroke_count": int(len(stroke_ids)),
+        }
         self.recorded_path_time_label.setText(
             f"EST. {self._format_route_time(timing['estimated_total_time_s'])}  |  "
             f"SPRAY {self._format_route_time(timing['spray_time_s'])}  |  "
@@ -6045,6 +6065,14 @@ class ProductViewer(QWidget):
                 if route_timing else None
             ),
             "route_optimization": route_optimization,
+            "route_optimization_metrics": dict(
+                getattr(self, "_interactive_route_optimization_metrics", {})
+            ),
+            "recording_elapsed_s": (
+                float(np.max([item["timestamp"] for item in records])
+                      - np.min([item["timestamp"] for item in records]))
+                if len(records) >= 2 else 0.0
+            ),
             "surface_film_thickness_field": self._interactive_export_surface_field(),
             "face_thickness_um": (
                 self._interactive_spray_face_thickness_um.copy()
