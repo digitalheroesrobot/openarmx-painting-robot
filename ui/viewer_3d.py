@@ -63,7 +63,6 @@ from PySide6.QtWidgets import (
 )
 from pyvistaqt import QtInteractor
 from vtkmodules.vtkRenderingCore import vtkCellPicker
-from vtkmodules.vtkInteractionStyle import vtkInteractorStyleUser
 
 
 def _build_spray_footprint_overlay(
@@ -3696,7 +3695,9 @@ class ProductViewer(QWidget):
         self._interactive_saved_style = style
         if style is not None:
             self._interactive_saved_style_enabled = bool(style.GetEnabled())
-        self._interactive_spray_input_style = vtkInteractorStyleUser()
+        # Keep the original camera style attached to the interactor for the
+        # entire editing session. Spray mode only disables its input callbacks.
+        self._interactive_spray_input_style = None
         self.interaction_mode_panel.show()
         self.working_distance_spin.setEnabled(True)
         factor = self._get_source_mm_factor()
@@ -6385,9 +6386,9 @@ class ProductViewer(QWidget):
         self._interactive_spray_locked_direction_world = None
         self._interactive_spray_latest_pose = None
 
-        interactor = self.plotter.iren.interactor
+        # Do not replace the interactor style. Re-enable the exact camera
+        # style captured when this editing session started.
         if self._interactive_saved_style is not None:
-            interactor.SetInteractorStyle(self._interactive_saved_style)
             self._interactive_saved_style.SetEnabled(
                 1 if self._interactive_saved_style_enabled else 0
             )
@@ -6422,14 +6423,12 @@ class ProductViewer(QWidget):
         if self._interactive_spray_mode == "spray":
             return True
 
-        interactor = self.plotter.iren.interactor
-        if self._interactive_spray_input_style is None:
-            self._interactive_spray_input_style = vtkInteractorStyleUser()
-
-        # The dedicated user style prevents VTK's camera controls from
-        # consuming mouse drags while the operator paints a route.
-        interactor.SetInteractorStyle(self._interactive_spray_input_style)
-        self._interactive_spray_input_style.SetEnabled(1)
+        # Keep the original camera style attached, but disable its observers
+        # while our higher-priority spray input observers handle the viewport.
+        # This avoids repeatedly swapping VTK interactor styles on every mode
+        # transition, which can destabilize mouse and keyboard focus.
+        if self._interactive_saved_style is not None:
+            self._interactive_saved_style.SetEnabled(0)
         self._interactive_spray_mode = "spray"
 
         self._interactive_spray_recording = False
@@ -6565,8 +6564,9 @@ class ProductViewer(QWidget):
         self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_remove_live_actors()
         interactor = self.plotter.iren.interactor
+        # The camera style was never detached; simply restore its original
+        # enabled state when the editing session ends.
         if self._interactive_saved_style is not None:
-            interactor.SetInteractorStyle(self._interactive_saved_style)
             self._interactive_saved_style.SetEnabled(
                 1 if self._interactive_saved_style_enabled else 0
             )
