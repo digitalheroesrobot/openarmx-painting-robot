@@ -111,8 +111,8 @@ class Stage3GlobalSweepTests(unittest.TestCase):
         )
 
         width = 2.0 * 100.0 * np.tan(np.deg2rad(45.0 / 2.0))
-        expected_half_overlap_spacing = min(width * 0.5, width * 0.5)
-        expected_high_overlap_spacing = min(width * 0.25, width * 0.5)
+        expected_half_overlap_spacing = width * 0.5
+        expected_high_overlap_spacing = width * 0.25
 
         self.assertAlmostEqual(
             half_overlap["sampling"]["coverage_spacing_mm"],
@@ -130,6 +130,15 @@ class Stage3GlobalSweepTests(unittest.TestCase):
         )
         self.assertEqual(
             high_overlap["sampling"]["coverage_spacing_basis"],
+            "SPRAY_FOOTPRINT_AND_OVERLAP",
+        )
+        self.assertAlmostEqual(
+            high_overlap["rasterization"]["trajectory_sample_spacing_mm"],
+            expected_high_overlap_spacing,
+            places=8,
+        )
+        self.assertEqual(
+            high_overlap["rasterization"]["trajectory_sample_spacing_basis"],
             "SPRAY_FOOTPRINT_AND_OVERLAP",
         )
         self.assertEqual(
@@ -193,6 +202,19 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             result["rasterization"]["robot_waypoint_spacing_mm"],
             2.0,
             places=8,
+        )
+        expected_spray_pitch = (
+            2.0 * 100.0 * np.tan(np.deg2rad(45.0 / 2.0)) * 0.5
+        )
+        self.assertAlmostEqual(
+            result["rasterization"]["trajectory_sample_spacing_mm"],
+            expected_spray_pitch,
+            places=8,
+        )
+        self.assertNotAlmostEqual(
+            result["rasterization"]["trajectory_sample_spacing_mm"],
+            result["rasterization"]["robot_waypoint_spacing_mm"],
+            places=6,
         )
         self.assertEqual(
             result["rasterization"]["robot_waypoint_sampling_basis"],
