@@ -536,16 +536,17 @@ class ProductViewer(QWidget):
             self._return_to_interactive_spray_mode
         )
 
-        # Exact orthographic-style views of the four principal bounding-box
-        # faces. Mouse orbit/pan/zoom remain available as before.
-        self._box_face_view_shortcuts = {}
-        for key in (Qt.Key_W, Qt.Key_A, Qt.Key_S, Qt.Key_D):
-            shortcut = QShortcut(QKeySequence(key), self)
-            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-            shortcut.activated.connect(
-                lambda view_key=key: self.set_box_face_camera_view(view_key)
-            )
-            self._box_face_view_shortcuts[key] = shortcut
+        # Hold-to-rotate camera controls, expressed in the product's
+        # current local coordinate frame. A/D: local Z, W/S: local X,
+        # Q/E: local Y. Rotation continues until the key is released.
+        self._camera_rotation_keys = set()
+        self._camera_rotation_speed_deg_s = 90.0
+        self._camera_rotation_timer = QTimer(self)
+        self._camera_rotation_timer.setInterval(16)
+        self._camera_rotation_timer.timeout.connect(
+            self._rotate_camera_while_keys_held
+        )
+        self.plotter.interactor.installEventFilter(self)
         self._interactive_spray_middle_press_observer_id = interactor.AddObserver(
             "MiddleButtonPressEvent", self._on_interactive_spray_middle_press, 3.0
         )
@@ -718,6 +719,101 @@ class ProductViewer(QWidget):
         self.hook_compatible_count_label = QLabel("0 compatible holes")
         row.addWidget(self.hook_compatible_count_label)
         return panel
+
+    def eventFilter(self, watched, event):
+        """Capture held camera-rotation keys from the 3D viewport."""
+        if watched is self.plotter.interactor:
+            if event.type() == QEvent.Type.KeyPress:
+                key = event.key()
+                if key in (
+                    Qt.Key_A, Qt.Key_D, Qt.Key_W, Qt.Key_S,
+                    Qt.Key_Q, Qt.Key_E,
+                ):
+                    if not event.isAutoRepeat():
+                        self._camera_rotation_keys.add(key)
+                        if not self._camera_rotation_timer.isActive():
+                            self._camera_rotation_timer.start()
+                    return True
+            elif event.type() == QEvent.Type.KeyRelease:
+                key = event.key()
+                if key in (
+                    Qt.Key_A, Qt.Key_D, Qt.Key_W, Qt.Key_S,
+                    Qt.Key_Q, Qt.Key_E,
+                ):
+                    if not event.isAutoRepeat():
+                        self._camera_rotation_keys.discard(key)
+                        if not self._camera_rotation_keys:
+                            self._camera_rotation_timer.stop()
+                    return True
+        return super().eventFilter(watched, event)
+
+    def _rotate_camera_while_keys_held(self):
+        """Orbit the camera continuously around product-local X/Y/Z axes."""
+        if not self._camera_rotation_keys or self.current_mesh is None:
+            if not self._camera_rotation_keys:
+                self._camera_rotation_timer.stop()
+            return
+
+        transform = np.asarray(self._actor_matrix_array(), dtype=np.float64)
+        basis = transform[:3, :3].copy()
+        scales = np.linalg.norm(basis, axis=0)
+        if not np.all(np.isfinite(scales)) or np.any(scales <= 1e-12):
+            return
+        basis /= scales[np.newaxis, :]
+
+        # Use a fixed timer-step duration so held-key motion is predictable.
+        dt = self._camera_rotation_timer.interval() / 1000.0
+        angle_step = math.radians(self._camera_rotation_speed_deg_s * dt)
+        rotations = (
+            (Qt.Key_A, 2, -1.0),
+            (Qt.Key_D, 2, 1.0),
+            (Qt.Key_W, 0, 1.0),
+            (Qt.Key_S, 0, -1.0),
+            (Qt.Key_Q, 1, -1.0),
+            (Qt.Key_E, 1, 1.0),
+        )
+
+        camera = self.plotter.camera
+        focal = np.asarray(camera.focal_point, dtype=np.float64)
+        position = np.asarray(camera.position, dtype=np.float64)
+        up = np.asarray(camera.up, dtype=np.float64)
+        offset = position - focal
+        changed = False
+
+        for key, local_axis_index, sign in rotations:
+            if key not in self._camera_rotation_keys:
+                continue
+            axis = basis[:, local_axis_index]
+            axis_norm = float(np.linalg.norm(axis))
+            if not np.isfinite(axis_norm) or axis_norm <= 1e-12:
+                continue
+            axis = axis / axis_norm
+            angle = sign * angle_step
+            c = math.cos(angle)
+            sn = math.sin(angle)
+            cross = np.array([
+                [0.0, -axis[2], axis[1]],
+                [axis[2], 0.0, -axis[0]],
+                [-axis[1], axis[0], 0.0],
+            ], dtype=np.float64)
+            rotation = (
+                np.eye(3, dtype=np.float64) * c
+                + (1.0 - c) * np.outer(axis, axis)
+                + sn * cross
+            )
+            offset = rotation @ offset
+            up = rotation @ up
+            changed = True
+
+        if not changed:
+            return
+        camera.position = tuple((focal + offset).tolist())
+        camera.focal_point = tuple(focal.tolist())
+        up_norm = float(np.linalg.norm(up))
+        if np.isfinite(up_norm) and up_norm > 1e-12:
+            camera.up = tuple((up / up_norm).tolist())
+        self.plotter.renderer.ResetCameraClippingRange()
+        self.plotter.render()
 
     def set_box_face_camera_view(self, key):
         """Aim the camera square-on at one principal face of the product box.
