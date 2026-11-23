@@ -35,10 +35,7 @@ from PySide6.QtWidgets import (
 from core.step_loader import load_step, convert_step_report_units
 from core.result_manager import ResultManager
 from core.geometry_analyzer import detect_hole_candidates
-from core.coating_process import (
-    calculate_robot_waypoint_spacing_mm,
-    load_coating_process,
-)
+from core.coating_process import load_coating_process
 
 from stages.stage1_geometry import execute_stage1
 from stages.stage2_surface_identification import execute_stage2
@@ -2428,18 +2425,11 @@ class MainWindow(QMainWindow):
     def _get_current_spray_parameters(self):
         profile = dict(self.sprayer_profile)
         coating_process = dict(self.coating_process)
-        robot_waypoint_spacing_mm = calculate_robot_waypoint_spacing_mm(
-            coating_process["base_travel_speed_mm_s"],
-            coating_process["robot_control_frequency_hz"],
-        )
         return {
             "standoff_mm": float(profile["standoff_mm"]),
             # Stage 3's surface coverage grid uses the spray footprint and
             # overlap; this configured value remains its fallback only.
             "sampling_spacing_mm": float(profile["sampling_spacing_mm"]),
-            # Interactive robot route samples are placed once per control
-            # cycle at the configured base speed.
-            "robot_waypoint_spacing_mm": float(robot_waypoint_spacing_mm),
             "spray_angle_deg": float(profile.get("spray_cone_angle_deg", 0.0)),
             "sprayer_profile": profile,
             "coating_process": coating_process,
@@ -2495,26 +2485,8 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted or dialog.selected_process is None:
             return
         self.coating_process = dict(dialog.selected_process)
-        motion_keys = (
-            "base_travel_speed_mm_s",
-            "robot_control_frequency_hz",
-            "min_travel_speed_mm_s",
-            "max_travel_acceleration_mm_s2",
-        )
-        generated_process = (
-            self.current_stage3_parameters.get("coating_process", {})
-            if isinstance(self.current_stage3_parameters, dict)
-            else {}
-        )
-        timing_stale = any(
-            float(generated_process.get(key, self.coating_process.get(key, 0.0)))
-            != float(self.coating_process.get(key, 0.0))
-            for key in motion_keys
-        )
-        self.viewer.update_coating_process_preview(
-            self.coating_process, timing_stale=timing_stale
-        )
-        if not timing_stale and self.current_stage3_parameters is not None:
+        self.viewer.update_coating_process_preview(self.coating_process)
+        if self.current_stage3_parameters is not None:
             self.current_stage3_parameters["coating_process"] = dict(self.coating_process)
             if isinstance(self.current_stage3_result, dict):
                 trajectory = self.current_stage3_result.get("trajectory", {})
@@ -2525,8 +2497,7 @@ class MainWindow(QMainWindow):
         self.coating_process_label.setText(
             f"PROCESS: {self.coating_process.get('name', 'Unnamed')}  |  "
             f"TARGET: {self.coating_process['target_dry_film_thickness_um']:.1f} µm  |  "
-            f"FLOW: {self.coating_process['fluid_flow_ml_min']:.1f} ml/min  |  "
-            f"ROBOT: {self.coating_process['robot_control_frequency_hz']:.1f} Hz"
+            f"FLOW: {self.coating_process['fluid_flow_ml_min']:.1f} ml/min"
         )
         self.status_bar.showMessage(
             f"COATING PROCESS LOADED: {self.coating_process['name']}"
@@ -2552,17 +2523,8 @@ class MainWindow(QMainWindow):
                 ):
                     return False
             elif key == "coating_process":
-                motion_keys = (
-                    "base_travel_speed_mm_s",
-                    "robot_control_frequency_hz",
-                    "min_travel_speed_mm_s",
-                    "max_travel_acceleration_mm_s2",
-                )
-                if any(
-                    value.get(motion_key) != previous[key].get(motion_key)
-                    for motion_key in motion_keys
-                ):
-                    return False
+                # Coating material settings do not alter geometric spray spacing.
+                continue
             elif value != previous[key]:
                 return False
 
@@ -4168,7 +4130,11 @@ class MainWindow(QMainWindow):
             self.viewer.start_interactive_spray_path(
                 standoff=float(parameters["standoff_mm"]) / mm_per_unit,
                 cone_angle_deg=float(footprint["included_angle_deg"]),
-                sampling_spacing=float(parameters["robot_waypoint_spacing_mm"]) / mm_per_unit,
+                sampling_spacing=(
+                    float(footprint["nominal_track_spacing_mm"])
+                    if float(footprint["nominal_track_spacing_mm"]) > 0.0
+                    else float(parameters["sampling_spacing_mm"])
+                ) / mm_per_unit,
                 sprayer_profile=parameters["sprayer_profile"],
                 coating_process=parameters["coating_process"],
                 excluded_face_mask=(
