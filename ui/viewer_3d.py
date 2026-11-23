@@ -999,6 +999,17 @@ class ProductViewer(QWidget):
         )
         row.addWidget(self.spray_perpendicular_status)
 
+        self.camera_orbit_angle_status = QLabel("VIEW YAW: --° | PITCH: --°")
+        self.camera_orbit_angle_status.setMinimumWidth(190)
+        self.camera_orbit_angle_status.setToolTip(
+            "Live camera orbit angles relative to the product coordinate frame. "
+            "These values change during right-button camera orbit; the product pose is unchanged."
+        )
+        self.camera_orbit_angle_status.setStyleSheet(
+            "color: #F6C66A; font-size: 9px; font-weight: 700; padding-left: 6px;"
+        )
+        row.addWidget(self.camera_orbit_angle_status)
+
         self.interactive_paint_color_view_button = QPushButton("ACTUAL PAINT COLOR")
         self.interactive_paint_color_view_button.setCheckable(True)
         self.interactive_paint_color_view_button.setToolTip(
@@ -5150,6 +5161,33 @@ class ProductViewer(QWidget):
         else:
             self.plotter.render()
 
+    def _update_camera_orbit_angle_readout(self, pivot, local_x, local_z):
+        """Display camera azimuth/elevation relative to the product frame."""
+        if not hasattr(self, "camera_orbit_angle_status"):
+            return
+        camera_position = np.asarray(self.plotter.camera.GetPosition(), dtype=np.float64)
+        offset = camera_position - np.asarray(pivot, dtype=np.float64)
+        distance = float(np.linalg.norm(offset))
+        x_axis = np.asarray(local_x, dtype=np.float64).copy()
+        z_axis = np.asarray(local_z, dtype=np.float64).copy()
+        x_axis /= max(float(np.linalg.norm(x_axis)), 1e-12)
+        z_axis /= max(float(np.linalg.norm(z_axis)), 1e-12)
+        if distance <= 1e-12:
+            return
+        direction = offset / distance
+        x_component = float(np.dot(direction, x_axis))
+        z_component = float(np.clip(np.dot(direction, z_axis), -1.0, 1.0))
+        y_axis = np.cross(z_axis, x_axis)
+        y_axis /= max(float(np.linalg.norm(y_axis)), 1e-12)
+        y_component = float(np.dot(direction, y_axis))
+        yaw = math.degrees(math.atan2(y_component, x_component))
+        pitch = math.degrees(math.atan2(
+            z_component, math.hypot(x_component, y_component)
+        ))
+        self.camera_orbit_angle_status.setText(
+            f"VIEW YAW: {yaw:+.1f}° | PITCH: {pitch:+.1f}°"
+        )
+
     def _rotate_camera_from_spray_drag(self, interactor):
         """Orbit the camera around the product using the product's local axes."""
         current = tuple(int(value) for value in interactor.GetEventPosition())
@@ -5218,6 +5256,7 @@ class ProductViewer(QWidget):
         camera.SetViewUp(*view_up.tolist())
         camera.OrthogonalizeViewUp()
         self.plotter.reset_camera_clipping_range()
+        self._update_camera_orbit_angle_readout(pivot, local_x, local_z)
         self.plotter.render()
 
     def _on_interactive_spray_mouse_move(self, interactor, event):
