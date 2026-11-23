@@ -2629,7 +2629,9 @@ class ProductViewer(QWidget):
         self.face_status_labels = None
         self.face_surface_types = None
         if excluded_face_mask is None:
-            self._interactive_spray_excluded_face_mask = np.zeros(
+            # Fail closed: Stage 3 must never silently treat an unclassified
+            # product as fully paintable.
+            self._interactive_spray_excluded_face_mask = np.ones(
                 len(self.current_mesh.faces), dtype=bool
             )
         else:
@@ -3320,6 +3322,21 @@ class ProductViewer(QWidget):
         ids = np.asarray(ids, dtype=np.int64).reshape(-1)
         if ids.size == 0:
             return
+        excluded_mask = self._interactive_spray_excluded_face_mask
+        if (
+            excluded_mask is None
+            or np.asarray(excluded_mask).shape != (len(self.current_mesh.faces),)
+        ):
+            return
+        ids = ids[
+            (ids >= 0)
+            & (ids < len(excluded_mask))
+        ]
+        if not ids.size:
+            return
+        ids = np.unique(ids[~excluded_mask[ids]])
+        if not ids.size:
+            return
 
         timestamp = float(pose["timestamp"])
         nozzle_world = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
@@ -3869,6 +3886,12 @@ class ProductViewer(QWidget):
         face_ids = np.asarray(brep_context["triangle_face_ids"], dtype=np.int64)
         triangle_uvs = np.asarray(brep_context["triangle_uvs"], dtype=np.float64)
         uv_valid = np.asarray(brep_context["triangle_uv_valid"], dtype=bool)
+        excluded_mask = np.asarray(
+            self._interactive_spray_excluded_face_mask,
+            dtype=bool,
+        )
+        if excluded_mask.shape != (len(mesh.faces),):
+            return
         selected = np.unique(np.asarray(ids, dtype=np.int64))
         selected = selected[(selected >= 0) & (selected < len(mesh.faces))]
         # The ray footprint can intersect multiple triangles. Never allow
@@ -3881,12 +3904,6 @@ class ProductViewer(QWidget):
         # Build inexpensive, tessellation-derived surface samples once per mesh.
         # The old path evaluated OpenCascade at hundreds/thousands of UV texels
         # during every mouse update; this cache eliminates those calls entirely.
-        excluded_mask = np.asarray(
-            self._interactive_spray_excluded_face_mask,
-            dtype=bool,
-        )
-        if excluded_mask.shape != (len(mesh.faces),):
-            return
         cache = getattr(self, "_interactive_brep_surface_sample_cache", None)
         cache_key = id(mesh)
         cache_matches = (
