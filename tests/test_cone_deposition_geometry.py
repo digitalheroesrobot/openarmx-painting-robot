@@ -3,7 +3,7 @@ import numpy as np
 from core.coating_deposition import calculate_cone_deposition_step
 
 
-def _run(nozzle_x, points, dt=0.1, speed=100.0):
+def _run(nozzle_x, points, dt=0.1):
     points = np.asarray(points, dtype=float)
     return calculate_cone_deposition_step(
         surface_points_mm=points,
@@ -17,7 +17,6 @@ def _run(nozzle_x, points, dt=0.1, speed=100.0):
         transfer_efficiency_percent=100.0,
         volume_solids_percent=100.0,
         number_of_coats=1,
-        travel_speed_mm_s=speed,
         radial_alpha=2.0,
         radial_beta=2.0,
         core_deposition_fraction=0.88,
@@ -53,12 +52,12 @@ def test_larger_standoff_spreads_the_same_flow_over_a_larger_area():
     assert far_thickness < near_thickness
 
 
-def test_shorter_interval_for_higher_travel_speed_deposits_less_paint():
-    slow = _run(0.0, [[100.0, 0.0, 0.0]], dt=0.20, speed=100.0)
-    fast = _run(0.0, [[100.0, 0.0, 0.0]], dt=0.10, speed=200.0)
+def test_recorded_interval_duration_controls_deposited_paint():
+    short_interval = _run(0.0, [[100.0, 0.0, 0.0]], dt=0.10)
+    long_interval = _run(0.0, [[100.0, 0.0, 0.0]], dt=0.20)
 
-    assert float(fast["deposited_volume_mm3"][0]) < float(
-        slow["deposited_volume_mm3"][0]
+    assert float(long_interval["deposited_volume_mm3"][0]) > float(
+        short_interval["deposited_volume_mm3"][0]
     )
 
 
