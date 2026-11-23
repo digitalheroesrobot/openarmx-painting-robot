@@ -39,6 +39,7 @@ from core.coating_process import (
     calculate_robot_waypoint_spacing_mm,
     load_coating_process,
 )
+from core.robot_settings import load_robot_settings
 
 from stages.stage1_geometry import execute_stage1
 from stages.stage2_surface_identification import execute_stage2
@@ -50,6 +51,7 @@ from stages.stage3_spray_trajectory import (
 
 from ui.viewer_3d import ProductViewer
 from ui.coating_process_settings import CoatingProcessSettingsDialog
+from ui.robot_settings import RobotSettingsDialog
 from ui.sprayer_settings import (
     SprayerSettingsDialog,
     load_active_sprayer_profile_name,
@@ -361,6 +363,15 @@ class MainWindow(QMainWindow):
         self.coating_process = load_coating_process(
             self.coating_process_config_path, self.sprayer_profile
         )
+        self.robot_settings_config_path = (
+            self.project_root / "config" / "robot_settings.json"
+        )
+        self.robot_settings = load_robot_settings(
+            self.robot_settings_config_path, self.coating_process
+        )
+        # Keep legacy process consumers compatible while Robot Settings owns
+        # the authoritative robot motion values.
+        self.coating_process.update(self.robot_settings)
 
         self.result_manager = ResultManager(self.project_root)
 
@@ -933,10 +944,27 @@ class MainWindow(QMainWindow):
         self.sprayer_profile_label.setWordWrap(True)
         layout.addWidget(self.sprayer_profile_label)
 
+        self.robot_settings_button = QPushButton("ROBOT SETTINGS")
+        self.robot_settings_button.setObjectName("PrimaryButton")
+        self.robot_settings_button.setToolTip(
+            "Configure robot painting speed, controller frequency and motion limits."
+        )
+        self.robot_settings_button.clicked.connect(self._open_robot_settings)
+        layout.addWidget(self.robot_settings_button)
+
+        self.robot_settings_label = QLabel(
+            f"ROBOT: {self.robot_settings.get('name', 'default robot')}  |  "
+            f"{self.robot_settings['base_travel_speed_mm_s']:.1f} mm/s  |  "
+            f"{self.robot_settings['robot_control_frequency_hz']:.1f} Hz"
+        )
+        self.robot_settings_label.setObjectName("Muted")
+        self.robot_settings_label.setWordWrap(True)
+        layout.addWidget(self.robot_settings_label)
+
         self.coating_process_button = QPushButton("COATING PROCESS PARAMETERS")
         self.coating_process_button.setObjectName("PrimaryButton")
         self.coating_process_button.setToolTip(
-            "Configure target dry-film thickness, paint flow, transfer efficiency, solids and process motion."
+            "Configure paint flow, transfer efficiency, solids and target dry-film thickness."
         )
         self.coating_process_button.clicked.connect(self._open_coating_process_settings)
         layout.addWidget(self.coating_process_button)
@@ -2484,6 +2512,57 @@ class MainWindow(QMainWindow):
         )
         self._on_spray_parameter_changed()
 
+    def _open_robot_settings(self):
+        if self._operation_running:
+            return
+        dialog = RobotSettingsDialog(
+            config_path=self.robot_settings_config_path,
+            current_settings=self.robot_settings,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.Accepted or dialog.selected_settings is None:
+            return
+        self.robot_settings = dict(dialog.selected_settings)
+        self.coating_process.update(self.robot_settings)
+        motion_keys = (
+            "base_travel_speed_mm_s",
+            "robot_control_frequency_hz",
+            "min_travel_speed_mm_s",
+            "max_travel_acceleration_mm_s2",
+            "max_linear_speed_mm_s",
+            "max_angular_speed_deg_s",
+        )
+        generated_process = (
+            self.current_stage3_parameters.get("coating_process", {})
+            if isinstance(self.current_stage3_parameters, dict)
+            else {}
+        )
+        timing_stale = any(
+            float(generated_process.get(key, self.coating_process.get(key, 0.0)))
+            != float(self.coating_process.get(key, 0.0))
+            for key in motion_keys
+        )
+        self.viewer.update_coating_process_preview(
+            self.coating_process, timing_stale=timing_stale
+        )
+        if not timing_stale and self.current_stage3_parameters is not None:
+            self.current_stage3_parameters["coating_process"] = dict(self.coating_process)
+            if isinstance(self.current_stage3_result, dict):
+                trajectory = self.current_stage3_result.get("trajectory", {})
+                if isinstance(trajectory, dict):
+                    parameters = dict(trajectory.get("parameters", {}))
+                    parameters["coating_process"] = dict(self.coating_process)
+                    trajectory["parameters"] = parameters
+        self.robot_settings_label.setText(
+            f"ROBOT: {self.robot_settings['name']}  |  "
+            f"{self.robot_settings['base_travel_speed_mm_s']:.1f} mm/s  |  "
+            f"{self.robot_settings['robot_control_frequency_hz']:.1f} Hz"
+        )
+        self.status_bar.showMessage(
+            f"ROBOT SETTINGS LOADED: {self.robot_settings['name']}"
+        )
+        self._on_spray_parameter_changed()
+
     def _open_coating_process_settings(self):
         if self._operation_running:
             return
@@ -2525,8 +2604,7 @@ class MainWindow(QMainWindow):
         self.coating_process_label.setText(
             f"PROCESS: {self.coating_process.get('name', 'Unnamed')}  |  "
             f"TARGET: {self.coating_process['target_dry_film_thickness_um']:.1f} µm  |  "
-            f"FLOW: {self.coating_process['fluid_flow_ml_min']:.1f} ml/min  |  "
-            f"ROBOT: {self.coating_process['robot_control_frequency_hz']:.1f} Hz"
+            f"FLOW: {self.coating_process['fluid_flow_ml_min']:.1f} ml/min"
         )
         self.status_bar.showMessage(
             f"COATING PROCESS LOADED: {self.coating_process['name']}"
