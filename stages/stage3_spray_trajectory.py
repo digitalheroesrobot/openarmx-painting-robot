@@ -10,7 +10,10 @@ import numpy as np
 import trimesh
 
 from core.result_manager import ResultManager
-from core.coating_process import validate_coating_process
+from core.coating_process import (
+    calculate_robot_waypoint_spacing_mm,
+    validate_coating_process,
+)
 from stages.human_like_spray_planner import (
     SweepPlanningConfig,
     plan_human_like_sweeps,
@@ -4274,6 +4277,14 @@ def generate_spray_trajectory(
         sampling_spacing_mm,
         source_unit,
     )
+    robot_waypoint_spacing_mm = calculate_robot_waypoint_spacing_mm(
+        coating_process_data["base_travel_speed_mm_s"],
+        coating_process_data["robot_control_frequency_hz"],
+    )
+    robot_waypoint_spacing_coordinate_units = _mm_to_coordinate_units(
+        robot_waypoint_spacing_mm,
+        source_unit,
+    )
 
     # The active sprayer profile defines the nominal footprint. Surface
     # sampling is then driven by footprint diameter and overlap, not by an
@@ -4432,8 +4443,11 @@ def generate_spray_trajectory(
         effective_lane_spacing_mm, source_unit
     )
     sweep_config = SweepPlanningConfig(
+        # Lateral pass pitch comes from spray footprint and overlap. Samples
+        # along each generated lane follow the robot's distance per control
+        # cycle, based on base travel speed / control frequency.
         lane_spacing=path_track_spacing_units,
-        sample_spacing=spacing_coordinate_units,
+        sample_spacing=robot_waypoint_spacing_coordinate_units,
         max_gap_factor=2.75,
         tangent_blend=0.35,
     )
@@ -4812,6 +4826,10 @@ def generate_spray_trajectory(
             "sampling_spacing_mm": sampling_spacing_mm,
             "effective_coverage_sampling_spacing_mm": coverage_spacing_mm,
             "coverage_spacing_basis": coverage_spacing_basis,
+            "robot_waypoint_spacing_mm": robot_waypoint_spacing_mm,
+            "robot_control_frequency_hz": float(
+                coating_process_data["robot_control_frequency_hz"]
+            ),
             "spray_angle_deg": spray_angle_deg,
             "sprayer_profile": profile_data,
             "coating_process": coating_process_data,
@@ -4889,6 +4907,8 @@ def generate_spray_trajectory(
             "nearest_neighbor_fallback_patch_ids": ordered.get("nearest_neighbor_fallback_patch_ids", []),
             "lane_spacing_mm": effective_lane_spacing_mm,
             "surface_sample_spacing_mm": coverage_spacing_mm,
+            "robot_waypoint_spacing_mm": robot_waypoint_spacing_mm,
+            "robot_waypoint_spacing_coordinate_units": robot_waypoint_spacing_coordinate_units,
             "coverage_spacing_basis": coverage_spacing_basis,
             "nominal_footprint_track_spacing_mm": path_track_spacing_mm,
             "lane_spacing_coordinate_units": path_track_spacing_units,
