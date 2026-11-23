@@ -5202,7 +5202,6 @@ class ProductViewer(QWidget):
                 )
             if recorded_new_pose:
                 self._interactive_apply_paint_deposition(patch, pose)
-                self._interactive_refresh_paint_visual(render=False)
 
         # Keep full-rate trajectory/deposition sampling above, but cap only
         # actor rebuilding and rendering to 30 Hz for interactive responsiveness.
@@ -5215,6 +5214,8 @@ class ProductViewer(QWidget):
         self._interactive_spray_last_cursor_update_time = now
         self._interactive_remove_live_actors()
         self._interactive_spray_live_actors.extend(gun_actors)
+        if recorded_new_pose:
+            self._interactive_refresh_paint_visual(render=False)
 
         if footprints and footprints[0][0].n_cells:
             boundary = footprints[0][1]
