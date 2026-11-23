@@ -168,6 +168,36 @@ class Stage3GlobalSweepTests(unittest.TestCase):
             width * 0.5 + 1e-8,
         )
 
+    def test_robot_waypoint_spacing_uses_speed_and_control_frequency(self):
+        result = generate_spray_trajectory(
+            mesh=self.mesh.copy(),
+            face_status_labels=self.status.copy(),
+            patch_labels=np.asarray([7, 9], dtype=np.int64),
+            standoff_mm=100.0,
+            sampling_spacing_mm=10.0,
+            spray_angle_deg=45.0,
+            coordinate_unit="mm",
+            sprayer_profile=self.profile.copy(),
+            coating_process={
+                "base_travel_speed_mm_s": 240.0,
+                "robot_control_frequency_hz": 120.0,
+            },
+        )
+        self.assertAlmostEqual(
+            result["parameters"]["robot_waypoint_spacing_mm"],
+            2.0,
+            places=8,
+        )
+        self.assertAlmostEqual(
+            result["rasterization"]["robot_waypoint_spacing_mm"],
+            2.0,
+            places=8,
+        )
+        self.assertEqual(
+            result["rasterization"]["robot_waypoint_sampling_basis"],
+            "BASE_TRAVEL_SPEED_DIVIDED_BY_ROBOT_CONTROL_FREQUENCY",
+        )
+
     def test_legacy_16_column_data_contract_is_unchanged(self):
         result = self._generate([7, 9])
         trajectory = result
