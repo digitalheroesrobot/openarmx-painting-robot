@@ -1685,11 +1685,10 @@ class ProductViewer(QWidget):
         self.plotter.render()
 
     def _integrate_interactive_replay_interval(self, start_s, end_s):
-        """Integrate every replay timeline interval, including edges crossed between UI ticks.
+        """Deposit at fixed spatial samples along the recorded spray route.
 
-        The viewport timer is only a presentation clock. It must never decide
-        which spray segments receive coating, because short edges can be
-        shorter than one timer interval and would otherwise be skipped.
+        The UI timer is only a clock. Every edge is divided once by distance,
+        and those immutable sample times are consumed across timer callbacks.
         """
         timeline = getattr(self, "_interactive_recorded_replay_timeline", [])
         end_times = np.asarray(
@@ -1701,10 +1700,17 @@ class ProductViewer(QWidget):
 
         cursor = max(float(start_s), 0.0)
         target = min(float(end_s), float(timeline[-1]["end_s"]))
-        max_step_s = 0.04
         epsilon = 1e-10
+        source_factor = float(self._get_source_mm_factor() or 1.0)
+        spacing_mm = max(
+            float(self._interactive_spray_sampling_spacing) * source_factor,
+            1e-6,
+        )
+
         while cursor < target - epsilon:
-            edge_index = int(np.searchsorted(end_times, cursor + epsilon, side="right"))
+            edge_index = int(np.searchsorted(
+                end_times, cursor + epsilon, side="right"
+            ))
             if edge_index >= len(timeline):
                 break
             edge = timeline[edge_index]
@@ -1722,40 +1728,34 @@ class ProductViewer(QWidget):
                 cursor = interval_end
                 continue
 
-            step_count = max(
-                1, int(math.ceil((interval_end - cursor) / max_step_s))
+            first_record = edge["start_record"]
+            last_record = edge["end_record"]
+            p0 = np.asarray(first_record["nozzle_point_world"], dtype=np.float64)
+            p1 = np.asarray(last_record["nozzle_point_world"], dtype=np.float64)
+            edge_distance_mm = float(np.linalg.norm(p1 - p0)) * source_factor
+            spatial_steps = max(1, int(math.ceil(edge_distance_mm / spacing_mm)))
+            edge_duration = max(edge_end - edge_start, 1e-12)
+            sample_duration = edge_duration / spatial_steps
+
+            if self._interactive_spray_previous_nozzle_world is None:
+                self._interactive_spray_previous_nozzle_world = p0.copy()
+                self._interactive_spray_last_deposition_timestamp = time.monotonic()
+
+            # Process only fixed sample endpoints whose scheduled times fall
+            # inside this UI interval. No sample is shifted by timer jitter.
+            first_sample = max(
+                1,
+                int(math.floor((cursor - edge_start) / sample_duration + 1e-9)) + 1,
             )
-            step_duration = (interval_end - cursor) / step_count
-            for step_index in range(step_count):
-                step_start = cursor + step_index * step_duration
-                step_end = (
-                    interval_end
-                    if step_index == step_count - 1
-                    else cursor + (step_index + 1) * step_duration
-                )
-                edge_duration = max(edge_end - edge_start, 1e-9)
-                start_fraction = np.clip(
-                    (step_start - edge_start) / edge_duration, 0.0, 1.0
-                )
-                end_fraction = np.clip(
-                    (step_end - edge_start) / edge_duration, 0.0, 1.0
-                )
-                start_pose = self._interpolate_replay_record(
-                    edge["start_record"], edge["end_record"], start_fraction
-                )
+            last_sample = min(
+                spatial_steps,
+                int(math.floor((interval_end - edge_start) / sample_duration + 1e-9)),
+            )
+            for sample_index in range(first_sample, last_sample + 1):
+                fraction = float(sample_index) / float(spatial_steps)
                 pose = self._interpolate_replay_record(
-                    edge["start_record"], edge["end_record"], end_fraction
+                    first_record, last_record, fraction
                 )
-
-                # Seed the physical travel interval at the exact start of a
-                # spray-on edge. This avoids dropping the first deposition
-                # interval of every stroke.
-                if self._interactive_spray_previous_nozzle_world is None:
-                    self._interactive_spray_previous_nozzle_world = np.asarray(
-                        start_pose["nozzle_point_world"], dtype=np.float64
-                    ).copy()
-                    self._interactive_spray_last_deposition_timestamp = time.monotonic()
-
                 self._interactive_remove_live_actors()
                 gun_actors, gun_polydata = self._interactive_build_gun_visual(
                     pose["nozzle_point_world"], pose["spray_direction_world"]
@@ -1766,7 +1766,7 @@ class ProductViewer(QWidget):
                 )
                 self._interactive_add_replay_cone_visual(pose)
                 self._interactive_replay_deposition_step(
-                    pose, float(step_end - step_start)
+                    pose, float(sample_duration)
                 )
             cursor = interval_end
 
@@ -3307,12 +3307,7 @@ class ProductViewer(QWidget):
             sampling_spacing = max(float(standoff) * 0.025, 1e-3)
         if not np.isfinite(sampling_spacing) or sampling_spacing <= 0.0:
             raise ValueError("Spray sampling spacing must be a positive finite value.")
-        # Cap the user-configured spacing to a fine spatial interval. This
-        # prevents sparse pose records from leaving visible gaps on replay.
-        sampling_spacing = min(
-            float(sampling_spacing),
-            max(float(standoff) * 0.005, 1e-3),
-        )
+        sampling_spacing = float(sampling_spacing)
         if self._interactive_spray_active:
             return
 
@@ -3408,6 +3403,8 @@ class ProductViewer(QWidget):
         self._interactive_spray_standoff = float(standoff)
         self._interactive_spray_cone_angle_deg = float(cone_angle_deg)
         self._interactive_spray_sampling_spacing = float(sampling_spacing)
+        self._interactive_spray_sampling_previous_pose = None
+        self._interactive_spray_sampling_distance_accumulator = 0.0
         self._interactive_sprayer_profile = dict(sprayer_profile or {})
         try:
             tail_sigma_fraction = max(
@@ -4113,12 +4110,12 @@ class ProductViewer(QWidget):
         if duration_s is None:
             if not np.isfinite(raw_dt) or raw_dt <= 0.0:
                 return
-            dt = min(raw_dt, 0.10)
+            dt = raw_dt
         else:
             dt = float(duration_s)
             if not np.isfinite(dt) or dt <= 0.0:
                 return
-            dt = min(dt, 0.10)
+            # Keep the exact spatial-sample interval used by the replay clock.
         source_factor = self._get_source_mm_factor()
         if source_factor is None:
             source_factor = 1.0
@@ -5435,7 +5432,7 @@ class ProductViewer(QWidget):
             "font-weight: 700;"
         )
 
-    def _interactive_update_cursor(self, pose):
+    def _interactive_update_cursor(self, pose, force_record=False):
         # Record and deposit from every valid mouse sample. Only the expensive
         # 3D cursor visualization is throttled; applying the old 30 Hz limit to
         # this entire method silently discarded intermediate spray positions.
@@ -5474,24 +5471,59 @@ class ProductViewer(QWidget):
             surface=self._interactive_spray_surface,
             locator=self._interactive_spray_locator,
         )
-        recorded_new_pose = False
+        recorded_samples = []
         if footprints and footprints[0][0].n_cells:
             patch, boundary = footprints[0]
             patch.points = (
                 np.asarray(patch.points) @ self._interactive_spray_transform[:3, :3].T
                 + self._interactive_spray_transform[:3, 3]
             )
-            # The persistent paint field is the authoritative coating
-            # visualization. Do not add a coincident translucent surface.
-            if (
-                self._interactive_spray_recording
-                and not spray_blocked
-            ):
-                recorded_new_pose = self._interactive_append_record(
-                    pose, local_pose
+            # Generate and coat every fixed-distance sample. The cursor event
+            # rate is deliberately not used as the trajectory spacing.
+            if self._interactive_spray_recording and not spray_blocked:
+                recorded_samples = self._interactive_append_record(
+                    pose, local_pose, force=bool(force_record)
                 )
-            if recorded_new_pose:
-                self._interactive_apply_paint_deposition(patch, pose)
+                for sample_pose, sample_local in recorded_samples:
+                    sample_footprints = _build_spray_footprint_overlay(
+                        self.current_mesh,
+                        sample_local["nozzle_point"].reshape(1, 3),
+                        sample_local["spray_direction"].reshape(1, 3),
+                        self._interactive_spray_paint_footprint_angle_deg,
+                        rays_per_ring=8,
+                        radial_rings=(0.40, 0.75, 1.0),
+                        surface=self._interactive_spray_surface,
+                        locator=self._interactive_spray_locator,
+                    )
+                    if not sample_footprints or not sample_footprints[0][0].n_cells:
+                        continue
+                    sample_patch = sample_footprints[0][0]
+                    sample_patch.points = (
+                        np.asarray(sample_patch.points)
+                        @ self._interactive_spray_transform[:3, :3].T
+                        + self._interactive_spray_transform[:3, 3]
+                    )
+                    sample_gun_actors, sample_gun_polydata = self._interactive_build_gun_visual(
+                        sample_pose["nozzle_point_world"],
+                        sample_pose["spray_direction_world"],
+                    )
+                    self._interactive_spray_gun_collision = (
+                        self._interactive_check_gun_collision(sample_gun_polydata)
+                    )
+                    self._interactive_spray_surface_excluded = not bool(
+                        sample_pose.get("paintable", True)
+                    )
+                    self._interactive_apply_paint_deposition(
+                        sample_patch, sample_pose
+                    )
+                    for sample_actor in sample_gun_actors:
+                        try:
+                            self.plotter.remove_actor(sample_actor, render=False)
+                        except Exception:
+                            pass
+            recorded_new_pose = bool(recorded_samples)
+        else:
+            recorded_new_pose = False
 
         # Keep full-rate trajectory/deposition sampling above, but cap only
         # actor rebuilding and rendering to 30 Hz for interactive responsiveness.
@@ -5767,21 +5799,42 @@ class ProductViewer(QWidget):
 
         self.plotter.render()
 
-    def _interactive_append_record(self, pose, local_pose=None):
-        if local_pose is None:
-            local_pose = self._interactive_pose_to_product_frame(pose)
-        if self._interactive_spray_records:
-            previous = self._interactive_spray_records[-1]
-            distance = float(np.linalg.norm(
-                pose["nozzle_point_world"] - previous["nozzle_point_world"]
-            ))
-            dot = float(np.clip(np.dot(
-                pose["surface_normal_world"], previous["surface_normal_world"]
-            ), -1.0, 1.0))
-            angle = math.degrees(math.acos(dot))
-            minimum_step = max(self._interactive_spray_sampling_spacing, 1e-3)
-            if distance < minimum_step and angle < 2.0:
-                return False
+    @staticmethod
+    def _interactive_interpolate_input_pose(first, second, fraction):
+        """Interpolate a picked pose along one cursor-motion segment."""
+        fraction = float(np.clip(fraction, 0.0, 1.0))
+        result = {}
+        vector_keys = (
+            "nozzle_point_world", "surface_point_world",
+            "surface_normal_world", "spray_direction_world",
+        )
+        for key in vector_keys:
+            a = np.asarray(first[key], dtype=np.float64)
+            b = np.asarray(second[key], dtype=np.float64)
+            value = a + (b - a) * fraction
+            if key in ("surface_normal_world", "spray_direction_world"):
+                value /= max(float(np.linalg.norm(value)), 1e-12)
+            result[key] = value
+        result["timestamp"] = (
+            float(first["timestamp"])
+            + (float(second["timestamp"]) - float(first["timestamp"])) * fraction
+        )
+        result["cell_id"] = int(
+            first["cell_id"] if fraction < 0.5 else second["cell_id"]
+        )
+        result["paintable"] = bool(
+            first.get("paintable", True) and second.get("paintable", True)
+        )
+        return result
+
+    @staticmethod
+    def _interactive_copy_input_pose(pose):
+        return {
+            key: (value.copy() if isinstance(value, np.ndarray) else value)
+            for key, value in pose.items()
+        }
+
+    def _interactive_store_record_sample(self, pose, local_pose):
         if self._interactive_spray_start_timestamp is None:
             self._interactive_spray_start_timestamp = float(pose["timestamp"])
         relative_time = max(
@@ -5789,10 +5842,10 @@ class ProductViewer(QWidget):
             float(pose["timestamp"]) - float(self._interactive_spray_start_timestamp),
         )
         record = {
-            "nozzle_point_world": pose["nozzle_point_world"].copy(),
-            "surface_point_world": pose["surface_point_world"].copy(),
-            "surface_normal_world": pose["surface_normal_world"].copy(),
-            "spray_direction_world": pose["spray_direction_world"].copy(),
+            "nozzle_point_world": np.asarray(pose["nozzle_point_world"], dtype=float).copy(),
+            "surface_point_world": np.asarray(pose["surface_point_world"], dtype=float).copy(),
+            "surface_normal_world": np.asarray(pose["surface_normal_world"], dtype=float).copy(),
+            "spray_direction_world": np.asarray(pose["spray_direction_world"], dtype=float).copy(),
             "nozzle_point_product": local_pose["nozzle_point"].copy(),
             "surface_point_product": local_pose["surface_point"].copy(),
             "surface_normal_product": local_pose["surface_normal"].copy(),
@@ -5804,7 +5857,65 @@ class ProductViewer(QWidget):
             "stroke_id": int(self._interactive_spray_stroke_id),
         }
         self._interactive_spray_records.append(record)
-        return True
+
+    def _interactive_append_record(self, pose, local_pose=None, force=False):
+        """Record trajectory samples at fixed arc-length spacing, not event spacing.
+
+        The distance accumulator carries the unconsumed arc length between
+        mouse events, so fast, slow, and irregular input event rates produce
+        the same spatial sampling interval.
+        """
+        spacing = max(float(self._interactive_spray_sampling_spacing), 1e-6)
+        current = self._interactive_copy_input_pose(pose)
+        previous = getattr(self, "_interactive_spray_sampling_previous_pose", None)
+        emitted = []
+
+        def emit(sample):
+            sample_local = self._interactive_pose_to_product_frame(sample)
+            self._interactive_store_record_sample(sample, sample_local)
+            emitted.append((sample, sample_local))
+
+        if previous is None:
+            emit(current)
+            self._interactive_spray_sampling_distance_accumulator = 0.0
+            self._interactive_spray_sampling_previous_pose = current
+            return emitted
+
+        segment_length = float(np.linalg.norm(
+            np.asarray(current["nozzle_point_world"], dtype=np.float64)
+            - np.asarray(previous["nozzle_point_world"], dtype=np.float64)
+        ))
+        accumulated = float(getattr(
+            self, "_interactive_spray_sampling_distance_accumulator", 0.0
+        ))
+        if segment_length > 1e-12:
+            consumed = 0.0
+            remaining = segment_length
+            needed = max(spacing - accumulated, 0.0)
+            while remaining + 1e-10 >= needed and needed > 1e-10:
+                consumed += needed
+                fraction = min(consumed / segment_length, 1.0)
+                sample = self._interactive_interpolate_input_pose(
+                    previous, current, fraction
+                )
+                emit(sample)
+                remaining = max(segment_length - consumed, 0.0)
+                accumulated = 0.0
+                needed = spacing
+            accumulated += remaining
+        if force and (
+            not self._interactive_spray_records
+            or float(np.linalg.norm(
+                np.asarray(current["nozzle_point_world"], dtype=np.float64)
+                - np.asarray(self._interactive_spray_records[-1]["nozzle_point_world"], dtype=np.float64)
+            )) > 1e-8
+        ):
+            emit(current)
+            accumulated = 0.0
+
+        self._interactive_spray_sampling_distance_accumulator = accumulated
+        self._interactive_spray_sampling_previous_pose = current
+        return emitted
 
     def _on_interactive_spray_middle_press(self, interactor, event):
         """Begin a middle-button drag to tilt the spray axis."""
@@ -6081,6 +6192,8 @@ class ProductViewer(QWidget):
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_spray_start_timestamp = None
+        self._interactive_spray_sampling_previous_pose = None
+        self._interactive_spray_sampling_distance_accumulator = 0.0
 
     def _on_interactive_spray_left_press(self, interactor, event):
         if (
@@ -6118,6 +6231,8 @@ class ProductViewer(QWidget):
         self._interactive_spray_recording = False
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_sampling_previous_pose = None
+        self._interactive_spray_sampling_distance_accumulator = 0.0
         self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
@@ -6169,6 +6284,8 @@ class ProductViewer(QWidget):
         self._interactive_spray_recording = False
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_sampling_previous_pose = None
+        self._interactive_spray_sampling_distance_accumulator = 0.0
         self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
@@ -6202,11 +6319,13 @@ class ProductViewer(QWidget):
                 final_pose = self._interactive_apply_locked_spray_direction(
                     final_pose
                 )
-                self._interactive_update_cursor(final_pose)
+                self._interactive_update_cursor(final_pose, force_record=True)
 
         self._interactive_spray_recording = False
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
+        self._interactive_spray_sampling_previous_pose = None
+        self._interactive_spray_sampling_distance_accumulator = 0.0
         self._interactive_spray_last_speed_mm_s = 0.0
 
         # One angle adjustment applies to exactly one completed paint stroke.
