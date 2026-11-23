@@ -1665,12 +1665,15 @@ class ProductViewer(QWidget):
         cone = pv.PolyData(
             points, faces=np.asarray(faces, dtype=np.int64)
         )
+        cone_color = self._interactive_spray_cone_color(pose)
         actor = self.plotter.add_mesh(
             cone,
-            color="#FFE082",
-            opacity=0.16,
-            style="wireframe",
-            line_width=1.4,
+            color=cone_color,
+            opacity=0.24,
+            style="surface",
+            show_edges=True,
+            edge_color=cone_color,
+            line_width=1.0,
             lighting=False,
             pickable=False,
         )
@@ -5571,6 +5574,44 @@ class ProductViewer(QWidget):
             )
             self._interactive_spray_live_actors.append(actor)
 
+    @staticmethod
+    def _interactive_spray_cone_color(pose):
+        """Return green/yellow/red from spray-axis error against the surface normal."""
+        direction = np.asarray(
+            pose.get("spray_direction_world"), dtype=np.float64
+        )
+        normal = np.asarray(
+            pose.get("surface_normal_world"), dtype=np.float64
+        )
+        if direction.shape != (3,) or normal.shape != (3,):
+            return "#FFD740"
+        direction_length = float(np.linalg.norm(direction))
+        normal_length = float(np.linalg.norm(normal))
+        if (
+            not np.isfinite(direction_length)
+            or not np.isfinite(normal_length)
+            or direction_length <= 1e-12
+            or normal_length <= 1e-12
+        ):
+            return "#FFD740"
+
+        # The spray vector points toward the surface, opposite to its
+        # outward normal. Zero angular error therefore means perpendicular.
+        alignment = float(np.clip(
+            np.dot(
+                -direction / direction_length,
+                normal / normal_length,
+            ),
+            -1.0,
+            1.0,
+        ))
+        error_deg = math.degrees(math.acos(alignment))
+        if error_deg <= 5.0:
+            return "#00E676"  # green: perpendicular (within 5 degrees)
+        if error_deg <= 15.0:
+            return "#FFD740"  # yellow: moderate angular deviation
+        return "#FF3B30"      # red: large angular deviation
+
     def _interactive_update_surface_angle_indicator(self, pose):
         """Display spray-to-surface angular error without steering the nozzle."""
         label = getattr(self, "spray_perpendicular_status", None)
@@ -5806,12 +5847,15 @@ class ProductViewer(QWidget):
             cone_points,
             faces=np.asarray(cone_faces, dtype=np.int64),
         )
+        cone_color = self._interactive_spray_cone_color(pose)
         actor = self.plotter.add_mesh(
             cone,
-            color="#FFE082",
-            opacity=0.16,
-            style="wireframe",
-            line_width=1.25,
+            color=cone_color,
+            opacity=0.24,
+            style="surface",
+            show_edges=True,
+            edge_color=cone_color,
+            line_width=1.0,
             lighting=False,
             pickable=False,
         )
