@@ -6457,9 +6457,8 @@ class ProductViewer(QWidget):
             )
             if route_timing:
                 self.recorded_path_time_label.setText(
-                    f"EST. {self._format_route_time(route_timing['estimated_total_time_s'])}  |  "
-                    f"SPRAY {self._format_route_time(route_timing['spray_time_s'])}  |  "
-                    f"OFF {self._format_route_time(route_timing['travel_time_s'] + route_timing['tool_delay_s'])}"
+                    f"SPRAY {route_timing['spray_distance_mm']:.1f} mm  |  "
+                    f"CONNECTORS {route_timing['connector_distance_mm']:.1f} mm"
                 )
             self._refresh_interactive_recorded_path_actor()
         self.plotter.add_text(
