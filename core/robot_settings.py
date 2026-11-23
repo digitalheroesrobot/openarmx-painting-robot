@@ -65,7 +65,7 @@ def load_robot_settings(config_path: str | Path, legacy_process: dict | None = N
         values = payload.get("robot", payload) if isinstance(payload, dict) else {}
         return validate_robot_settings(values)
     except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
-        raise RuntimeError(f"Could not read robot settings: {path}\\n{exc}") from exc
+        raise RuntimeError(f"Could not read robot settings: {path}\n{exc}") from exc
 
 
 def save_robot_settings(config_path: str | Path, parameters: dict) -> None:
@@ -74,5 +74,5 @@ def save_robot_settings(config_path: str | Path, parameters: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"schema_version": 1, "robot": values}
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\\n", encoding="utf-8")
+    temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     temporary.replace(path)
