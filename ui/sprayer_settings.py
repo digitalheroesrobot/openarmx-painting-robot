@@ -507,6 +507,7 @@ class SprayerSettingsDialog(QDialog):
             "overlap_percent",
             "sampling_spacing_mm",
         }
+        process_only_keys = {"fluid_flow_ml_min"}
         def add_profile_field(key, label, minimum, maximum, decimals):
             spin = QDoubleSpinBox()
             spin.setRange(minimum, maximum)
@@ -610,7 +611,7 @@ class SprayerSettingsDialog(QDialog):
         form.addRow("Atomization technology", self.technology_combo)
 
         for key, label, minimum, maximum, decimals in field_specs:
-            if key not in trajectory_keys:
+            if key not in trajectory_keys and key not in process_only_keys:
                 add_profile_field(key, label, minimum, maximum, decimals)
 
         self.profile_notes = QLabel()
