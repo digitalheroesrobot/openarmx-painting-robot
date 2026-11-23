@@ -1410,11 +1410,13 @@ class ProductViewer(QWidget):
                 edge["start_record"], edge["end_record"], fraction
             )
             position_mm = np.asarray(pose["nozzle_point_world"], dtype=np.float64) * mm_factor
-            direction_product = inverse[:3, :3] @ np.asarray(
+            # CSV position and orientation are both expressed in the
+            # application/world coordinate frame.
+            direction_world = np.asarray(
                 pose["spray_direction_world"], dtype=np.float64
             )
-            direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
-            quaternion = self._interactive_pose_quaternion_from_direction(direction_product)
+            direction_world /= max(float(np.linalg.norm(direction_world)), 1e-12)
+            quaternion = self._interactive_pose_quaternion_from_direction(direction_world)
             output_rows.append({
                 "t": f"{float(t):.6f}",
                 "x": f"{position_mm[0]:.6f}",
@@ -1503,6 +1505,8 @@ class ProductViewer(QWidget):
                 t = float(values[0])
                 if t < 0.0 or t <= previous_t:
                     raise ValueError(f"Line {row_number}: t must be non-negative and strictly increasing.")
+                if row_number == 2 and abs(t) > 1e-9:
+                    raise ValueError("The first trajectory timestamp must be 0 seconds.")
                 state_text = str(row["on/off"]).strip()
                 if state_text not in ("0", "1"):
                     raise ValueError(f"Line {row_number}: on/off must be 0 or 1.")
