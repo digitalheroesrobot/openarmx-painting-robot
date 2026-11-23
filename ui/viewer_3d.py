@@ -5415,8 +5415,18 @@ class ProductViewer(QWidget):
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_last_speed_mm_s = 0.0
+
+        # One angle adjustment applies to exactly one completed paint stroke.
+        # Restore the standard cone direction immediately after the stroke.
+        self._interactive_spray_angle_x_deg = 0.0
+        self._interactive_spray_angle_y_deg = 0.0
         self._interactive_spray_latest_pose = None
-        self.plotter.render()
+        x, y = interactor.GetEventPosition()
+        standard_pose = self._interactive_pick_surface_pose(x, y)
+        if standard_pose is not None:
+            self._interactive_update_cursor(standard_pose)
+        else:
+            self.plotter.render()
 
     def _on_interactive_spray_leave(self, interactor, event):
         # Never keep spraying after the pointer leaves the 3D viewport.
@@ -5428,6 +5438,10 @@ class ProductViewer(QWidget):
         self._interactive_spray_recording = False
         self._interactive_spray_camera_dragging = False
         self._interactive_spray_camera_last_position = None
+        self._interactive_spray_angle_dragging = False
+        self._interactive_spray_angle_last_position = None
+        self._interactive_spray_angle_x_deg = 0.0
+        self._interactive_spray_angle_y_deg = 0.0
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_latest_pose = None
