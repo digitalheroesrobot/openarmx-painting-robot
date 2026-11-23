@@ -25,7 +25,10 @@ from core.coating_deposition import (
 from core.coating_process import coating_model_readiness
 from core.coating_process import DEFAULT_COATING_PROCESS
 from core.trajectory_export import build_product_pose_trajectory
-from core.work_plane import intersect_ray_with_plane
+from core.work_plane import (
+    intersect_ray_with_plane,
+    spray_direction_from_surface_normal,
+)
 from core.spray_coverage_optimizer import (
     append_correction_strokes_to_trajectory,
     build_coverage_correction_plan,
@@ -4103,8 +4106,8 @@ class ProductViewer(QWidget):
             self._interactive_spray_work_plane_origin_world is None
             or self._interactive_spray_work_plane_normal_world is None
         ):
-            initial_direction = self._interactive_rotate_spray_direction(
-                -normal_world,
+            initial_direction = spray_direction_from_surface_normal(
+                normal_world,
                 self._interactive_spray_angle_y_deg,
                 self._interactive_spray_angle_x_deg,
             )
@@ -4125,7 +4128,15 @@ class ProductViewer(QWidget):
         )
         if nozzle_world is None:
             return None
-        spray_direction_world = -plane_normal
+        # Keep nozzle positions on the fixed offset work plane, but orient
+        # the gun to the local picked face normal at every cursor sample.
+        # This restores automatic perpendicular alignment without allowing
+        # hole walls to pull the nozzle path off its fixed plane.
+        spray_direction_world = spray_direction_from_surface_normal(
+            normal_world,
+            self._interactive_spray_angle_y_deg,
+            self._interactive_spray_angle_x_deg,
+        )
         return {
             "surface_point_world": hit_world,
             "surface_normal_world": normal_world,
@@ -5932,22 +5943,6 @@ class ProductViewer(QWidget):
             if np.isfinite(length) and length > 1e-12:
                 self._interactive_spray_locked_direction_world = direction / length
 
-    def _interactive_lock_spray_direction_from_pose(self, pose):
-        """Freeze the current nozzle axis for the duration of a paint stroke."""
-        if pose is None:
-            return
-        # A manually adjusted direction already locked by middle-button release
-        # takes precedence. Otherwise capture the current preview direction at
-        # the instant the operator starts spraying.
-        if self._interactive_spray_locked_direction_world is not None:
-            return
-        direction = np.asarray(
-            pose["spray_direction_world"], dtype=np.float64
-        ).copy()
-        length = float(np.linalg.norm(direction))
-        if np.isfinite(length) and length > 1e-12:
-            self._interactive_spray_locked_direction_world = direction / length
-
     def _interactive_apply_locked_spray_direction(self, pose):
         """Keep the chosen spray axis while moving the target over new faces."""
         locked = self._interactive_spray_locked_direction_world
@@ -6117,12 +6112,10 @@ class ProductViewer(QWidget):
         elif left_button_held and not self._interactive_spray_recording:
             self._interactive_begin_spray_stroke()
 
-        if self._interactive_spray_recording:
-            self._interactive_lock_spray_direction_from_pose(pose)
+        # Unless the operator explicitly tilted and locked the gun with the
+        # middle mouse button, each cursor sample follows the picked face
+        # normal. This also applies while drawing across curved surfaces.
         pose = self._interactive_apply_locked_spray_direction(pose)
-        # Once the left button is held, the spray axis is frozen from the
-        # stroke-start pose and is independent of every subsequently picked
-        # face normal. Only the target point translates with the cursor.
         self._interactive_update_cursor(pose)
 
     def _interactive_begin_spray_stroke(self):
@@ -6151,7 +6144,8 @@ class ProductViewer(QWidget):
         if not bool(pose.get("paintable", True)):
             self._interactive_update_cursor(pose)
             return
-        self._interactive_lock_spray_direction_from_pose(pose)
+        # Automatic orientation is already aligned to the picked face normal.
+        # A manually middle-button-locked direction, if present, overrides it.
         pose = self._interactive_apply_locked_spray_direction(pose)
         self._interactive_begin_spray_stroke()
         self._interactive_update_cursor(pose)
