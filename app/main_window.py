@@ -2531,8 +2531,26 @@ class MainWindow(QMainWindow):
         if self._operation_running:
             return
 
-        # Keep the visible nozzle-point stand-off synchronized with the
-        # saved sprayer profile without rerunning Stage 3.
+        # Apply the current sprayer geometry to the live interactive route
+        # preview as soon as the profile is accepted. Recalculate point spacing
+        # from circular-cone footprint width and configured overlap.
+        if getattr(self.viewer, "_interactive_spray_active", False):
+            profile = dict(self.sprayer_profile)
+            working_distance_mm = float(profile["standoff_mm"])
+            footprint = _calculate_spray_footprint(
+                profile, working_distance_mm
+            )
+            mm_per_unit = float(MM_PER_UNIT[self.coordinate_unit])
+            spacing_mm = float(footprint["nominal_track_spacing_mm"])
+            if not np.isfinite(spacing_mm) or spacing_mm <= 0.0:
+                raise ValueError("Sprayer settings produced invalid spray point spacing.")
+            self.viewer.update_interactive_sprayer_profile(
+                profile,
+                sampling_spacing=spacing_mm / mm_per_unit,
+            )
+
+        # Keep the visible Stage 3 nozzle-point stand-off synchronized without
+        # rerunning the automatic trajectory calculation.
         if self.current_stage3_result is not None:
             self.viewer.update_spray_standoff_preview(
                 float(self.sprayer_profile["standoff_mm"])
