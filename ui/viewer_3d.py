@@ -1409,6 +1409,43 @@ class ProductViewer(QWidget):
         rotation = transform[:3, :3]
         translation = transform[:3, 3]
 
+        # Surface collision tests alone are insufficient for products with
+        # through-holes: a complete tool can pass through the empty opening
+        # without intersecting any triangles. Build a convex envelope and
+        # require the complete sprayer centerline, expanded by its radius,
+        # to remain outside that envelope for every connector pose.
+        try:
+            from scipy.spatial import ConvexHull
+            cache_key = (
+                id(self.current_mesh),
+                len(self.current_mesh.vertices),
+                len(self.current_mesh.faces),
+            )
+            cached_hull = getattr(
+                self, "_interactive_connector_convex_hull_cache", None
+            )
+            if cached_hull is None or cached_hull[0] != cache_key:
+                hull = ConvexHull(
+                    np.asarray(self.current_mesh.vertices, dtype=np.float64)
+                )
+                hull_equations = np.asarray(hull.equations, dtype=np.float64)
+                if (
+                    hull_equations.ndim != 2
+                    or hull_equations.shape[1] != 4
+                    or not np.all(np.isfinite(hull_equations))
+                ):
+                    return blocked("could not construct a valid product exterior envelope")
+                self._interactive_connector_convex_hull_cache = (
+                    cache_key, hull_equations
+                )
+            else:
+                hull_equations = cached_hull[1]
+        except Exception as exc:
+            return blocked(
+                "could not construct the conservative product exterior envelope "
+                f"({type(exc).__name__})"
+            )
+
         def unit(vector):
             vector = np.asarray(vector, dtype=np.float64)
             length = float(np.linalg.norm(vector))
@@ -1531,6 +1568,46 @@ class ProductViewer(QWidget):
                 direction_world = unit(rotation @ direction_product)
                 if direction_world is None:
                     return blocked("connector produced an invalid world direction")
+
+                # The convex envelope deliberately fills all holes and
+                # concavities. A connector is accepted only when the complete
+                # sprayer body can stay on the true exterior side of that
+                # conservative envelope; an empty CAD hole is never treated
+                # as a robot passage.
+                tool_axis_radius = max(body_radius, nozzle_radius)
+                tool_clearance = tool_axis_radius + clearance
+                tool_axis_step = max(
+                    min(tool_axis_radius * 0.20, standoff * 0.025),
+                    1e-3,
+                )
+                tool_axis_length = nozzle_length + body_length
+                tool_axis_count = max(
+                    1, int(math.ceil(tool_axis_length / tool_axis_step))
+                )
+                axis_fractions = np.linspace(
+                    0.0, 1.0, tool_axis_count + 1, dtype=np.float64
+                )
+                axis_points = (
+                    point_product[None, :]
+                    + np.outer(
+                        axis_fractions * tool_axis_length, outward
+                    )
+                )
+                signed_plane_distances = (
+                    axis_points @ hull_equations[:, :3].T
+                    + hull_equations[None, :, 3]
+                )
+                # One supporting half-space must contain the entire
+                # clearance-radius ball around every centerline sample.
+                # This is a sufficient, intentionally conservative test.
+                if np.any(
+                    np.max(signed_plane_distances, axis=1) < tool_clearance
+                ):
+                    return blocked(
+                        "sprayer would enter a product hole, recess, or "
+                        "interior region; connector must remain outside "
+                        "the product's convex envelope"
+                    )
 
                 _, gun_polydata = self._interactive_build_gun_visual(
                     point_world, direction_world, render=False
