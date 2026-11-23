@@ -656,6 +656,7 @@ class MainWindow(QMainWindow):
 
         # 3D Viewer
         self.viewer = ProductViewer()
+        self.viewer.set_robot_settings(self.robot_settings)
         self.viewer.pose_confirmed.connect(self._save_reference_pose)
         self.viewer.patch_selected.connect(
             self._on_viewer_patch_selected
@@ -2529,6 +2530,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted or dialog.selected_settings is None:
             return
         self.robot_settings = dict(dialog.selected_settings)
+        self.viewer.set_robot_settings(self.robot_settings)
         self.robot_settings_label.setText(
             f"ROBOT: {self.robot_settings['name']}  |  "
             f"{self.robot_settings['base_travel_speed_mm_s']:.1f} mm/s  |  "
