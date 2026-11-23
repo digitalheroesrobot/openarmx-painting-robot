@@ -1319,6 +1319,19 @@ class MainWindow(QMainWindow):
         self.interactive_spray_path_button.hide()
         layout.addWidget(self.interactive_spray_path_button)
 
+        self.route_generation_progress = QProgressBar()
+        self.route_generation_progress.setObjectName("RouteGenerationProgress")
+        self.route_generation_progress.setRange(0, 0)
+        self.route_generation_progress.setTextVisible(False)
+        self.route_generation_progress.setFixedHeight(7)
+        self.route_generation_progress.setStyleSheet(
+            "QProgressBar { background: #172B38; border: 1px solid #36566A; "
+            "border-radius: 3px; } "
+            "QProgressBar::chunk { background: #39B8A5; border-radius: 3px; }"
+        )
+        self.route_generation_progress.hide()
+        layout.addWidget(self.route_generation_progress)
+
         self.interactive_paint_color_button = QPushButton("PAINT COLOR")
         self.interactive_paint_color_button.setObjectName("SecondaryButton")
         self.interactive_paint_color_button.setToolTip(
@@ -4258,17 +4271,21 @@ class MainWindow(QMainWindow):
         self.interactive_spray_path_button.setEnabled(False)
         self.interactive_spray_path_button.setText("GENERATING ROUTE...")
         self.interactive_spray_path_button.setToolTip(
-            "Stopping spray recording and optimizing the stroke route. Please wait."
+            "Finalizing spray points and preparing the manual connector workflow."
         )
+        self.route_generation_progress.show()
         self.status_bar.showMessage(
             "GENERATING SPRAY ROUTE... PLEASE WAIT"
         )
         from PySide6.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         QApplication.processEvents()
 
         try:
             result = self.viewer.finish_interactive_spray_path()
         except Exception as exc:
+            self.route_generation_progress.hide()
+            QApplication.restoreOverrideCursor()
             self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
             self.interactive_spray_path_button.setToolTip("")
             self.interactive_spray_path_button.setEnabled(
@@ -4279,6 +4296,8 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self.route_generation_progress.hide()
+        QApplication.restoreOverrideCursor()
         self.interactive_spray_path = result
         self.interactive_spray_path_button.setToolTip("")
         if result is None:
