@@ -1176,7 +1176,7 @@ class ProductViewer(QWidget):
             [item["stroke_id"] for item in records], dtype=np.int64
         )
         speeds = np.full(len(records), base_speed, dtype=np.float64)
-        speed_metadata = {"method": "constant_robot_painting_speed"}
+        speed_metadata = {"method": "fixed_preview_playback_speed"}
 
         timeline = []
         elapsed = 0.0
@@ -1255,7 +1255,7 @@ class ProductViewer(QWidget):
             "spray_speed_profile": speed_metadata,
             "travel_speed_mm_s": float(base_speed),
             "timeline": timeline,
-            "speed_model": "STAGE3_ADAPTIVE_SPRAY_SPEED_PLUS_BASE_SPEED_OFF_TRAVEL",
+            "speed_model": "FIXED_PREVIEW_SPEED_PLUS_BASE_SPEED_OFF_TRAVEL",
             "travel_safety": "STRAIGHT_LINE_ESTIMATE_ONLY_NOT_COLLISION_CHECKED",
         }
 
