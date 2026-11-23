@@ -957,6 +957,48 @@ class ProductViewer(QWidget):
         )
         row.addWidget(self.cavity_mode_button)
 
+        self.cavity_depth_label = QLabel("DEPTH")
+        self.cavity_depth_spin = QDoubleSpinBox()
+        self.cavity_depth_spin.setRange(0.0, 180.0)
+        self.cavity_depth_spin.setSingleStep(5.0)
+        self.cavity_depth_spin.setValue(40.0)
+        self.cavity_depth_spin.setSuffix(" mm")
+        self.cavity_depth_spin.setEnabled(False)
+        self.cavity_depth_spin.setToolTip(
+            "Additional nozzle insertion distance into a hollow part."
+        )
+        self.cavity_depth_spin.valueChanged.connect(
+            self._on_interactive_cavity_controls_changed
+        )
+        row.addWidget(self.cavity_depth_label)
+        row.addWidget(self.cavity_depth_spin)
+
+        self.cavity_tilt_x_label = QLabel("TILT X")
+        self.cavity_tilt_x_spin = QDoubleSpinBox()
+        self.cavity_tilt_x_spin.setRange(-45.0, 45.0)
+        self.cavity_tilt_x_spin.setSingleStep(1.0)
+        self.cavity_tilt_x_spin.setValue(0.0)
+        self.cavity_tilt_x_spin.setSuffix("°")
+        self.cavity_tilt_x_spin.setEnabled(False)
+        self.cavity_tilt_x_spin.valueChanged.connect(
+            self._on_interactive_cavity_controls_changed
+        )
+        row.addWidget(self.cavity_tilt_x_label)
+        row.addWidget(self.cavity_tilt_x_spin)
+
+        self.cavity_tilt_y_label = QLabel("TILT Y")
+        self.cavity_tilt_y_spin = QDoubleSpinBox()
+        self.cavity_tilt_y_spin.setRange(-45.0, 45.0)
+        self.cavity_tilt_y_spin.setSingleStep(1.0)
+        self.cavity_tilt_y_spin.setValue(0.0)
+        self.cavity_tilt_y_spin.setSuffix("°")
+        self.cavity_tilt_y_spin.setEnabled(False)
+        self.cavity_tilt_y_spin.valueChanged.connect(
+            self._on_interactive_cavity_controls_changed
+        )
+        row.addWidget(self.cavity_tilt_y_label)
+        row.addWidget(self.cavity_tilt_y_spin)
+
         self.interaction_mode_status = QLabel("CAMERA CONTROL")
         self.interaction_mode_status.setStyleSheet(
             "color: #69C8D5; font-size: 9px; padding-left: 8px;"
@@ -3024,6 +3066,12 @@ class ProductViewer(QWidget):
     def _on_interactive_cavity_mode_toggled(self, enabled):
         """Toggle deep-surface picking for manual cavity spraying."""
         self._interactive_spray_cavity_mode = bool(enabled)
+        for widget in (
+            self.cavity_depth_spin,
+            self.cavity_tilt_x_spin,
+            self.cavity_tilt_y_spin,
+        ):
+            widget.setEnabled(bool(enabled))
         if hasattr(self, "interaction_mode_status"):
             if enabled:
                 self.interaction_mode_status.setText("SPRAY / CAVITY NOZZLE")
@@ -3038,6 +3086,50 @@ class ProductViewer(QWidget):
             pose = self._interactive_pick_surface_pose(x, y)
             if pose is not None:
                 self._interactive_update_cursor(pose)
+
+    def _on_interactive_cavity_controls_changed(self, _value=None):
+        """Update the current cavity nozzle pose without another surface pick."""
+        if not self._interactive_spray_active or not self._interactive_spray_cavity_mode:
+            return
+        if self._interactive_spray_latest_pose is None:
+            return
+        pose = self._interactive_spray_latest_pose
+        surface_point = np.asarray(pose["surface_point_world"], dtype=np.float64)
+        normal = np.asarray(pose["surface_normal_world"], dtype=np.float64)
+        normal /= max(float(np.linalg.norm(normal)), 1e-12)
+
+        insertion = float(self.cavity_depth_spin.value())
+        source_factor = self._get_source_mm_factor() or 1.0
+        insertion_source = insertion / float(source_factor)
+
+        # The cavity wall normal points from the solid into the hollow volume.
+        # Moving along +normal therefore pushes the probe deeper into the cavity.
+        nozzle = surface_point + normal * (
+            float(self._interactive_spray_standoff) + insertion_source
+        )
+
+        spray = -normal
+        tilt_x = math.radians(float(self.cavity_tilt_x_spin.value()))
+        tilt_y = math.radians(float(self.cavity_tilt_y_spin.value()))
+
+        # Build a stable tangent frame around the cavity wall normal.
+        ref = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        if abs(float(np.dot(ref, normal))) > 0.92:
+            ref = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        tangent_x = np.cross(ref, normal)
+        tangent_x /= max(float(np.linalg.norm(tangent_x)), 1e-12)
+        tangent_y = np.cross(normal, tangent_x)
+        tangent_y /= max(float(np.linalg.norm(tangent_y)), 1e-12)
+
+        # Tilt the spray axis toward the two local tangent directions.
+        spray = spray + math.tan(tilt_x) * tangent_x + math.tan(tilt_y) * tangent_y
+        spray /= max(float(np.linalg.norm(spray)), 1e-12)
+
+        updated = dict(pose)
+        updated["nozzle_point_world"] = nozzle
+        updated["spray_direction_world"] = spray
+        updated["timestamp"] = time.monotonic()
+        self._interactive_update_cursor(updated)
 
     def _interactive_deep_pick_surface(self, x, y):
         """Pick the deepest camera-visible front-facing surface."""
@@ -3181,6 +3273,32 @@ class ProductViewer(QWidget):
 
         nozzle_world = hit_world + normal_world * self._interactive_spray_standoff
         spray_direction_world = -normal_world
+
+        if self._interactive_spray_cavity_mode:
+            insertion = float(self.cavity_depth_spin.value())
+            source_factor = self._get_source_mm_factor() or 1.0
+            insertion_source = insertion / float(source_factor)
+            nozzle_world = hit_world + normal_world * (
+                self._interactive_spray_standoff + insertion_source
+            )
+
+            tilt_x = math.radians(float(self.cavity_tilt_x_spin.value()))
+            tilt_y = math.radians(float(self.cavity_tilt_y_spin.value()))
+            reference = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+            if abs(float(np.dot(reference, normal_world))) > 0.92:
+                reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+            tangent_x = np.cross(reference, normal_world)
+            tangent_x /= max(float(np.linalg.norm(tangent_x)), 1e-12)
+            tangent_y = np.cross(normal_world, tangent_x)
+            tangent_y /= max(float(np.linalg.norm(tangent_y)), 1e-12)
+            spray_direction_world = (
+                spray_direction_world
+                + math.tan(tilt_x) * tangent_x
+                + math.tan(tilt_y) * tangent_y
+            )
+            spray_direction_world /= max(
+                float(np.linalg.norm(spray_direction_world)), 1e-12
+            )
         return {
             "surface_point_world": hit_world,
             "surface_normal_world": normal_world,
@@ -4181,6 +4299,14 @@ class ProductViewer(QWidget):
         body_length = positive("gun_body_length_mm", 220.0) / mm_factor
         body_diameter = positive("gun_body_diameter_mm", 45.0) / mm_factor
         nozzle_length = positive("nozzle_length_mm", 25.0) / mm_factor
+
+        # In cavity mode the real gun body remains outside while a slender
+        # nozzle probe enters the hollow volume. A compact probe prevents the
+        # visualization/collision envelope from falsely blocking insertion.
+        if self._interactive_spray_cavity_mode:
+            body_length = min(body_length, 80.0 / mm_factor)
+            body_diameter = min(body_diameter, 18.0 / mm_factor)
+            nozzle_length = max(nozzle_length, 60.0 / mm_factor)
         nozzle_diameter = max(
             positive("nozzle_orifice_mm", 1.4) * 2.0 / mm_factor,
             body_diameter * 0.18,
@@ -5037,6 +5163,12 @@ class ProductViewer(QWidget):
         self.spray_mode_button.setEnabled(False)
         self.cavity_mode_button.setChecked(False)
         self.cavity_mode_button.setEnabled(False)
+        for widget in (
+            self.cavity_depth_spin,
+            self.cavity_tilt_x_spin,
+            self.cavity_tilt_y_spin,
+        ):
+            widget.setEnabled(False)
         self._interactive_spray_cavity_mode = False
         self.interaction_mode_status.setText("CAMERA CONTROL")
 
