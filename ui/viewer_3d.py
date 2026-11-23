@@ -6438,7 +6438,7 @@ class ProductViewer(QWidget):
 
         curve_segments = []
         spacing = max(float(self._interactive_spray_sampling_spacing), 1e-6)
-        hole_tolerance = max(spacing * 0.35, 1e-4)
+        hole_tolerance = max(spacing * 0.02, 1e-5)
 
         for raw_segment in raw_segments:
             if len(raw_segment) < 2:
@@ -6451,21 +6451,25 @@ class ProductViewer(QWidget):
 
             def append_preview_point(candidate):
                 projected = self._interactive_project_smoothed_surface_point(candidate)
-                if projected is not None and not projected["paintable"]:
-                    if len(current_segment) >= 2:
-                        curve_segments.append(list(current_segment))
-                    current_segment.clear()
-                    return
                 if projected is None:
                     current_segment.append(np.asarray(candidate, dtype=np.float64))
                     return
                 projected_point = np.asarray(
                     projected["surface_point_world"], dtype=np.float64
                 )
-                if np.linalg.norm(projected_point - candidate) > hole_tolerance:
+                projection_distance = float(np.linalg.norm(
+                    projected_point - candidate
+                ))
+                if projection_distance > hole_tolerance:
+                    # Preserve the smoothed route point through the hole.
                     current_segment.append(np.asarray(candidate, dtype=np.float64))
-                else:
-                    current_segment.append(projected_point)
+                    return
+                if not projected["paintable"]:
+                    if len(current_segment) >= 2:
+                        curve_segments.append(list(current_segment))
+                    current_segment.clear()
+                    return
+                current_segment.append(projected_point)
 
             for index in range(len(control) - 1):
                 p1 = control[index]
@@ -6604,7 +6608,7 @@ class ProductViewer(QWidget):
             raw_segments.append(current_raw_segment)
 
         dense = []
-        hole_tolerance = max(spacing * 0.35, 1e-4)
+        hole_tolerance = max(spacing * 0.02, 1e-5)
         for raw_segment_index, raw_segment in enumerate(raw_segments):
             if raw_segment_index:
                 dense.append(None)  # Explicit excluded-region boundary.
@@ -6637,13 +6641,10 @@ class ProductViewer(QWidget):
                 projected = self._interactive_project_smoothed_surface_point(
                     curve_point
                 )
-                if projected is not None and not projected["paintable"]:
-                    dense.append(None)
-                    return
 
-                # If the curve point is too far from the nearest mesh face,
-                # it lies in a hole. Keep its original point on the smoothed
-                # trajectory plane instead of snapping it to the hole rim.
+                # A geometric hole is classified by distance before checking
+                # the nearest triangle's exclusion flag. The nearest rim may
+                # be excluded, but that does not make the hole an exclusion.
                 is_hole = projected is None
                 if projected is not None:
                     projection_distance = float(np.linalg.norm(
@@ -6669,6 +6670,12 @@ class ProductViewer(QWidget):
                         "timestamp": timestamp,
                         "is_hole_bridge": True,
                     })
+                    return
+
+                # Only a geometrically nearby CAD face can activate an
+                # explicit exclusion boundary.
+                if not projected["paintable"]:
+                    dense.append(None)
                     return
 
                 dense.append({
