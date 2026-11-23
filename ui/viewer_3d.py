@@ -2164,224 +2164,144 @@ class ProductViewer(QWidget):
         }
 
     def _optimize_interactive_recorded_path(self):
-        """Optimize stroke order and direction using collision-free connector distances."""
+        """Preserve the exact user-drawn stroke order and add safe OFF connectors.
+
+        Stroke order and direction are operator intent. This method must never
+        reorder strokes or reverse an individual stroke; it only plans the
+        transfer between each consecutive pair.
+        """
         records = list(self._interactive_spray_records)
         if not records:
             self.recorded_path_status_label.setText("No recorded path")
-            return False
-
-        source_ids = np.asarray([item["stroke_id"] for item in records], dtype=np.int64)
-        stroke_ids = [int(value) for value in np.unique(source_ids)]
-        strokes = {
-            stroke_id: [
-                item for item in records if int(item["stroke_id"]) == stroke_id
-            ]
-            for stroke_id in stroke_ids
-        }
-        self._interactive_precomputed_connector_paths = {}
-        speed = float(self._robot_motion_settings.get("painting_speed_mm_s", 150.0))
-        mm_factor = self._get_source_mm_factor()
-        if mm_factor is None or mm_factor <= 0.0:
-            self.recorded_path_status_label.setText("ROUTE BLOCKED · UNKNOWN SOURCE UNIT")
             self.recorded_path_replay_button.setEnabled(False)
             return False
 
-        if len(stroke_ids) == 1:
-            ordered = list(strokes[stroke_ids[0]])
-            route_info = {
-                "algorithm": "SINGLE_STROKE_ORDER_PRESERVED",
-                "stroke_count": 1,
-                "optimality": "NO_INTER_STROKE_ROUTING_REQUIRED",
-                "connector_cost_basis": "NOT_APPLICABLE",
-            }
-        else:
-            # A state is (stroke index, reversed). Connector costs are based on
-            # the actual collision-checked gun-envelope path, not endpoint distance.
-            def oriented_records(stroke_id, reversed_flag):
-                values = strokes[stroke_id]
-                return list(reversed(values)) if reversed_flag else values
-
-            connector_cache = {}
-            def transition(state_a, state_b):
-                key = (state_a[0], bool(state_a[1]), state_b[0], bool(state_b[1]))
-                if key in connector_cache:
-                    return connector_cache[key]
-                if state_a[0] == state_b[0]:
-                    connector_cache[key] = (float("inf"), None)
-                    return connector_cache[key]
-                a = oriented_records(state_a[0], state_a[1])[-1]
-                b = oriented_records(state_b[0], state_b[1])[0]
-                path = self._interactive_build_safe_connector_path(a, b)
-                if path is None:
-                    connector_cache[key] = (float("inf"), None)
-                else:
-                    points = np.asarray(
-                        [item["nozzle_point_product"] for item in path], dtype=np.float64
-                    )
-                    distance = float(np.sum(np.linalg.norm(np.diff(points, axis=0), axis=1)))
-                    connector_cache[key] = (distance, path)
-                return connector_cache[key]
-
-            # Multi-start nearest-neighbour search over both directions. This
-            # finds a feasible global ordering candidate using real safe-path costs.
-            candidate_routes = []
-            seed_indices = np.linspace(
-                0, len(stroke_ids) - 1, min(len(stroke_ids), 8), dtype=int
+        mm_factor = self._get_source_mm_factor()
+        if mm_factor is None or mm_factor <= 0.0:
+            self.recorded_path_status_label.setText(
+                "ROUTE BLOCKED · UNKNOWN SOURCE UNIT"
             )
-            seed_ids = [stroke_ids[int(index)] for index in np.unique(seed_indices)]
-            for seed_id in seed_ids:
-                for seed_reverse in (False, True):
-                    route = [(seed_id, seed_reverse)]
-                    remaining = set(stroke_ids)
-                    remaining.remove(seed_id)
-                    feasible = True
-                    while remaining:
-                        current_state = route[-1]
-                        current_end = oriented_records(
-                            current_state[0], current_state[1]
-                        )[-1]
-                        current_point = np.asarray(
-                            current_end["nozzle_point_product"], dtype=np.float64
-                        )
-                        geometric_candidates = []
-                        for next_id in remaining:
-                            for next_reverse in (False, True):
-                                next_start = oriented_records(next_id, next_reverse)[0]
-                                next_point = np.asarray(
-                                    next_start["nozzle_point_product"], dtype=np.float64
-                                )
-                                geometric_candidates.append((
-                                    float(np.linalg.norm(next_point - current_point)),
-                                    (next_id, next_reverse),
-                                ))
-                        geometric_candidates.sort(key=lambda item: item[0])
-                        # Evaluate a small nearest-neighbour shortlist first.
-                        # If all shortlisted transitions are unsafe, expand to
-                        # every remaining stroke rather than falsely declaring
-                        # that no feasible continuation exists.
-                        shortlist = geometric_candidates[:6]
-                        evaluated = []
-                        for _, state in shortlist:
-                            cost, _ = transition(current_state, state)
-                            evaluated.append((cost, state))
-                        if not any(np.isfinite(item[0]) for item in evaluated):
-                            for _, state in geometric_candidates[6:]:
-                                cost, _ = transition(current_state, state)
-                                evaluated.append((cost, state))
-                        best_cost, best = min(evaluated, key=lambda item: item[0])
-                        if best is None or not np.isfinite(best_cost):
-                            feasible = False
-                            break
-                        route.append(best)
-                        remaining.remove(best[0])
-                    if feasible:
-                        candidate_routes.append(route)
+            self.recorded_path_replay_button.setEnabled(False)
+            return False
 
-            if not candidate_routes:
-                reason = getattr(
-                    self, "_interactive_last_connector_failure_reason",
-                    "No collision-free connector ordering exists",
-                )
+        # Split only at actual stroke-ID transitions. Do not sort IDs: the
+        # input sequence is the authoritative order drawn by the operator.
+        strokes = []
+        current_stroke = []
+        current_stroke_id = None
+        completed_stroke_ids = set()
+        for record in records:
+            stroke_id = int(record["stroke_id"])
+            if current_stroke_id is None:
+                current_stroke_id = stroke_id
+            if stroke_id != current_stroke_id:
+                strokes.append(current_stroke)
+                completed_stroke_ids.add(current_stroke_id)
+                if stroke_id in completed_stroke_ids:
+                    self.recorded_path_status_label.setText(
+                        "ROUTE BLOCKED · NON-CONTIGUOUS STROKE DATA"
+                    )
+                    self.recorded_path_replay_button.setEnabled(False)
+                    return False
+                current_stroke = []
+                current_stroke_id = stroke_id
+            current_stroke.append(record)
+        if current_stroke:
+            strokes.append(current_stroke)
+
+        self._interactive_precomputed_connector_paths = {}
+        safe_connector_paths = []
+        for stroke_index in range(1, len(strokes)):
+            previous_stroke = strokes[stroke_index - 1]
+            next_stroke = strokes[stroke_index]
+            previous_end = previous_stroke[-1]
+            next_start = next_stroke[0]
+
+            connector = self._interactive_build_safe_connector_path(
+                previous_end, next_start
+            )
+            if connector is None:
+                reason = str(getattr(
+                    self,
+                    "_interactive_last_connector_failure_reason",
+                    "No collision-free exterior connector exists",
+                ))
                 self._interactive_spray_route_optimization = {
-                    "algorithm": "COLLISION_CHECKED_CONNECTOR_SEARCH",
-                    "stroke_count": len(stroke_ids),
-                    "optimality": "NO_FEASIBLE_ROUTE_FOUND",
+                    "algorithm": "USER_DRAWN_ORDER_WITH_SAFE_CONNECTORS",
+                    "stroke_count": len(strokes),
+                    "stroke_order": "PRESERVED",
+                    "stroke_directions": "PRESERVED",
+                    "status": "BLOCKED",
                 }
                 self._interactive_recorded_replay_timing = {
                     "safety_status": "BLOCKED_NO_COLLISION_FREE_CONNECTOR",
                     "safety_reason": reason,
+                    "blocked_transition": stroke_index,
                     "timeline": [],
-                    "safe_connector_paths": [],
+                    "safe_connector_paths": safe_connector_paths,
                 }
+                self._interactive_safe_connector_paths = safe_connector_paths
                 self.recorded_path_replay_button.setEnabled(False)
-                self.recorded_path_status_label.setText("ROUTE BLOCKED · " + str(reason)[:100])
+                self.recorded_path_status_label.setText(
+                    "ROUTE BLOCKED · " + reason[:100]
+                )
                 self._interactive_spray_route_actors = []
+                self._refresh_interactive_recorded_path_actor()
                 return False
 
-            def route_cost(route):
-                total = 0.0
-                for left, right in zip(route[:-1], route[1:]):
-                    cost, _ = transition(left, right)
-                    if not np.isfinite(cost):
-                        return float("inf")
-                    total += cost
-                return total
+            self._interactive_precomputed_connector_paths[
+                (id(previous_end), id(next_start))
+            ] = connector
+            safe_connector_paths.append(connector)
 
-            route = min(candidate_routes, key=route_cost)
-            # Improve the feasible route with 2-opt reversals. Reversing a
-            # sub-route also reverses each stroke direction, preserving each
-            # individual user-drawn stroke geometry.
-            max_passes = 1 if len(route) <= 30 else 0
-            for _ in range(max_passes):
-                improved = False
-                baseline = route_cost(route)
-                for first in range(0, len(route) - 1):
-                    for last in range(first + 1, len(route)):
-                        candidate = (
-                            route[:first]
-                            + [(sid, not rev) for sid, rev in reversed(route[first:last + 1])]
-                            + route[last + 1:]
-                        )
-                        cost = route_cost(candidate)
-                        if cost + 1e-9 < baseline:
-                            route = candidate
-                            baseline = cost
-                            improved = True
-                if not improved:
-                    break
-
-            ordered = []
-            for state in route:
-                ordered.extend(oriented_records(state[0], state[1]))
-            route_info = {
-                "algorithm": "COLLISION_CHECKED_SAFE_CONNECTOR_MULTI_START_NEAREST_NEIGHBOUR_2OPT",
-                "stroke_count": len(stroke_ids),
-                "optimality": "FEASIBLE_LOCAL_OPTIMUM_NOT_GLOBAL_PROOF",
-                "connector_cost_basis": "COLLISION_CHECKED_FULL_GUN_ENVELOPE_PATH_LENGTH",
-                "initial_seed_count": len(seed_ids) * 2,
-                "safe_connector_candidates_cached": len(connector_cache),
-                "safe_connector_search_length_source_units": float(route_cost(route)),
-            }
-            # Reuse the exact connector geometries found during optimization.
-            for state_a, state_b in zip(route[:-1], route[1:]):
-                _, path = transition(state_a, state_b)
-                if path is not None:
-                    left_record = oriented_records(state_a[0], state_a[1])[-1]
-                    right_record = oriented_records(state_b[0], state_b[1])[0]
-                    self._interactive_precomputed_connector_paths[
-                        (id(left_record), id(right_record))
-                    ] = path
-
-        self._interactive_spray_records = list(ordered)
-        self._interactive_spray_route_optimization = route_info
-        self.recorded_path_status_label.setText(
-            f"Optimized {len(stroke_ids)} strokes · {route_info['optimality'].replace('_', ' ')}"
-        )
-
-        after_metrics = self._build_interactive_route_metrics(ordered)
-        self._interactive_recorded_replay_timing = after_metrics
-        self._interactive_safe_connector_paths = after_metrics.get("safe_connector_paths", [])
-        route_safe = after_metrics.get("safety_status") == "SAFE"
-        self.recorded_path_replay_button.setEnabled(
-            route_safe and len(after_metrics.get("timeline", [])) > 0
-        )
-        if not route_safe:
-            reason = str(after_metrics.get("safety_reason", "No collision-free exterior connector"))
-            self.recorded_path_status_label.setText("ROUTE BLOCKED · " + reason[:100])
-
-        self._interactive_route_optimization_metrics = {
-            "stroke_count": int(len(stroke_ids)),
-            "safe_connector_candidates_cached": int(
-                route_info.get("safe_connector_candidates_cached", 0)
-            ),
+        # Keep the original record list byte-for-byte in its original order.
+        self._interactive_spray_records = records
+        self._interactive_spray_route_optimization = {
+            "algorithm": "USER_DRAWN_ORDER_WITH_COLLISION_CHECKED_CONNECTORS",
+            "stroke_count": len(strokes),
+            "stroke_order": "PRESERVED",
+            "stroke_directions": "PRESERVED",
+            "connector_cost_basis": "COLLISION_CHECKED_FULL_GUN_ENVELOPE_PATH",
         }
-        total_distance = float(after_metrics.get("total_route_distance_mm", 0.0))
-        total_time = float(after_metrics.get("estimated_duration_s", 0.0))
+
+        metrics = self._build_interactive_route_metrics(records)
+        self._interactive_recorded_replay_timing = metrics
+        self._interactive_safe_connector_paths = metrics.get(
+            "safe_connector_paths", []
+        )
+        route_safe = metrics.get("safety_status") == "SAFE"
+        self.recorded_path_replay_button.setEnabled(
+            route_safe and len(metrics.get("timeline", [])) > 0
+        )
+
+        speed = float(
+            self._robot_motion_settings.get("painting_speed_mm_s", 150.0)
+        )
+        total_distance = float(metrics.get("total_route_distance_mm", 0.0))
+        total_time = float(metrics.get("estimated_duration_s", 0.0))
         self.recorded_path_time_label.setText(
             f"TOTAL {total_distance:.1f} mm  |  "
             f"TIME {self._format_route_time(total_time)}  |  "
             f"{speed:.1f} mm/s"
         )
+
+        if not route_safe:
+            reason = str(metrics.get(
+                "safety_reason",
+                "No collision-free exterior connector",
+            ))
+            self.recorded_path_status_label.setText(
+                "ROUTE BLOCKED · " + reason[:100]
+            )
+        else:
+            self.recorded_path_status_label.setText(
+                f"{len(strokes)} strokes · USER ORDER PRESERVED · SAFE CONNECTORS"
+            )
+
+        self._interactive_route_optimization_metrics = {
+            "stroke_count": int(len(strokes)),
+            "safe_connector_count": int(len(self._interactive_safe_connector_paths)),
+        }
         self._refresh_interactive_recorded_path_actor()
         return route_safe
 
