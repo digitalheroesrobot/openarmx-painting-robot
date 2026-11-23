@@ -96,7 +96,8 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
                 "travel_speed_mm_s",
                 "min_travel_speed_mm_s",
                 "max_travel_acceleration_mm_s2",
-            )            if item.get("pattern_type") != "round_cone" or any(
+            )
+            if item.get("pattern_type") != "round_cone" or any(
                 key in item for key in legacy_keys
             ):
                 migrated = True
