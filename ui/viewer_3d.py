@@ -7287,7 +7287,7 @@ class ProductViewer(QWidget):
         mm_per_unit = MM_PER_UNIT.get(source_unit, 1.0)
         standoff_units = float(parameters.get(
             "standoff_coordinate_units",
-            float(profile.get("standoff_mm", parameters.get("standoff_mm", 180.0))) / mm_per_unit,
+            float(profile.get("standoff_mm", parameters.get("standoff_mm", 100.0))) / mm_per_unit,
         ))
         cone_angle = float(profile.get("spray_cone_angle_deg", 0.0) or 0.0)
         cone_angle = float(np.clip(cone_angle, 0.0, 150.0))
