@@ -25,6 +25,7 @@ from core.coating_deposition import (
 from core.coating_process import coating_model_readiness
 from core.coating_process import DEFAULT_COATING_PROCESS
 from core.trajectory_export import build_product_pose_trajectory
+from core.work_plane import intersect_ray_with_plane
 from core.spray_coverage_optimizer import (
     append_correction_strokes_to_trajectory,
     build_coverage_correction_plan,
@@ -4150,24 +4151,12 @@ class ProductViewer(QWidget):
             if abs(float(homogeneous[3])) <= 1e-12:
                 return None
             world_points.append(homogeneous[:3] / homogeneous[3])
-        ray_origin = world_points[0]
-        ray_direction = world_points[1] - world_points[0]
-        ray_length = float(np.linalg.norm(ray_direction))
-        if not np.isfinite(ray_length) or ray_length <= 1e-12:
-            return None
-        ray_direction /= ray_length
-        denominator = float(np.dot(ray_direction, plane_normal))
-        if abs(denominator) <= 1e-9:
-            return None
-        distance = float(
-            np.dot(np.asarray(plane_origin, dtype=np.float64) - ray_origin, plane_normal)
-            / denominator
+        return intersect_ray_with_plane(
+            world_points[0],
+            world_points[1] - world_points[0],
+            plane_origin,
+            plane_normal,
         )
-        if not np.isfinite(distance) or distance < 0.0:
-            return None
-        point = ray_origin + distance * ray_direction
-        return point if np.all(np.isfinite(point)) else None
-
     @staticmethod
     def _interactive_pose_quaternion_from_direction(direction_product):
         """Return a stable XYZW quaternion for the nozzle tool frame."""
