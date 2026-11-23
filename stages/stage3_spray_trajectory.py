@@ -10,10 +10,7 @@ import numpy as np
 import trimesh
 
 from core.result_manager import ResultManager
-from core.coating_process import (
-    calculate_robot_waypoint_spacing_mm,
-    validate_coating_process,
-)
+from core.coating_process import validate_coating_process
 from stages.human_like_spray_planner import (
     SweepPlanningConfig,
     plan_human_like_sweeps,
@@ -296,28 +293,13 @@ def _calculate_spray_footprint(
     sprayer_profile: dict | None,
     standoff_mm: float,
 ) -> dict:
-    """
-    Calculate a nominal spray footprint at the requested working distance.
-
-    Flat-fan width is estimated from the included angle. Its narrow dimension
-    is scaled from a measured reference-distance thickness when available.
-    Round-cone footprints are circular. Missing flat-fan thickness is reported
-    as unknown rather than fabricated.
-    """
+    """Calculate a circular-cone footprint and overlap-derived point pitch."""
     profile = sprayer_profile if isinstance(sprayer_profile, dict) else {}
-
-    pattern = str(profile.get("pattern_type", "flat_fan")).strip().lower()
-    if pattern not in {"flat_fan", "round_cone"}:
-        raise ValueError(
-            f"Unsupported spray pattern type: {pattern!r}. "
-            "Use 'flat_fan' or 'round_cone'."
-        )
-
     angle = _safe_float(profile.get("spray_cone_angle_deg"))
     if angle is None:
         angle = 0.0
-    if not 0.0 <= angle <= 150.0:
-        raise ValueError("Spray angle must be between 0 and 150 degrees.")
+    if not 0.0 < angle <= 150.0:
+        raise ValueError("Circular spray angle must be greater than 0 and no more than 150 degrees.")
 
     overlap = _safe_float(profile.get("overlap_percent"))
     if overlap is None:
@@ -325,67 +307,27 @@ def _calculate_spray_footprint(
     if not 0.0 <= overlap < 100.0:
         raise ValueError("Track overlap must be in the range [0, 100).")
 
-    reference_thickness = _safe_float(
-        profile.get("fan_thickness_at_reference_mm")
-    )
-    if reference_thickness is not None and reference_thickness < 0.0:
-        raise ValueError("Fan thickness cannot be negative.")
+    distance = float(standoff_mm)
+    if not math.isfinite(distance) or distance <= 0.0:
+        raise ValueError("Working distance must be a positive finite value.")
 
-    reference_distance = _safe_float(
-        profile.get("fan_reference_distance_mm")
-    )
-    if reference_distance is None or reference_distance <= 0.0:
-        if reference_thickness is not None and reference_thickness > 0.0:
-            raise ValueError(
-                "A positive fan reference distance is required when "
-                "measured fan thickness is supplied."
-            )
-        # Width-only geometry does not require a measured fan thickness.
-        reference_distance = float(standoff_mm)
-
-    width = (
-        2.0 * float(standoff_mm) * math.tan(math.radians(angle * 0.5))
-        if angle > 0.0 else 0.0
-    )
-
-    if pattern == "round_cone":
-        thickness = width
-        thickness_status = "circular_cone_geometry"
-    elif reference_thickness is not None and reference_thickness > 0.0:
-        thickness = (
-            reference_thickness * float(standoff_mm) / reference_distance
-        )
-        thickness_status = "scaled_from_measured_reference"
-    else:
-        thickness = None
-        thickness_status = "unknown_conical_approximation_only"
-
-    track_spacing = width * (1.0 - overlap / 100.0)
-
+    diameter = 2.0 * distance * math.tan(math.radians(angle * 0.5))
+    point_spacing = diameter * (1.0 - overlap / 100.0)
     return {
-        "pattern_type": pattern,
+        "pattern_type": "round_cone",
         "included_angle_deg": float(angle),
-        "working_distance_mm": float(standoff_mm),
-        "reference_distance_mm": float(reference_distance),
-        "reference_thickness_mm": (
-            float(reference_thickness)
-            if reference_thickness is not None else None
-        ),
-        "width_mm": float(width),
-        "thickness_mm": (
-            float(thickness) if thickness is not None else None
-        ),
-        "thickness_status": thickness_status,
+        "working_distance_mm": distance,
+        "width_mm": float(diameter),
+        "thickness_mm": float(diameter),
+        "diameter_mm": float(diameter),
         "overlap_percent": float(overlap),
-        "nominal_track_spacing_mm": float(track_spacing),
-        "track_spacing_status": (
-            "calculated_from_width_and_overlap"
-            if width > 0.0 else "not_available_angle_is_zero"
-        ),
+        "nominal_track_spacing_mm": float(point_spacing),
+        "nominal_point_spacing_mm": float(point_spacing),
+        "thickness_status": "circular_cone_geometry",
+        "track_spacing_status": "calculated_from_diameter_and_overlap",
         "model_limitations": [
-            "Nominal geometric footprint; not a calibrated droplet deposition model.",
-            "Flat-fan width assumes the included-angle geometry is valid.",
-            "Actual footprint depends on sprayer, pressure, fluid, distance and coating conditions.",
+            "Nominal circular geometric footprint; not a calibrated droplet-deposition model.",
+            "Actual footprint depends on sprayer, pressure, fluid, working distance and coating conditions.",
         ],
     }
 
@@ -3286,48 +3228,25 @@ def _build_inter_segment_travel_plan(
     nozzle_points: np.ndarray,
     segment_ids: np.ndarray,
     coordinate_unit: str,
-    travel_speed_mm_s: float,
 ) -> dict:
-    """Describe direct, spray-OFF links between consecutive raster strokes.
-
-    These are visualization and time-estimate links only. They are not
-    collision-checked robot paths and must not be sent to a robot controller.
-    """
+    """Describe direct spray-OFF connector distances without timing assumptions."""
     points = np.asarray(nozzle_points, dtype=np.float64)
     segments = np.asarray(segment_ids, dtype=np.int64)
     if points.ndim != 2 or points.shape[1] != 3 or len(points) != len(segments):
         raise ValueError("Travel planning requires matching (N, 3) points and segment IDs.")
     if not np.all(np.isfinite(points)):
         raise ValueError("Travel planning points must be finite.")
-    if len(points) == 0:
-        return {
-            "method": "direct_straight_line_estimate_only",
-            "travel_speed_mm_s": float(travel_speed_mm_s),
-            "transition_count": 0,
-            "total_distance_mm": 0.0,
-            "estimated_time_s": 0.0,
-            "transitions": [],
-            "safety_status": "NOT_COLLISION_CHECKED",
-        }
-
     mm_per_unit = MM_PER_UNIT.get(_normalize_unit(coordinate_unit))
     if mm_per_unit is None:
         raise ValueError(f"Unsupported travel-plan coordinate unit: {coordinate_unit}")
-    speed = float(travel_speed_mm_s)
-    if not math.isfinite(speed) or speed <= 0.0:
-        raise ValueError("Travel speed must be a positive finite value.")
-
-    starts = np.r_[0, np.flatnonzero(np.diff(segments) != 0) + 1]
-    ends = np.r_[starts[1:], len(segments)]
+    starts = np.r_[0, np.flatnonzero(np.diff(segments) != 0) + 1] if len(segments) else np.empty(0, dtype=int)
+    ends = np.r_[starts[1:], len(segments)] if len(starts) else np.empty(0, dtype=int)
     transitions = []
     total_distance_mm = 0.0
-    for block_index in range(len(starts) - 1):
+    for block_index in range(max(0, len(starts) - 1)):
         end_index = int(ends[block_index] - 1)
         start_index = int(starts[block_index + 1])
-        distance_mm = float(
-            np.linalg.norm(points[start_index] - points[end_index]) * mm_per_unit
-        )
-        duration_s = distance_mm / speed
+        distance_mm = float(np.linalg.norm(points[start_index] - points[end_index]) * mm_per_unit)
         transitions.append({
             "from_segment_id": int(segments[end_index]),
             "to_segment_id": int(segments[start_index]),
@@ -3336,26 +3255,17 @@ def _build_inter_segment_travel_plan(
             "start_point_coordinate_units": points[end_index].tolist(),
             "end_point_coordinate_units": points[start_index].tolist(),
             "distance_mm": distance_mm,
-            "estimated_time_s": duration_s,
             "spray_state": "OFF",
             "path_type": "direct_straight_line_visualization_only",
         })
         total_distance_mm += distance_mm
-
     return {
-        "method": "direct_straight_line_estimate_only",
-        "travel_speed_mm_s": speed,
+        "method": "direct_straight_line_geometry_only",
         "transition_count": len(transitions),
         "total_distance_mm": float(total_distance_mm),
-        "estimated_time_s": float(total_distance_mm / speed),
         "transitions": transitions,
         "safety_status": "NOT_COLLISION_CHECKED",
-        "note": (
-            "Direct links connect the nozzle endpoint of one stroke to the "
-            "startpoint of the next with spray OFF. They are visualization and "
-            "time estimates only; obstacle avoidance, robot reachability, "
-            "acceleration limits and joint-space motion are not checked."
-        ),
+        "note": "Connector distances are geometric only; no speed, time, collision or robot-motion estimate is made.",
     }
 
 
@@ -4098,127 +4008,6 @@ def _inspect_generated_trajectory(
     return report
 
 
-# ------------------------------------------------------------
-# Adaptive spray travel-speed profile
-# ------------------------------------------------------------
-
-def _calculate_adaptive_travel_speed_profile(
-    nozzle_points: np.ndarray,
-    surface_normals: np.ndarray,
-    segment_ids: np.ndarray,
-    coordinate_unit: str,
-    base_speed_mm_s: float,
-    minimum_speed_mm_s: float = 40.0,
-    maximum_acceleration_mm_s2: float = 500.0,
-) -> tuple[np.ndarray, np.ndarray, dict]:
-    """
-    Estimate a conservative per-sample spray speed from surface curvature
-    (normal change) and path turning. Distances and speeds are physical mm.
-    This is a geometric planning heuristic, not a validated paint-process model.
-    """
-    points = np.asarray(nozzle_points, dtype=np.float64)
-    normals = np.asarray(surface_normals, dtype=np.float64)
-    segments = np.asarray(segment_ids, dtype=np.int64)
-    count = len(points)
-    if count == 0:
-        return np.empty(0), np.empty(0), {
-            "base_speed_mm_s": float(base_speed_mm_s),
-            "minimum_speed_mm_s": float(minimum_speed_mm_s),
-            "maximum_acceleration_mm_s2": float(maximum_acceleration_mm_s2),
-            "method": "normal_curvature_and_path_turning",
-        }
-    if points.shape != (count, 3) or normals.shape != (count, 3) or segments.shape != (count,):
-        raise ValueError("Adaptive speed inputs must have matching N×3 points/normals and N segment IDs.")
-
-    mm_per_unit = MM_PER_UNIT[coordinate_unit]
-    base_speed = float(base_speed_mm_s)
-    minimum_speed = float(minimum_speed_mm_s)
-    acceleration = float(maximum_acceleration_mm_s2)
-    if not math.isfinite(base_speed) or base_speed <= 0.0:
-        raise ValueError("Base spray travel speed must be greater than zero mm/s.")
-    if not math.isfinite(minimum_speed) or minimum_speed <= 0.0 or minimum_speed > base_speed:
-        raise ValueError("Minimum travel speed must be positive and no greater than the base speed.")
-    if not math.isfinite(acceleration) or acceleration <= 0.0:
-        raise ValueError("Maximum travel acceleration must be greater than zero mm/s².")
-
-    speed = np.full(count, base_speed, dtype=np.float64)
-    segment_distances_mm = np.zeros(count, dtype=np.float64)
-    normal_change_deg = np.zeros(count, dtype=np.float64)
-    turn_angle_deg = np.zeros(count, dtype=np.float64)
-
-    for segment_id in np.unique(segments):
-        indices = np.flatnonzero(segments == segment_id)
-        if len(indices) < 2:
-            speed[indices] = minimum_speed
-            continue
-
-        local_points = points[indices]
-        local_normals = normals[indices]
-        step_vectors = np.diff(local_points, axis=0)
-        step_distances = np.linalg.norm(step_vectors, axis=1) * mm_per_unit
-        segment_distances_mm[indices[1:]] = step_distances
-
-        normal_dots = np.einsum("ij,ij->i", local_normals[:-1], local_normals[1:])
-        normal_angles = np.degrees(np.arccos(np.clip(normal_dots, -1.0, 1.0)))
-        normal_change_deg[indices[1:]] = normal_angles
-
-        tangents = step_vectors / np.maximum(np.linalg.norm(step_vectors, axis=1, keepdims=True), 1e-12)
-        local_turns = np.zeros(len(indices), dtype=np.float64)
-        if len(indices) > 2:
-            turn_dots = np.einsum("ij,ij->i", tangents[:-1], tangents[1:])
-            local_turns[1:-1] = np.degrees(np.arccos(np.clip(turn_dots, -1.0, 1.0)))
-        turn_angle_deg[indices] = local_turns
-
-        curvature_factor = 1.0 - 0.65 * np.clip(normal_change_deg[indices] / 45.0, 0.0, 1.0)
-        corner_factor = 1.0 - 0.75 * np.clip(local_turns / 90.0, 0.0, 1.0)
-        local_speed = np.maximum(
-            minimum_speed,
-            base_speed * np.minimum(curvature_factor, corner_factor),
-        )
-
-        # Forward/backward acceleration limits avoid abrupt speed jumps.
-        for local_index in range(1, len(indices)):
-            ds = max(float(step_distances[local_index - 1]), 0.0)
-            local_speed[local_index] = min(
-                local_speed[local_index],
-                math.sqrt(local_speed[local_index - 1] ** 2 + 2.0 * acceleration * ds),
-            )
-        for local_index in range(len(indices) - 2, -1, -1):
-            ds = max(float(step_distances[local_index]), 0.0)
-            local_speed[local_index] = min(
-                local_speed[local_index],
-                math.sqrt(local_speed[local_index + 1] ** 2 + 2.0 * acceleration * ds),
-            )
-        speed[indices] = np.clip(local_speed, minimum_speed, base_speed)
-
-    # Build cumulative spray-path time. Separate segment IDs are not connected:
-    # no travel connector or spray-off transfer path is generated here.
-    time_s = np.zeros(count, dtype=np.float64)
-    for index in range(1, count):
-        if segments[index] != segments[index - 1]:
-            time_s[index] = time_s[index - 1]
-            continue
-        ds = segment_distances_mm[index]
-        mean_speed = max(0.5 * (speed[index - 1] + speed[index]), 1e-9)
-        time_s[index] = time_s[index - 1] + ds / mean_speed
-
-    metadata = {
-        "method": "normal_curvature_and_path_turning_with_acceleration_limits",
-        "base_speed_mm_s": base_speed,
-        "minimum_speed_mm_s": minimum_speed,
-        "maximum_acceleration_mm_s2": acceleration,
-        "minimum_generated_speed_mm_s": float(np.min(speed)),
-        "maximum_generated_speed_mm_s": float(np.max(speed)),
-        "mean_generated_speed_mm_s": float(np.mean(speed)),
-        "curvature_reference_angle_deg": 45.0,
-        "corner_reference_angle_deg": 90.0,
-        "travel_moves_between_segments": "NOT_GENERATED",
-        "spray_deposition_model": "NOT_CALIBRATED",
-    }
-    return speed, time_s, metadata
-
-
-# ------------------------------------------------------------
 # Main trajectory calculation
 # ------------------------------------------------------------
 
@@ -4249,17 +4038,7 @@ def generate_spray_trajectory(
 
     product_transform_matrix = _validate_product_transform(product_transform)
 
-    # Existing saved sprayer profiles may contain legacy process fields.
-    # Use them only as a migration fallback when no separate process is supplied.
-    legacy_profile = sprayer_profile if isinstance(sprayer_profile, dict) else {}
-    if coating_process is None:
-        coating_process = {
-            "base_travel_speed_mm_s": legacy_profile.get("travel_speed_mm_s", 150.0),
-            "min_travel_speed_mm_s": legacy_profile.get("min_travel_speed_mm_s", 40.0),
-            "max_travel_acceleration_mm_s2": legacy_profile.get("max_travel_acceleration_mm_s2", 500.0),
-            "fluid_flow_ml_min": legacy_profile.get("fluid_flow_ml_min", 0.0),
-        }
-    coating_process_data = validate_coating_process(coating_process)
+    coating_process_data = validate_coating_process(coating_process or {})
 
     # Resolve unit before performing any physical-distance calculation.
     source_unit = _resolve_coordinate_unit(
@@ -4277,15 +4056,6 @@ def generate_spray_trajectory(
         sampling_spacing_mm,
         source_unit,
     )
-    robot_waypoint_spacing_mm = calculate_robot_waypoint_spacing_mm(
-        coating_process_data["base_travel_speed_mm_s"],
-        coating_process_data["robot_control_frequency_hz"],
-    )
-    robot_waypoint_spacing_coordinate_units = _mm_to_coordinate_units(
-        robot_waypoint_spacing_mm,
-        source_unit,
-    )
-
     # The active sprayer profile defines the nominal footprint. Surface
     # sampling is then driven by footprint diameter and overlap, not by an
     # arbitrary fixed point interval alone.
@@ -4666,43 +4436,11 @@ def generate_spray_trajectory(
     world_spray_directions = _transform_vectors(ordered['spray_directions'], product_transform_matrix)
     world_nozzle_frames = np.einsum('ij,njk->nik', product_transform_matrix[:3, :3], ordered['nozzle_frames'])
 
-    # 8. Calculate adaptive per-sample travel speed in physical mm/s.
-    profile_data = (
-        dict(sprayer_profile)
-        if isinstance(sprayer_profile, dict)
-        else {}
-    )
-    base_travel_speed = coating_process_data["base_travel_speed_mm_s"]
-    minimum_travel_speed = coating_process_data["min_travel_speed_mm_s"]
-    maximum_acceleration = coating_process_data["max_travel_acceleration_mm_s2"]
-    if minimum_travel_speed > base_travel_speed:
-        minimum_travel_speed = base_travel_speed
-    travel_speeds_mm_s, trajectory_time_s, adaptive_speed_analysis = (
-        _calculate_adaptive_travel_speed_profile(
-            nozzle_points=ordered["nozzle_points"],
-            surface_normals=ordered["surface_normals"],
-            segment_ids=ordered["segment_ids"],
-            coordinate_unit=source_unit,
-            base_speed_mm_s=base_travel_speed,
-            minimum_speed_mm_s=minimum_travel_speed,
-            maximum_acceleration_mm_s2=maximum_acceleration,
-        )
-    )
+    # 8. Describe spray-OFF connectors geometrically only.
     inter_segment_travel_plan = _build_inter_segment_travel_plan(
         nozzle_points=ordered["nozzle_points"],
         segment_ids=ordered["segment_ids"],
         coordinate_unit=source_unit,
-        travel_speed_mm_s=base_travel_speed,
-    )
-    inter_segment_travel_plan["ordering_optimization"] = ordered.get(
-        "travel_ordering", {}
-    )
-    print(
-        "SPRAY-OFF TRAVEL ESTIMATE | "
-        f"{inter_segment_travel_plan['transition_count']} transitions | "
-        f"{inter_segment_travel_plan['total_distance_mm']:.1f} mm | "
-        f"{inter_segment_travel_plan['estimated_time_s']:.2f} s "
-        "(straight-line estimate; collision check NOT performed)"
     )
 
     # 9. Calculate path metrics in both coordinate units and mm.
@@ -4825,14 +4563,9 @@ def generate_spray_trajectory(
             "sampling_spacing_mm": sampling_spacing_mm,
             "effective_coverage_sampling_spacing_mm": coverage_spacing_mm,
             "coverage_spacing_basis": coverage_spacing_basis,
-            "robot_waypoint_spacing_mm": robot_waypoint_spacing_mm,
-            "robot_control_frequency_hz": float(
-                coating_process_data["robot_control_frequency_hz"]
-            ),
             "spray_angle_deg": spray_angle_deg,
             "sprayer_profile": profile_data,
             "coating_process": coating_process_data,
-            "adaptive_speed": adaptive_speed_analysis,
             "product_transform_4x4": product_transform_matrix.tolist(),
             "product_coordinate_frame": "PRODUCT_CAD",
             "world_coordinate_frame": "WORLD_XYZ",
@@ -4876,8 +4609,6 @@ def generate_spray_trajectory(
         "face_indices": ordered["face_indices"],
         "patch_ids": ordered["patch_ids"],
         "segment_ids": ordered["segment_ids"],
-        "travel_speeds_mm_s": travel_speeds_mm_s,
-        "trajectory_time_s": trajectory_time_s,
         "segments": ordered["segments"],
         "surface_boundary_splits": ordered.get("surface_boundary_splits", {}),
         "step_surface_refinement": ordered.get("step_surface_refinement", {
@@ -4908,11 +4639,6 @@ def generate_spray_trajectory(
             "surface_sample_spacing_mm": coverage_spacing_mm,
             "trajectory_sample_spacing_mm": coverage_spacing_mm,
             "trajectory_sample_spacing_basis": coverage_spacing_basis,
-            "robot_waypoint_spacing_mm": robot_waypoint_spacing_mm,
-            "robot_waypoint_spacing_coordinate_units": robot_waypoint_spacing_coordinate_units,
-            "robot_waypoint_sampling_basis": (
-                "BASE_TRAVEL_SPEED_DIVIDED_BY_ROBOT_CONTROL_FREQUENCY"
-            ),
             "coverage_spacing_basis": coverage_spacing_basis,
             "nominal_footprint_track_spacing_mm": path_track_spacing_mm,
             "lane_spacing_coordinate_units": path_track_spacing_units,
@@ -5302,37 +5028,16 @@ def _make_test_mesh(
 
 def run_stage3_numerical_tests() -> dict:
 
-    # Unknown flat-fan thickness must remain unknown, not raise or be fabricated.
-    unknown_footprint = _calculate_spray_footprint(
-        {
-            "pattern_type": "flat_fan",
-            "spray_cone_angle_deg": 74.0,
-            "fan_thickness_at_reference_mm": None,
-        },
-        200.0,
-    )
-    assert unknown_footprint["thickness_mm"] is None
-    assert unknown_footprint["thickness_status"] == "unknown_conical_approximation_only"
-
-    missing_thickness_footprint = _calculate_spray_footprint(
-        {"pattern_type": "flat_fan", "spray_cone_angle_deg": 74.0},
-        200.0,
-    )
-    assert missing_thickness_footprint["thickness_mm"] is None
-
-    negative_thickness_rejected = False
-    try:
-        _calculate_spray_footprint(
-            {
-                "pattern_type": "flat_fan",
-                "spray_cone_angle_deg": 74.0,
-                "fan_thickness_at_reference_mm": -1.0,
-            },
-            200.0,
-        )
-    except ValueError:
-        negative_thickness_rejected = True
-    assert negative_thickness_rejected, "Negative fan thickness must be rejected."
+    # Circular-cone footprint uses the configured working distance, angle and overlap.
+    circular_footprint = _calculate_spray_footprint({
+        "pattern_type": "round_cone",
+        "spray_cone_angle_deg": 74.0,
+        "overlap_percent": 50.0,
+    }, 180.0)
+    expected_diameter = 2.0 * 180.0 * math.tan(math.radians(37.0))
+    assert math.isclose(circular_footprint["diameter_mm"], expected_diameter, rel_tol=1e-10)
+    assert math.isclose(circular_footprint["nominal_point_spacing_mm"], expected_diameter * 0.5, rel_tol=1e-10)
+    assert circular_footprint["pattern_type"] == "round_cone"
 
     # 3D barycentric mapping used to transfer path samples to STEP UV nodes.
     barycentric_test = _barycentric_coordinates_on_triangle(
@@ -5843,7 +5548,7 @@ def run_stage3_numerical_tests() -> dict:
         "name": "raster test sprayer",
         "spray_cone_angle_deg": 20.0,
         "overlap_percent": 50.0,
-        "pattern_type": "flat_fan",
+        "pattern_type": "round_cone",
     }
     raster_result = generate_spray_trajectory(
         mesh=test_mesh,
@@ -5874,46 +5579,6 @@ def run_stage3_numerical_tests() -> dict:
     )
 
     # --------------------------------------------------------
-    # Test 20: Flat-fan footprint uses reference thickness.
-    # --------------------------------------------------------
-    flat_fan = _calculate_spray_footprint({
-        "pattern_type": "flat_fan",
-        "spray_cone_angle_deg": 60.0,
-        "fan_reference_distance_mm": 200.0,
-        "fan_thickness_at_reference_mm": 30.0,
-        "overlap_percent": 50.0,
-    }, 300.0)
-    assert math.isclose(
-        flat_fan["width_mm"],
-        2.0 * 300.0 * math.tan(math.radians(30.0)),
-        rel_tol=1e-10,
-    )
-    assert math.isclose(flat_fan["thickness_mm"], 45.0, rel_tol=1e-10)
-    assert math.isclose(
-        flat_fan["nominal_track_spacing_mm"],
-        flat_fan["width_mm"] * 0.5,
-        rel_tol=1e-10,
-    )
-    assert flat_fan["thickness_status"] == "scaled_from_measured_reference"
-
-    # --------------------------------------------------------
-    # Test 20B: Missing flat-fan thickness remains explicitly unknown.
-    # --------------------------------------------------------
-    unknown_flat_fan = _calculate_spray_footprint({
-        "pattern_type": "flat_fan",
-        "spray_cone_angle_deg": 60.0,
-        "overlap_percent": 50.0,
-    }, 200.0)
-    assert unknown_flat_fan["reference_thickness_mm"] is None
-    assert unknown_flat_fan["thickness_mm"] is None
-    assert unknown_flat_fan["thickness_status"] == "unknown_conical_approximation_only"
-    assert math.isclose(
-        unknown_flat_fan["width_mm"],
-        2.0 * 200.0 * math.tan(math.radians(30.0)),
-        rel_tol=1e-10,
-    )
-
-    # --------------------------------------------------------
     # Test 21: Round-cone footprint is circular.
     # --------------------------------------------------------
     round_cone = _calculate_spray_footprint({
@@ -5934,7 +5599,7 @@ def run_stage3_numerical_tests() -> dict:
     # --------------------------------------------------------
     wide_angle_profile = {
         "name": "wide angle test",
-        "pattern_type": "flat_fan",
+        "pattern_type": "round_cone",
         "spray_cone_angle_deg": 60.0,
         "fan_reference_distance_mm": 200.0,
         "fan_thickness_at_reference_mm": 0.0,
@@ -6331,13 +5996,11 @@ def run_stage3_numerical_tests() -> dict:
         ], dtype=np.float64),
         segment_ids=np.asarray([0, 0, 1, 1, 2], dtype=np.int64),
         coordinate_unit="mm",
-        travel_speed_mm_s=100.0,
     )
     assert travel_test["transition_count"] == 2
     assert travel_test["transitions"][0]["distance_mm"] == 0.0
     assert abs(travel_test["transitions"][1]["distance_mm"] - 5.0) < 1e-9
     assert travel_test["transitions"][0]["spray_state"] == "OFF"
-    assert abs(travel_test["estimated_time_s"] - 0.05) < 1e-9
     assert travel_test["safety_status"] == "NOT_COLLISION_CHECKED"
 
     # --------------------------------------------------------
