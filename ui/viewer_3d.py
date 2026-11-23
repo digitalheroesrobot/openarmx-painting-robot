@@ -7925,7 +7925,7 @@ class ProductViewer(QWidget):
             return
 
         process = cache["coating_process"]
-        base_speed = float(process.get("base_travel_speed_mm_s", 500.0))
+        base_speed = 500.0  # preview-only speed; never read from Robot Settings
         source_face_ids = np.repeat(
             cache["target_face_ids"], cache["sample_count_per_face"]
         )
