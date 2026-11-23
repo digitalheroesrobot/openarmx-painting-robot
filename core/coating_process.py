@@ -19,8 +19,6 @@ DEFAULT_COATING_PROCESS = {
     "transfer_efficiency_percent": 50.0,
     "volume_solids_percent": 50.0,
     "number_of_coats": 1,
-    "spray_on_delay_ms": 0.0,
-    "spray_off_delay_ms": 0.0,
     "input_status": "UNVALIDATED_OPERATOR_INPUT",
 }
 
@@ -36,6 +34,8 @@ def validate_coating_process(parameters: dict) -> dict:
         "robot_control_frequency_hz",
         "min_travel_speed_mm_s",
         "max_travel_acceleration_mm_s2",
+        "spray_on_delay_ms",
+        "spray_off_delay_ms",
     ):
         values.pop(motion_key, None)
     numeric_ranges = {
@@ -43,8 +43,6 @@ def validate_coating_process(parameters: dict) -> dict:
         "fluid_flow_ml_min": (0.0, 10000.0),
         "transfer_efficiency_percent": (0.0, 100.0),
         "volume_solids_percent": (0.0, 100.0),
-        "spray_on_delay_ms": (0.0, 10000.0),
-        "spray_off_delay_ms": (0.0, 10000.0),
     }
     for key, (lower, upper) in numeric_ranges.items():
         try:
@@ -125,7 +123,7 @@ def load_coating_process(config_path: str | Path, legacy_sprayer_profile: dict |
         values = validate_coating_process(values)
 
         # Upgrade only the exact factory-created incomplete profile shipped
-        # before the provisional baseline. Preserve operator motion settings.
+        # before the provisional baseline. Preserve operator-entered material settings.
         is_legacy_factory_profile = (
             values.get("name") == "default coating process"
             and values["target_dry_film_thickness_um"] == 60.0
