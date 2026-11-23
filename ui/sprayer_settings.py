@@ -42,8 +42,8 @@ DEFAULT_SPRAYER_PROFILE = {
     "overspray_tail_fraction": 0.12,
     "overspray_tail_sigma_fraction": 0.35,
     "tcp_to_nozzle_tip_mm": 0.0,
-    "standoff_mm": 180.0,
-    "spray_cone_angle_deg": 45.0,
+    "standoff_mm": 100.0,
+    "spray_cone_angle_deg": 50.0,
     "overlap_percent": 50.0,
     "sampling_spacing_mm": 20.0,
     "travel_speed_mm_s": 150.0,
@@ -93,8 +93,16 @@ def load_sprayer_profiles(config_path: str | Path) -> list[dict]:
             # This simplified workflow supports circular cone spray only.
             # A legacy flat-fan angle is not a measured cone angle.
             if str(item.get("pattern_type", "round_cone")) != "round_cone":
-                merged["spray_cone_angle_deg"] = 45.0
+                merged["spray_cone_angle_deg"] = 50.0
             merged["pattern_type"] = "round_cone"
+            # Upgrade only the former generic defaults. Preserve non-default
+            # values that may already have been measured by the user.
+            if "standoff_mm" not in item or float(item.get("standoff_mm", 180.0)) == 180.0:
+                merged["standoff_mm"] = 100.0
+                profile_migrated = True
+            if "spray_cone_angle_deg" not in item or float(item.get("spray_cone_angle_deg", 45.0)) == 45.0:
+                merged["spray_cone_angle_deg"] = 50.0
+                profile_migrated = True
 
             # Older local profiles stored these dimensions as 0.0 ("not
             # specified"). Upgrade only missing/zero values; preserve every
@@ -224,7 +232,7 @@ class SprayPatternPreview(QWidget):
             )
             track_pitch_mm = spray_width_mm * (1.0 - overlap / 100.0)
             effective_sample_spacing = (
-                min(track_pitch_mm, 0.5 * spray_width_mm)
+                track_pitch_mm
                 if spray_width_mm > 0.0 and track_pitch_mm > 0.0
                 else fallback_sample_spacing
             )
