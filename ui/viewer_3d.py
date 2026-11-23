@@ -4480,7 +4480,7 @@ class ProductViewer(QWidget):
                     transfer_efficiency_percent=efficiency,
                     volume_solids_percent=solids,
                     number_of_coats=coats,
-                            radial_alpha=float(
+                    radial_alpha=float(
                         self._interactive_sprayer_profile.get("deposition_beta", 2.0)
                     ),
                     radial_beta=float(
