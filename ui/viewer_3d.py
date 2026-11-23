@@ -999,7 +999,7 @@ class ProductViewer(QWidget):
         )
         row.addWidget(self.spray_perpendicular_status)
 
-        self.camera_orbit_angle_status = QLabel("VIEW YAW: --° | PITCH: --°")
+        self.camera_orbit_angle_status = QLabel("VIEW YAW: --° | ROLL: --°")
         self.camera_orbit_angle_status.setMinimumWidth(190)
         self.camera_orbit_angle_status.setToolTip(
             "Live camera orbit angles relative to the product coordinate frame. "
@@ -5162,10 +5162,11 @@ class ProductViewer(QWidget):
             self.plotter.render()
 
     def _update_camera_orbit_angle_readout(self, pivot, local_x, local_z):
-        """Display camera azimuth/elevation relative to the product frame."""
+        """Display camera yaw and roll relative to the product coordinate frame."""
         if not hasattr(self, "camera_orbit_angle_status"):
             return
-        camera_position = np.asarray(self.plotter.camera.GetPosition(), dtype=np.float64)
+        camera = self.plotter.camera
+        camera_position = np.asarray(camera.GetPosition(), dtype=np.float64)
         offset = camera_position - np.asarray(pivot, dtype=np.float64)
         distance = float(np.linalg.norm(offset))
         x_axis = np.asarray(local_x, dtype=np.float64).copy()
@@ -5174,22 +5175,38 @@ class ProductViewer(QWidget):
         z_axis /= max(float(np.linalg.norm(z_axis)), 1e-12)
         if distance <= 1e-12:
             return
-        direction = offset / distance
-        x_component = float(np.dot(direction, x_axis))
-        z_component = float(np.clip(np.dot(direction, z_axis), -1.0, 1.0))
+
+        view_from_pivot = offset / distance
+        x_component = float(np.dot(view_from_pivot, x_axis))
         y_axis = np.cross(z_axis, x_axis)
         y_axis /= max(float(np.linalg.norm(y_axis)), 1e-12)
-        y_component = float(np.dot(direction, y_axis))
+        y_component = float(np.dot(view_from_pivot, y_axis))
         yaw = math.degrees(math.atan2(y_component, x_component))
-        pitch = math.degrees(math.atan2(
-            z_component, math.hypot(x_component, y_component)
-        ))
+
+        # Measure roll against the product's local downward axis projected
+        # onto the camera image plane. This remains meaningful while yawing.
+        view_direction = -view_from_pivot
+        reference_up = -z_axis
+        reference_up -= view_direction * float(np.dot(reference_up, view_direction))
+        actual_up = np.asarray(camera.GetViewUp(), dtype=np.float64)
+        actual_up -= view_direction * float(np.dot(actual_up, view_direction))
+        reference_norm = float(np.linalg.norm(reference_up))
+        actual_norm = float(np.linalg.norm(actual_up))
+        if reference_norm <= 1e-10 or actual_norm <= 1e-10:
+            roll = 0.0
+        else:
+            reference_up /= reference_norm
+            actual_up /= actual_norm
+            roll = math.degrees(math.atan2(
+                float(np.dot(view_direction, np.cross(reference_up, actual_up))),
+                float(np.clip(np.dot(reference_up, actual_up), -1.0, 1.0)),
+            ))
         self.camera_orbit_angle_status.setText(
-            f"VIEW YAW: {yaw:+.1f}° | PITCH: {pitch:+.1f}°"
+            f"VIEW YAW: {yaw:+.1f}° | ROLL: {roll:+.1f}°"
         )
 
     def _rotate_camera_from_spray_drag(self, interactor):
-        """Orbit the camera around the product using the product's local axes."""
+        """Adjust camera yaw and roll with the right mouse button."""
         current = tuple(int(value) for value in interactor.GetEventPosition())
         previous = self._interactive_spray_camera_last_position
         self._interactive_spray_camera_last_position = current
@@ -5203,10 +5220,7 @@ class ProductViewer(QWidget):
         camera = self.plotter.camera
         sensitivity = 0.5  # degrees per screen pixel
 
-        # The product actor matrix maps its local coordinate frame into world.
-        # In this workspace, local +Z is the vertical axis and local +X is
-        # the horizontal axis. Orbit around those fixed product axes rather
-        # than VTK's camera-relative Azimuth/Elevation axes.
+        # Yaw is measured around the product's local vertical axis.
         pivot = np.asarray(camera.GetFocalPoint(), dtype=np.float64)
         local_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
         local_z = np.array([0.0, 0.0, 1.0], dtype=np.float64)
@@ -5238,18 +5252,18 @@ class ProductViewer(QWidget):
                 + axis * float(np.dot(axis, vector)) * (1.0 - cosine)
             )
 
-        # Preserve the existing mouse direction convention: drag right/down
-        # rotates the view in the same perceived direction as before.
         yaw_deg = -float(dx) * sensitivity
-        pitch_deg = -float(dy) * sensitivity
-
+        roll_deg = -float(dy) * sensitivity
         position = np.asarray(camera.GetPosition(), dtype=np.float64)
         view_up = np.asarray(camera.GetViewUp(), dtype=np.float64)
         offset = position - pivot
+
+        # Yaw moves the camera around the product. Roll rotates the camera's
+        # image plane around its current viewing axis without moving its position.
         offset = rotate_vector(offset, local_z, yaw_deg)
         view_up = rotate_vector(view_up, local_z, yaw_deg)
-        offset = rotate_vector(offset, local_x, pitch_deg)
-        view_up = rotate_vector(view_up, local_x, pitch_deg)
+        view_direction = -offset / max(float(np.linalg.norm(offset)), 1e-12)
+        view_up = rotate_vector(view_up, view_direction, roll_deg)
 
         camera.SetFocalPoint(*pivot.tolist())
         camera.SetPosition(*(pivot + offset).tolist())
