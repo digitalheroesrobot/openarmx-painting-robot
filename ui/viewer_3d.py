@@ -2608,7 +2608,7 @@ class ProductViewer(QWidget):
         self, standoff, cone_angle_deg, sampling_spacing=None,
         sprayer_profile=None, coating_process=None,
     ):
-        """Enter surface-following spray cursor mode and begin an empty path."""
+        """Initialize the spray session in camera mode; Space enables painting."""
         if self.current_mesh is None:
             raise RuntimeError("Load a product before starting an interactive spray path.")
         if not np.isfinite(standoff) or standoff <= 0.0:
@@ -5218,8 +5218,11 @@ class ProductViewer(QWidget):
         return True
 
     def _on_interactive_spray_left_double_click(self, interactor, event):
-        """Keep a viewport double-click in spray mode and restore preview pose."""
-        if not self._interactive_spray_active:
+        """Keep a double-click from changing the active spray input mode."""
+        if (
+            not self._interactive_spray_active
+            or self._interactive_spray_mode != "spray"
+        ):
             return
 
         # A double-click is a cursor/preview action, never a request to enter
