@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import copy
+import csv
+import json
 import math
 import time
+from pathlib import Path
 import numpy as np
 import pyvista as pv
 
@@ -49,6 +52,8 @@ from PySide6.QtWidgets import (
     QSlider,
     QProgressBar,
     QColorDialog,
+    QFileDialog,
+    QMessageBox,
 )
 from pyvistaqt import QtInteractor
 from vtkmodules.vtkRenderingCore import vtkCellPicker
@@ -441,6 +446,15 @@ class ProductViewer(QWidget):
         self._interactive_spray_standoff = 0.0
         self._interactive_spray_cone_angle_deg = 0.0
         self._interactive_spray_transform = np.eye(4, dtype=float)
+        # Fixed offset plane for the complete route-editing session.
+        self._interactive_spray_work_plane_origin_world = None
+        self._interactive_spray_work_plane_normal_world = None
+        self._interactive_spray_latest_display_position = None
+        self._interactive_robot_settings = {
+            "base_travel_speed_mm_s": 100.0,
+            "robot_control_frequency_hz": 100.0,
+            "name": "default robot",
+        }
         self._interactive_spray_latest_pose = None
         self._interactive_spray_records = []
         self._interactive_spray_display_mode = "thickness"
@@ -1051,6 +1065,15 @@ class ProductViewer(QWidget):
             self._stop_interactive_recorded_replay
         )
         row.addWidget(self.recorded_path_stop_button)
+        self.recorded_path_export_button = QPushButton("EXPORT TRAJECTORY")
+        self.recorded_path_export_button.setToolTip(
+            "Export product-frame nozzle poses as an 8-column CSV plus timing/state metadata JSON."
+        )
+        self.recorded_path_export_button.clicked.connect(
+            self._export_interactive_recorded_path
+        )
+        self.recorded_path_export_button.setVisible(False)
+        row.addWidget(self.recorded_path_export_button)
         self.recorded_path_status_label = QLabel("No recorded path")
         row.addWidget(self.recorded_path_status_label, 1)
         self.recorded_path_time_label = QLabel("EST. TIME: --")
@@ -1099,6 +1122,9 @@ class ProductViewer(QWidget):
         self.recorded_path_optimize_button.setVisible(route_page)
         self.recorded_path_replay_button.setVisible(not route_page)
         self.recorded_path_stop_button.setVisible(not route_page)
+        self.recorded_path_export_button.setVisible(
+            (not route_page) and has_route
+        )
         self.recorded_path_time_label.setVisible(True)
         has_route = len(getattr(self, "_interactive_spray_records", [])) >= 2
         self.interactive_recorded_path_panel.setVisible(has_route)
