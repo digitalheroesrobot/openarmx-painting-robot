@@ -1970,6 +1970,40 @@ class ProductViewer(QWidget):
             "ATTITUDE RESET  |  Roll, Pitch and Yaw set to 0.00°."
         )
 
+    def _apply_product_transform_to_display_actors(self, matrix):
+        """Apply one CAD-to-World transform to every visible product actor."""
+        matrix = np.asarray(matrix, dtype=np.float64)
+        if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
+            raise ValueError("Product transform must be a finite 4x4 matrix.")
+
+        self._last_product_transform = matrix.copy()
+        vtk_matrix = self._vtk_matrix_from_numpy(matrix)
+
+        # Use the full matrix as the single source of truth. Reset the
+        # vtkProp3D component transforms first to avoid composing the same
+        # rotation twice with an existing UserMatrix.
+        actors = []
+        if self._pose_actor is not None:
+            actors.append(self._pose_actor)
+        actors.extend(
+            actor for actor in getattr(self, "_interactive_spray_texture_actors", {}).values()
+            if actor is not None
+        )
+
+        seen = set()
+        for actor in actors:
+            if id(actor) in seen:
+                continue
+            seen.add(id(actor))
+            actor.SetOrigin(0.0, 0.0, 0.0)
+            actor.SetPosition(0.0, 0.0, 0.0)
+            actor.SetOrientation(0.0, 0.0, 0.0)
+            actor.SetScale(1.0, 1.0, 1.0)
+            actor.SetUserMatrix(vtk_matrix)
+
+        if self._cad_axes_actor is not None:
+            self._cad_axes_actor.SetUserMatrix(vtk_matrix)
+
     def _apply_rpy_inputs(self):
         """Set absolute World-frame ZYX Roll/Pitch/Yaw orientation."""
         if self._pose_actor is None:
@@ -1981,14 +2015,16 @@ class ProductViewer(QWidget):
         rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]], dtype=float)
         ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]], dtype=float)
         rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]], dtype=float)
+
+        # Preserve the current CAD-origin world translation while replacing
+        # its absolute orientation with R = Rz(yaw) * Ry(pitch) * Rx(roll).
         matrix = self._actor_matrix_array()
         matrix[:3, :3] = rz @ ry @ rx
-        from vtkmodules.vtkCommonTransforms import vtkTransform
-        transform = vtkTransform()
-        transform.SetMatrix(self._vtk_matrix_from_numpy(matrix))
-        self._pose_actor.SetOrientation(*transform.GetOrientation())
+        self._apply_product_transform_to_display_actors(matrix)
         self._update_pose_readout()
-        self.pose_status_label.setText("ATTITUDE UPDATED  |  Product set to the entered absolute RPY.")
+        self.pose_status_label.setText(
+            "ATTITUDE UPDATED  |  Product geometry rotated in the World frame."
+        )
         self.plotter.render()
 
     def _apply_world_position(self):
@@ -2206,9 +2242,12 @@ class ProductViewer(QWidget):
             field.blockSignals(True)
             field.setValue(float(value))
             field.blockSignals(False)
-        # RPY is shown only in the three numeric selectors above the viewport.
+        # Keep the Product coordinate frame synchronized with the displayed
+        # CAD transform; the fixed World frame is deliberately untouched.
         if self._cad_axes_actor is not None:
-            self._cad_axes_actor.SetUserMatrix(self._vtk_matrix_from_numpy(self._actor_matrix_array()))
+            self._cad_axes_actor.SetUserMatrix(
+                self._vtk_matrix_from_numpy(self._actor_matrix_array())
+            )
 
     @staticmethod
     def _vtk_matrix_from_numpy(values):
