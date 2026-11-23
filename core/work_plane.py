@@ -73,3 +73,22 @@ def spray_direction_from_surface_normal(surface_normal, yaw_deg=0.0, pitch_deg=0
     if not np.isfinite(result_length) or result_length <= 1e-12:
         raise ValueError("Could not construct a valid spray direction.")
     return result / result_length
+
+def nozzle_position_from_surface(surface_point, spray_direction, standoff):
+    """Place the nozzle on the spray axis at an exact distance from a surface hit."""
+    point = np.asarray(surface_point, dtype=np.float64)
+    direction = np.asarray(spray_direction, dtype=np.float64)
+    distance = float(standoff)
+    if (
+        point.shape != (3,)
+        or direction.shape != (3,)
+        or not np.all(np.isfinite(point))
+        or not np.all(np.isfinite(direction))
+        or not np.isfinite(distance)
+        or distance <= 0.0
+    ):
+        raise ValueError("Surface point, spray direction, and positive standoff must be finite 3D values.")
+    direction_length = float(np.linalg.norm(direction))
+    if direction_length <= 1e-12:
+        raise ValueError("Spray direction must be non-zero.")
+    return point - (direction / direction_length) * distance
