@@ -4054,6 +4054,8 @@ class ProductViewer(QWidget):
         self._interactive_spray_locator.BuildLocator()
         self._interactive_spray_latest_pose = None
         self._interactive_spray_records = list(existing_records)
+        self._interactive_pending_spray_strokes = []
+        self._interactive_spray_stroke_input_poses = []
         self._interactive_safe_connector_paths = None
         if existing_records:
             # Continue stroke IDs after the existing route.
@@ -7116,10 +7118,15 @@ class ProductViewer(QWidget):
             + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
         )
 
-    def _interactive_finalize_smoothed_spray_stroke(self):
-        """Smooth one captured mouse stroke, project it to CAD, then arc-resample."""
-        raw = list(getattr(self, "_interactive_spray_stroke_input_poses", []))
-        self._interactive_spray_stroke_input_poses = []
+    def _interactive_finalize_smoothed_spray_stroke(
+        self, raw_poses=None, refresh_actor=True
+    ):
+        """Finalize one queued stroke; expensive projection/collision work is deferred to FINISH."""
+        if raw_poses is None:
+            raw = list(getattr(self, "_interactive_spray_stroke_input_poses", []))
+            self._interactive_spray_stroke_input_poses = []
+        else:
+            raw = list(raw_poses)
         self._interactive_remove_stroke_preview()
         if not raw:
             return 0
@@ -7395,7 +7402,8 @@ class ProductViewer(QWidget):
             self.recorded_path_replay_button.setEnabled(
                 len(self._interactive_spray_records) >= 2
             )
-            self._refresh_interactive_recorded_path_actor()
+            if refresh_actor:
+                self._refresh_interactive_recorded_path_actor()
         return stored_count
 
     def _interactive_begin_spray_stroke(self):
@@ -7538,7 +7546,19 @@ class ProductViewer(QWidget):
 
         self._interactive_spray_recording = False
         if getattr(self, "_interactive_route_generation_only", False):
-            self._interactive_finalize_smoothed_spray_stroke()
+            # Mouse-up only queues the raw stroke. Spline projection, fixed-
+            # spacing sampling, full-gun collision checks and connector
+            # optimization are intentionally deferred until FINISH SPRAY PATH.
+            raw_stroke = list(
+                getattr(self, "_interactive_spray_stroke_input_poses", [])
+            )
+            if raw_stroke:
+                pending = getattr(self, "_interactive_pending_spray_strokes", None)
+                if pending is None:
+                    pending = []
+                    self._interactive_pending_spray_strokes = pending
+                pending.append(raw_stroke)
+            self._interactive_spray_stroke_input_poses = []
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_sampling_previous_pose = None
@@ -7578,10 +7598,31 @@ class ProductViewer(QWidget):
         self._interactive_update_surface_angle_indicator(None)
 
     def finish_interactive_spray_path(self):
-        """Finish input and return the recorded path without changing Stage 3 data."""
+        """Finalize queued strokes, optimize their safe connectors, and return the route."""
         if not self._interactive_spray_active:
             return None
         self._interactive_spray_recording = False
+
+        # A finish click can arrive before the final mouse-up callback has
+        # queued its raw stroke. Include any still-open input buffer first.
+        current_raw = list(
+            getattr(self, "_interactive_spray_stroke_input_poses", [])
+        )
+        pending_strokes = list(
+            getattr(self, "_interactive_pending_spray_strokes", [])
+        )
+        if current_raw:
+            pending_strokes.append(current_raw)
+        self._interactive_spray_stroke_input_poses = []
+        self._interactive_pending_spray_strokes = []
+
+        finalized_sample_count = 0
+        for raw_stroke in pending_strokes:
+            finalized_sample_count += self._interactive_finalize_smoothed_spray_stroke(
+                raw_poses=raw_stroke, refresh_actor=False
+            )
+        if finalized_sample_count:
+            self._refresh_interactive_recorded_path_actor()
 
         self._interactive_spray_active = False
         self._interactive_spray_last_deposition_timestamp = None
