@@ -3463,22 +3463,43 @@ class ProductViewer(QWidget):
                 float(np.linalg.norm(spray_direction_world)), 1e-12
             )
 
-        # Operator-controlled tilt is applied in the local tangent frame of
-        # the picked surface, independent of cavity insertion mode.
-        manual_x = math.radians(float(self._interactive_spray_angle_x_deg))
-        manual_y = math.radians(float(self._interactive_spray_angle_y_deg))
-        if abs(manual_x) > 1e-9 or abs(manual_y) > 1e-9:
+        # Operator-controlled tilt rotates the current cone centerline itself.
+        # Build the two drag axes perpendicular to the current spray direction,
+        # not from the CAD surface normal. This keeps the adjustment intuitive
+        # even after the cone has already been tilted inside a cavity.
+        manual_yaw = math.radians(float(self._interactive_spray_angle_y_deg))
+        manual_pitch = math.radians(float(self._interactive_spray_angle_x_deg))
+        if abs(manual_yaw) > 1e-9 or abs(manual_pitch) > 1e-9:
+            base_axis = np.asarray(spray_direction_world, dtype=np.float64)
+            base_axis /= max(float(np.linalg.norm(base_axis)), 1e-12)
+
             reference = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-            if abs(float(np.dot(reference, normal_world))) > 0.92:
+            if abs(float(np.dot(reference, base_axis))) > 0.92:
                 reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-            tangent_x = np.cross(reference, normal_world)
-            tangent_x /= max(float(np.linalg.norm(tangent_x)), 1e-12)
-            tangent_y = np.cross(normal_world, tangent_x)
-            tangent_y /= max(float(np.linalg.norm(tangent_y)), 1e-12)
-            spray_direction_world = (
-                spray_direction_world
-                + math.tan(manual_x) * tangent_x
-                + math.tan(manual_y) * tangent_y
+
+            # Local cone frame: both axes are perpendicular to its centerline.
+            yaw_axis = np.cross(reference, base_axis)
+            yaw_axis /= max(float(np.linalg.norm(yaw_axis)), 1e-12)
+            pitch_axis = np.cross(base_axis, yaw_axis)
+            pitch_axis /= max(float(np.linalg.norm(pitch_axis)), 1e-12)
+
+            def rotate_about_axis(vector, axis, angle):
+                cosine = math.cos(angle)
+                sine = math.sin(angle)
+                return (
+                    vector * cosine
+                    + np.cross(axis, vector) * sine
+                    + axis * float(np.dot(axis, vector)) * (1.0 - cosine)
+                )
+
+            # Horizontal drag yaws around the cone's local vertical axis;
+            # vertical drag pitches around its local horizontal axis.
+            rotated_axis = rotate_about_axis(base_axis, yaw_axis, manual_yaw)
+            rotated_pitch_axis = rotate_about_axis(
+                pitch_axis, yaw_axis, manual_yaw
+            )
+            spray_direction_world = rotate_about_axis(
+                rotated_axis, rotated_pitch_axis, manual_pitch
             )
             spray_direction_world /= max(
                 float(np.linalg.norm(spray_direction_world)), 1e-12
