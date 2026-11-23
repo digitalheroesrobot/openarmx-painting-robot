@@ -4093,15 +4093,30 @@ class MainWindow(QMainWindow):
             return
         self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
         self.interactive_spray_path_button.setEnabled(True)
+        stage2_labels = np.asarray(
+            self.current_stage2_result.get("face_status_labels", [])
+            if isinstance(self.current_stage2_result, dict)
+            else []
+        )
+        excluded_count = (
+            int(np.count_nonzero(stage2_labels != FACE_PAINTABLE_CANDIDATE))
+            if stage2_labels.shape == (len(self.current_mesh.faces),)
+            else len(self.current_mesh.faces)
+        )
+        paintable_count = max(len(self.current_mesh.faces) - excluded_count, 0)
         self.status_bar.showMessage(
-            "CAMERA VIEW ACTIVE | PRESS SPACE TO ENTER SPRAY MODE"
+            f"STAGE 2: {excluded_count} NON-PAINTABLE FACES | "
+            "CAMERA VIEW ACTIVE | PRESS SPACE FOR SPRAY MODE"
         )
         self.analysis_summary.setText(
             "SPRAY TRAJECTORY\n\n"
+            f"STAGE 2 PAINTABLE TRIANGLES: {paintable_count:,}\n"
+            f"STAGE 2 EXCLUDED / UNCONFIRMED TRIANGLES: {excluded_count:,}\n"
+            "Excluded and unconfirmed regions are highlighted RED.\n"
+            "The sprayer turns RED and deposition is disabled over those regions.\n\n"
             "Camera navigation is active on entry.\n"
             "Press SPACE to switch to spray mode.\n"
             "Move the mouse over paintable Stage 2 surfaces.\n"
-            "Stage 2 excluded surfaces show a red, disabled sprayer.\n"
             "Hold the left mouse button to paint and record the path.\n"
             "Use FINISH SPRAY PATH in this panel to complete recording."
         )
