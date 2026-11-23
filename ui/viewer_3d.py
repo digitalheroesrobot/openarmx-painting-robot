@@ -1218,7 +1218,7 @@ class ProductViewer(QWidget):
         row.setContentsMargins(8, 4, 8, 4)
         row.setSpacing(7)
         row.addWidget(QLabel("RECORDED SPRAY PATH"))
-        self.recorded_path_optimize_button = QPushButton("CHECK ROUTE")
+        self.recorded_path_optimize_button = QPushButton("FINALIZE SPRAY ROUTE")
         self.recorded_path_optimize_button.setToolTip(
             "Finalize spray strokes only. MoveIt2 plans transfers between strokes."
         )
@@ -1743,7 +1743,7 @@ class ProductViewer(QWidget):
             return {"spray_distance_mm": 0.0, "connector_distance_mm": 0.0,
                     "total_route_distance_mm": 0.0, "estimated_duration_s": 0.0,
                     "recorded_replay_duration_s": 0.0, "timeline": [],
-                    "safe_connector_paths": [], "safety_status": "NO_ROUTE"}
+                    "safety_status": "NO_ROUTE"}
         mm_factor = self._get_source_mm_factor()
         if mm_factor is None or not np.isfinite(mm_factor) or mm_factor <= 0.0:
             raise ValueError("A known source coordinate unit is required for route distances.")
@@ -1787,7 +1787,7 @@ class ProductViewer(QWidget):
                 "total_route_distance_mm": float(spray_distance),
                 "estimated_duration_s": float(elapsed), "recorded_replay_duration_s": float(elapsed),
                 "painting_speed_mm_s": speed, "timeline": timeline,
-                "safe_connector_paths": [], "safety_status": "SAFE",
+                "safety_status": "SAFE",
                 "transfer_planning": "DELEGATED_TO_MOVEIT2"}
 
     def _optimize_interactive_recorded_path(self):
@@ -1815,7 +1815,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_records = records
         metrics = self._build_interactive_route_metrics(records)
         self._interactive_recorded_replay_timing = metrics
-        self._interactive_safe_connector_paths = []
         self._interactive_spray_route_optimization = {
             "algorithm": "USER_DRAWN_SPRAY_STROKES_ONLY",
             "stroke_count": stroke_count, "stroke_order": "PRESERVED",
@@ -2194,7 +2193,7 @@ class ProductViewer(QWidget):
         timing = self._interactive_recorded_replay_timing
         if timing and timing.get("safety_status") not in (None, "SAFE"):
             reason = str(timing.get(
-                "safety_reason", "No collision-free exterior connector"
+                "safety_reason", "Spray route timing is unavailable"
             ))
             self.recorded_path_status_label.setText(
                 "REPLAY BLOCKED · " + reason[:100]
@@ -7557,7 +7556,7 @@ class ProductViewer(QWidget):
         self._interactive_update_surface_angle_indicator(None)
 
     def finish_interactive_spray_path(self):
-        """Finalize queued strokes, optimize their safe connectors, and return the route."""
+        """Finalize queued spray strokes; MoveIt2 generates all inter-stroke transfers."""
         if not self._interactive_spray_active:
             return None
         self._interactive_spray_recording = False
@@ -7703,9 +7702,7 @@ class ProductViewer(QWidget):
             "spray_length_mm": (
                 float(route_timing["spray_distance_mm"]) if route_timing else 0.0
             ),
-            "travel_length_mm": (
-                float(route_timing["connector_distance_mm"]) if route_timing else 0.0
-            ),
+            "travel_length_mm": 0.0,
             "total_route_distance_mm": (
                 float(route_timing["total_route_distance_mm"]) if route_timing else 0.0
             ),
@@ -7749,7 +7746,8 @@ class ProductViewer(QWidget):
             if route_timing:
                 self.recorded_path_time_label.setText(
                     f"SPRAY {route_timing['spray_distance_mm']:.1f} mm  |  "
-                    f"CONNECTORS {route_timing['connector_distance_mm']:.1f} mm"
+                    f"SPRAY TIME {self._format_route_time(route_timing['estimated_duration_s'])}  |  "
+                    "MOVEIT2 TRANSFERS"
                 )
             self._refresh_interactive_recorded_path_actor()
         self.plotter.add_text(
