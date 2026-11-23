@@ -530,6 +530,15 @@ class ProductViewer(QWidget):
         self._interactive_spray_space_shortcut.activated.connect(
             self._return_to_interactive_spray_mode
         )
+        self._interactive_spray_undo_shortcut = QShortcut(
+            QKeySequence.Undo, self
+        )
+        self._interactive_spray_undo_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self._interactive_spray_undo_shortcut.activated.connect(
+            self._undo_interactive_spray_stroke
+        )
         self._interactive_spray_middle_press_observer_id = interactor.AddObserver(
             "MiddleButtonPressEvent", self._on_interactive_spray_middle_press, 3.0
         )
@@ -1152,7 +1161,8 @@ class ProductViewer(QWidget):
 
         process = dict(DEFAULT_COATING_PROCESS)
         process.update(self._interactive_coating_process or {})
-        base_speed = max(float(process.get("base_travel_speed_mm_s", 500.0)), 0.1)
+        # Preview playback timing is independent of the saved Robot Settings profile.
+        base_speed = 500.0
         spray_on_delay = max(float(process.get("spray_on_delay_ms", 0.0)), 0.0) / 1000.0
         spray_off_delay = max(float(process.get("spray_off_delay_ms", 0.0)), 0.0) / 1000.0
         mm_factor = self._get_source_mm_factor()
@@ -5507,10 +5517,59 @@ class ProductViewer(QWidget):
             except (AttributeError, TypeError):
                 pass
 
+        gun_actors, _gun_geometry = self._interactive_build_gun_visual(
+            nozzle, direction
+        )
+        self._interactive_spray_live_actors.extend(gun_actors)
+        # Keep the physical spray envelope visible for operator guidance.
+        # Display geometry only: no collision query, footprint integration,
+        # film-thickness update, or coating texture rendering.
+        self._interactive_add_replay_cone_visual(pose)
+
         if recorded_samples:
             self._interactive_spray_live_route_refresh_at = now
             self._refresh_interactive_recorded_path_actor()
 
+        self.plotter.render()
+
+    def _undo_interactive_spray_stroke(self):
+        """Remove the most recently drawn mouse stroke as one Ctrl+Z action."""
+        if not self._interactive_spray_active:
+            return
+        if self._interactive_spray_recording:
+            self.recorded_path_status_label.setText(
+                "Release the left mouse button before undoing a stroke."
+            )
+            return
+        records = list(self._interactive_spray_records)
+        if not records:
+            self.recorded_path_status_label.setText("Nothing to undo")
+            return
+        last_stroke_id = max(int(item.get("stroke_id", -1)) for item in records)
+        remaining = [
+            item for item in records
+            if int(item.get("stroke_id", -1)) != last_stroke_id
+        ]
+        removed_count = len(records) - len(remaining)
+        self._interactive_spray_records = remaining
+        self._interactive_spray_stroke_id = max(
+            (int(item.get("stroke_id", -1)) for item in remaining),
+            default=-1,
+        )
+        self._interactive_spray_sampling_previous_pose = None
+        self._interactive_spray_sampling_distance_accumulator = 0.0
+        self._interactive_spray_route_optimization = None
+        self._interactive_recorded_replay_timing = None
+        self._interactive_route_optimization_metrics = {}
+        self._interactive_recorded_replay_timeline = []
+        self._interactive_recorded_replay_end_times = np.empty(0, dtype=np.float64)
+        self._interactive_spray_latest_pose = None
+        self._interactive_remove_live_actors()
+        self._refresh_interactive_recorded_path_actor()
+        self.recorded_path_replay_button.setEnabled(len(remaining) >= 2)
+        self.recorded_path_status_label.setText(
+            f"UNDO: removed stroke {last_stroke_id} ({removed_count} samples)"
+        )
         self.plotter.render()
 
     @staticmethod
@@ -6083,16 +6142,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_spray_last_speed_mm_s = 0.0
         self._interactive_remove_live_actors()
-        if self._interactive_spray_excluded_overlay_actor is not None:
-            try:
-                self.plotter.remove_actor(
-                    self._interactive_spray_excluded_overlay_actor,
-                    render=False,
-                )
-            except Exception:
-                pass
-            self._interactive_spray_excluded_overlay_actor = None
-
         interactor = self.plotter.iren.interactor
         if self._interactive_saved_style is not None:
             interactor.SetInteractorStyle(self._interactive_saved_style)
