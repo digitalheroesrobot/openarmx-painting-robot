@@ -5007,6 +5007,22 @@ class ProductViewer(QWidget):
             if np.isfinite(length) and length > 1e-12:
                 self._interactive_spray_locked_direction_world = direction / length
 
+    def _interactive_lock_spray_direction_from_pose(self, pose):
+        """Freeze the current nozzle axis for the duration of a paint stroke."""
+        if pose is None:
+            return
+        # A manually adjusted direction already locked by middle-button release
+        # takes precedence. Otherwise capture the current preview direction at
+        # the instant the operator starts spraying.
+        if self._interactive_spray_locked_direction_world is not None:
+            return
+        direction = np.asarray(
+            pose["spray_direction_world"], dtype=np.float64
+        ).copy()
+        length = float(np.linalg.norm(direction))
+        if np.isfinite(length) and length > 1e-12:
+            self._interactive_spray_locked_direction_world = direction / length
+
     def _interactive_apply_locked_spray_direction(self, pose):
         """Keep the chosen spray axis while moving the target over new faces."""
         locked = self._interactive_spray_locked_direction_world
@@ -5253,10 +5269,12 @@ class ProductViewer(QWidget):
             self._interactive_spray_recording = False
             self.plotter.render()
             return
+        if self._interactive_spray_recording:
+            self._interactive_lock_spray_direction_from_pose(pose)
         pose = self._interactive_apply_locked_spray_direction(pose)
-        # Mouse motion moves the surface target. After angle adjustment, the
-        # locked spray direction is retained even when the pointer crosses
-        # onto a differently oriented CAD face.
+        # Once the left button is held, the spray axis is frozen from the
+        # stroke-start pose and is independent of every subsequently picked
+        # face normal. Only the target point translates with the cursor.
         self._interactive_update_cursor(pose)
 
     def _interactive_begin_spray_stroke(self):
@@ -5282,6 +5300,7 @@ class ProductViewer(QWidget):
         pose = self._interactive_pick_surface_pose(x, y)
         if pose is None:
             return
+        self._interactive_lock_spray_direction_from_pose(pose)
         pose = self._interactive_apply_locked_spray_direction(pose)
         self._interactive_begin_spray_stroke()
         self._interactive_update_cursor(pose)
