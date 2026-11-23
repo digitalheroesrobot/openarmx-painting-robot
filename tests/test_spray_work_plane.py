@@ -67,3 +67,29 @@ def test_surface_normal_spray_direction_rejects_invalid_normal():
 
     with pytest.raises(ValueError):
         spray_direction_from_surface_normal([0.0, 0.0, 0.0])
+
+
+def test_surface_following_nozzle_keeps_exact_standoff():
+    from core.work_plane import nozzle_position_from_surface
+
+    surface = np.asarray([12.0, -4.0, 7.0])
+    nozzle = nozzle_position_from_surface(surface, [0.0, 0.0, 1.0], 25.0)
+    np.testing.assert_allclose(nozzle, [12.0, -4.0, -18.0])
+    assert np.linalg.norm(surface - nozzle) == pytest.approx(25.0)
+
+
+def test_surface_following_nozzle_normalizes_spray_direction():
+    from core.work_plane import nozzle_position_from_surface
+
+    surface = np.asarray([1.0, 2.0, 3.0])
+    nozzle = nozzle_position_from_surface(surface, [0.0, 0.0, -4.0], 10.0)
+    np.testing.assert_allclose(nozzle, [1.0, 2.0, 13.0])
+
+
+def test_surface_following_nozzle_rejects_invalid_inputs():
+    from core.work_plane import nozzle_position_from_surface
+
+    with pytest.raises(ValueError):
+        nozzle_position_from_surface([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 10.0)
+    with pytest.raises(ValueError):
+        nozzle_position_from_surface([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.0)
