@@ -11,8 +11,8 @@ from PySide6.QtWidgets import (
 )
 
 from core.coating_process import (
-    DEFAULT_COATING_PROCESS, coating_model_readiness,
-    save_coating_process, validate_coating_process,
+    DEFAULT_COATING_PROCESS, calculate_robot_waypoint_spacing_mm,
+    coating_model_readiness, save_coating_process, validate_coating_process,
 )
 
 
@@ -45,6 +45,7 @@ class CoatingProcessSettingsDialog(QDialog):
             ("transfer_efficiency_percent", "Transfer efficiency (%)", 0.0, 100.0, 1),
             ("volume_solids_percent", "Volume solids (%)", 0.0, 100.0, 1),
             ("base_travel_speed_mm_s", "Base travel speed (mm/s)", 0.1, 2000.0, 1),
+            ("robot_control_frequency_hz", "Robot control frequency (Hz)", 1.0, 1000.0, 1),
             ("min_travel_speed_mm_s", "Minimum travel speed (mm/s)", 0.1, 2000.0, 1),
             ("max_travel_acceleration_mm_s2", "Maximum acceleration (mm/s²)", 0.1, 10000.0, 1),
             ("number_of_coats", "Number of coats", 1, 20, 0),
@@ -62,6 +63,17 @@ class CoatingProcessSettingsDialog(QDialog):
             self.fields[key] = spin
             form.addRow(label, spin)
         root.addLayout(form)
+        self.waypoint_spacing_label = QLabel()
+        self.waypoint_spacing_label.setWordWrap(True)
+        self.waypoint_spacing_label.setStyleSheet(
+            "color:#00E5FF;padding:5px;font-weight:bold;"
+        )
+        self.waypoint_spacing_label.setToolTip(
+            "Longitudinal robot waypoint interval = base travel speed / "
+            "robot control frequency. Spray-track spacing is calculated "
+            "separately from spray width and overlap."
+        )
+        root.addWidget(self.waypoint_spacing_label)
         self.readiness_label = QLabel()
         self.readiness_label.setWordWrap(True)
         root.addWidget(self.readiness_label)
@@ -95,7 +107,17 @@ class CoatingProcessSettingsDialog(QDialog):
 
     def _update_readiness(self, *_):
         try:
-            status, missing = coating_model_readiness(self._values())
+            values = self._values()
+            status, missing = coating_model_readiness(values)
+            waypoint_spacing = calculate_robot_waypoint_spacing_mm(
+                values["base_travel_speed_mm_s"],
+                values["robot_control_frequency_hz"],
+            )
+            self.waypoint_spacing_label.setText(
+                "ROBOT WAYPOINT SPACING: "
+                f"{waypoint_spacing:.2f} mm "
+                "(base speed / control frequency)"
+            )
             if missing:
                 self.readiness_label.setText(
                     "MODEL STATUS: INPUTS INCOMPLETE — " + ", ".join(missing)
@@ -109,6 +131,7 @@ class CoatingProcessSettingsDialog(QDialog):
                 )
                 self.readiness_label.setStyleSheet("color:#00E5FF;")
         except (ValueError, TypeError) as exc:
+            self.waypoint_spacing_label.setText("ROBOT WAYPOINT SPACING: INVALID INPUT")
             self.readiness_label.setText(f"INVALID INPUT: {exc}")
             self.readiness_label.setStyleSheet("color:#FF5252;")
 
