@@ -1052,6 +1052,22 @@ class ProductViewer(QWidget):
         panel.hide()
         return panel
 
+    def set_recorded_path_page(self, page):
+        """Show route-editing or simulation controls for the active workflow page."""
+        page = str(page).lower()
+        if page not in ("route", "simulation"):
+            raise ValueError("Recorded path page must be 'route' or 'simulation'.")
+        route_page = page == "route"
+        self.recorded_path_optimize_button.setVisible(route_page)
+        self.recorded_path_replay_button.setVisible(not route_page)
+        self.recorded_path_stop_button.setVisible(not route_page)
+        self.recorded_path_time_label.setVisible(True)
+        has_route = len(getattr(self, "_interactive_spray_records", [])) >= 2
+        self.interactive_recorded_path_panel.setVisible(has_route)
+        if route_page and has_route:
+            self._refresh_interactive_recorded_path_actor()
+        self.plotter.render()
+
     def _on_interactive_paint_display_mode_changed(self, show_paint_color):
         self._interactive_spray_display_mode = (
             "paint_color" if show_paint_color else "thickness"
