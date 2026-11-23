@@ -1492,7 +1492,11 @@ class ProductViewer(QWidget):
             "paintable": True,
             "timestamp": now,
         }
-        self._interactive_spray_gun_collision = False
+        if self._interactive_spray_gun_collision:
+            self._interactive_spray_last_deposition_timestamp = None
+            self._interactive_spray_previous_nozzle_world = None
+            self._interactive_spray_last_speed_mm_s = 0.0
+            return False
         self._interactive_apply_paint_deposition(patch, replay_pose)
         self._interactive_refresh_paint_visual(render=False)
         return True
@@ -1582,6 +1586,10 @@ class ProductViewer(QWidget):
 
         self._interactive_recorded_replay_index = edge_index
         mode = "SPRAY ON" if edge["spray_on"] else "SPRAY OFF"
+        if edge["spray_on"] and self._interactive_spray_gun_collision:
+            mode = "SPRAY BLOCKED · GUN COLLISION"
+        elif edge["spray_on"] and self._interactive_spray_surface_excluded:
+            mode = "SPRAY BLOCKED · STAGE 2 EXCLUDED"
         current = self._format_route_time(elapsed)
         total_text = self._format_route_time(total)
         self.recorded_path_status_label.setText(
