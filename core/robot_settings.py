@@ -55,7 +55,12 @@ def load_robot_settings(config_path: str | Path, legacy_process: dict | None = N
     if not path.exists():
         legacy = legacy_process if isinstance(legacy_process, dict) else {}
         values = deepcopy(DEFAULT_ROBOT_SETTINGS)
-        for key in values:
+        for key in (
+            "base_travel_speed_mm_s",
+            "robot_control_frequency_hz",
+            "min_travel_speed_mm_s",
+            "max_travel_acceleration_mm_s2",
+        ):
             if key in legacy:
                 values[key] = legacy[key]
         save_robot_settings(path, values)
