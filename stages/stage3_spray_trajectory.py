@@ -4102,126 +4102,6 @@ def _inspect_generated_trajectory(
 # Adaptive spray travel-speed profile
 # ------------------------------------------------------------
 
-def _calculate_adaptive_travel_speed_profile(
-    nozzle_points: np.ndarray,
-    surface_normals: np.ndarray,
-    segment_ids: np.ndarray,
-    coordinate_unit: str,
-    base_speed_mm_s: float,
-    minimum_speed_mm_s: float = 40.0,
-    maximum_acceleration_mm_s2: float = 500.0,
-) -> tuple[np.ndarray, np.ndarray, dict]:
-    """
-    Estimate a conservative per-sample spray speed from surface curvature
-    (normal change) and path turning. Distances and speeds are physical mm.
-    This is a geometric planning heuristic, not a validated paint-process model.
-    """
-    points = np.asarray(nozzle_points, dtype=np.float64)
-    normals = np.asarray(surface_normals, dtype=np.float64)
-    segments = np.asarray(segment_ids, dtype=np.int64)
-    count = len(points)
-    if count == 0:
-        return np.empty(0), np.empty(0), {
-            "base_speed_mm_s": float(base_speed_mm_s),
-            "minimum_speed_mm_s": float(minimum_speed_mm_s),
-            "maximum_acceleration_mm_s2": float(maximum_acceleration_mm_s2),
-            "method": "normal_curvature_and_path_turning",
-        }
-    if points.shape != (count, 3) or normals.shape != (count, 3) or segments.shape != (count,):
-        raise ValueError("Adaptive speed inputs must have matching N×3 points/normals and N segment IDs.")
-
-    mm_per_unit = MM_PER_UNIT[coordinate_unit]
-    base_speed = float(base_speed_mm_s)
-    minimum_speed = float(minimum_speed_mm_s)
-    acceleration = float(maximum_acceleration_mm_s2)
-    if not math.isfinite(base_speed) or base_speed <= 0.0:
-        raise ValueError("Base spray travel speed must be greater than zero mm/s.")
-    if not math.isfinite(minimum_speed) or minimum_speed <= 0.0 or minimum_speed > base_speed:
-        raise ValueError("Minimum travel speed must be positive and no greater than the base speed.")
-    if not math.isfinite(acceleration) or acceleration <= 0.0:
-        raise ValueError("Maximum travel acceleration must be greater than zero mm/s².")
-
-    speed = np.full(count, base_speed, dtype=np.float64)
-    segment_distances_mm = np.zeros(count, dtype=np.float64)
-    normal_change_deg = np.zeros(count, dtype=np.float64)
-    turn_angle_deg = np.zeros(count, dtype=np.float64)
-
-    for segment_id in np.unique(segments):
-        indices = np.flatnonzero(segments == segment_id)
-        if len(indices) < 2:
-            speed[indices] = minimum_speed
-            continue
-
-        local_points = points[indices]
-        local_normals = normals[indices]
-        step_vectors = np.diff(local_points, axis=0)
-        step_distances = np.linalg.norm(step_vectors, axis=1) * mm_per_unit
-        segment_distances_mm[indices[1:]] = step_distances
-
-        normal_dots = np.einsum("ij,ij->i", local_normals[:-1], local_normals[1:])
-        normal_angles = np.degrees(np.arccos(np.clip(normal_dots, -1.0, 1.0)))
-        normal_change_deg[indices[1:]] = normal_angles
-
-        tangents = step_vectors / np.maximum(np.linalg.norm(step_vectors, axis=1, keepdims=True), 1e-12)
-        local_turns = np.zeros(len(indices), dtype=np.float64)
-        if len(indices) > 2:
-            turn_dots = np.einsum("ij,ij->i", tangents[:-1], tangents[1:])
-            local_turns[1:-1] = np.degrees(np.arccos(np.clip(turn_dots, -1.0, 1.0)))
-        turn_angle_deg[indices] = local_turns
-
-        curvature_factor = 1.0 - 0.65 * np.clip(normal_change_deg[indices] / 45.0, 0.0, 1.0)
-        corner_factor = 1.0 - 0.75 * np.clip(local_turns / 90.0, 0.0, 1.0)
-        local_speed = np.maximum(
-            minimum_speed,
-            base_speed * np.minimum(curvature_factor, corner_factor),
-        )
-
-        # Forward/backward acceleration limits avoid abrupt speed jumps.
-        for local_index in range(1, len(indices)):
-            ds = max(float(step_distances[local_index - 1]), 0.0)
-            local_speed[local_index] = min(
-                local_speed[local_index],
-                math.sqrt(local_speed[local_index - 1] ** 2 + 2.0 * acceleration * ds),
-            )
-        for local_index in range(len(indices) - 2, -1, -1):
-            ds = max(float(step_distances[local_index]), 0.0)
-            local_speed[local_index] = min(
-                local_speed[local_index],
-                math.sqrt(local_speed[local_index + 1] ** 2 + 2.0 * acceleration * ds),
-            )
-        speed[indices] = np.clip(local_speed, minimum_speed, base_speed)
-
-    # Build cumulative spray-path time. Separate segment IDs are not connected:
-    # no travel connector or spray-off transfer path is generated here.
-    time_s = np.zeros(count, dtype=np.float64)
-    for index in range(1, count):
-        if segments[index] != segments[index - 1]:
-            time_s[index] = time_s[index - 1]
-            continue
-        ds = segment_distances_mm[index]
-        mean_speed = max(0.5 * (speed[index - 1] + speed[index]), 1e-9)
-        time_s[index] = time_s[index - 1] + ds / mean_speed
-
-    metadata = {
-        "method": "normal_curvature_and_path_turning_with_acceleration_limits",
-        "base_speed_mm_s": base_speed,
-        "minimum_speed_mm_s": minimum_speed,
-        "maximum_acceleration_mm_s2": acceleration,
-        "minimum_generated_speed_mm_s": float(np.min(speed)),
-        "maximum_generated_speed_mm_s": float(np.max(speed)),
-        "mean_generated_speed_mm_s": float(np.mean(speed)),
-        "curvature_reference_angle_deg": 45.0,
-        "corner_reference_angle_deg": 90.0,
-        "travel_moves_between_segments": "NOT_GENERATED",
-        "spray_deposition_model": "NOT_CALIBRATED",
-    }
-    return speed, time_s, metadata
-
-
-# ------------------------------------------------------------
-# Main trajectory calculation
-# ------------------------------------------------------------
-
 def generate_spray_trajectory(
     mesh: trimesh.Trimesh,
     face_status_labels: np.ndarray,
@@ -4256,7 +4136,18 @@ def generate_spray_trajectory(
         coating_process = {
             "fluid_flow_ml_min": legacy_profile.get("fluid_flow_ml_min", 0.0),
         }
+    supplied_robot_settings = (
+        dict(coating_process) if isinstance(coating_process, dict) else {}
+    )
     coating_process_data = validate_coating_process(coating_process)
+    # Robot parameters are supplied to trajectory generation separately from
+    # coating-process configuration and are not part of its validation model.
+    coating_process_data["base_travel_speed_mm_s"] = float(
+        supplied_robot_settings.get("base_travel_speed_mm_s", 500.0)
+    )
+    coating_process_data["robot_control_frequency_hz"] = float(
+        supplied_robot_settings.get("robot_control_frequency_hz", 100.0)
+    )
 
     # Resolve unit before performing any physical-distance calculation.
     source_unit = _resolve_coordinate_unit(
@@ -6254,65 +6145,6 @@ def run_stage3_numerical_tests() -> dict:
         )
         reconstructed = weights @ source_triangle
         assert np.allclose(point, reconstructed, atol=1e-7, rtol=1e-9)
-
-    # --------------------------------------------------------
-    # Test 23: Adaptive speed decreases at a sharp path turn.
-    # --------------------------------------------------------
-    speed_test_points = np.asarray([
-        [0.0, 0.0, 0.0],
-        [10.0, 0.0, 0.0],
-        [20.0, 0.0, 0.0],
-        [20.0, 10.0, 0.0],
-        [20.0, 20.0, 0.0],
-    ], dtype=np.float64)
-    speed_test_normals = np.asarray([
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0],
-    ], dtype=np.float64)
-    speed_test_segments = np.zeros(5, dtype=np.int64)
-    test_speeds, test_times, speed_metadata = _calculate_adaptive_travel_speed_profile(
-        speed_test_points,
-        speed_test_normals,
-        speed_test_segments,
-        "mm",
-        base_speed_mm_s=150.0,
-        minimum_speed_mm_s=40.0,
-        maximum_acceleration_mm_s2=500.0,
-    )
-    assert test_speeds.shape == (5,)
-    assert test_times.shape == (5,)
-    assert np.all(np.isfinite(test_speeds))
-    assert np.all((test_speeds >= 40.0) & (test_speeds <= 150.0))
-    assert test_speeds[2] < 150.0
-    assert np.all(np.diff(test_times) >= 0.0)
-
-    curve_test_normals = np.asarray([
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0],
-        [0.0, math.sin(math.radians(45.0)), math.cos(math.radians(45.0))],
-        [0.0, math.sin(math.radians(45.0)), math.cos(math.radians(45.0))],
-        [0.0, math.sin(math.radians(45.0)), math.cos(math.radians(45.0))],
-    ], dtype=np.float64)
-    curve_speeds, _, _ = _calculate_adaptive_travel_speed_profile(
-        np.asarray([
-            [0.0, 0.0, 0.0],
-            [10.0, 0.0, 0.0],
-            [20.0, 0.0, 0.0],
-            [30.0, 0.0, 0.0],
-            [40.0, 0.0, 0.0],
-        ], dtype=np.float64),
-        curve_test_normals,
-        np.zeros(5, dtype=np.int64),
-        "mm",
-        base_speed_mm_s=150.0,
-        minimum_speed_mm_s=40.0,
-        maximum_acceleration_mm_s2=500.0,
-    )
-    assert curve_speeds[2] < 150.0
-    assert speed_metadata["method"].startswith("normal_curvature_and_path_turning")
 
     # --------------------------------------------------------
     # Test 24: Inter-segment travel links are spray-OFF and measured.
