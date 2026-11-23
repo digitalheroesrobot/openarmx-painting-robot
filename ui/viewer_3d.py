@@ -1369,11 +1369,14 @@ class ProductViewer(QWidget):
             "time_origin": "first optimized route pose",
             "time_definition": (
                 "Cumulative nozzle path distance divided by robot painting "
-                "speed. Inter-stroke OFF travel and configured spray on/off "
-                "delays are included. Human mouse recording time is not used."
+                "speed. The same configured speed is used for inter-stroke "
+                "OFF connectors until a separate travel speed is introduced. "
+                "Configured spray on/off delays are included. Human mouse "
+                "recording time is not used."
             ),
             "robot_profile": dict(robot_settings),
             "robot_painting_speed_mm_s": speed,
+            "off_connector_speed_mm_s": speed,
             "robot_control_frequency_hz": frequency,
             "controller_sample_period_s": 1.0 / frequency,
             "controller_frequency_role": (
