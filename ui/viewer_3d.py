@@ -7284,45 +7284,17 @@ class ProductViewer(QWidget):
             self._playback_wall_started_at = None
 
     def _update_trajectory_time_label(self, index=None):
+        """Show point progress only; robot timing is intentionally unconfigured."""
         label = getattr(self, "trajectory_time_label", None)
         if label is None:
             return
-        cache = self._prepare_trajectory_playback_cache()
-        if cache is None:
-            label.setText("WALL 00:00 | PATH N/A | TRAVEL N/A | PLAN N/A")
-            return
-        times = np.asarray(cache["trajectory_time_s"], dtype=float)
-        if len(times) and np.all(np.isfinite(times)):
-            current_index = self._playback_index if index is None else int(index)
-            current_index = int(np.clip(current_index, 0, len(times) - 1))
-            path_elapsed = max(0.0, float(times[current_index]))
-            path_total = max(0.0, float(times[-1]))
-            path_text = (
-                f"{self._format_playback_duration(path_elapsed)} / "
-                f"{self._format_playback_duration(path_total)}"
-            )
-            if self._trajectory_timing_stale:
-                path_text += " (STALE — REGENERATE)"
-        else:
-            path_total = 0.0
-            path_text = "N/A"
-        travel_plan = self.trajectory_data.get(
-            "inter_segment_travel_plan", {}
-        ) if isinstance(self.trajectory_data, dict) else {}
-        travel_seconds = float(travel_plan.get("estimated_time_s", 0.0) or 0.0)
-        if not math.isfinite(travel_seconds) or travel_seconds < 0.0:
-            travel_seconds = 0.0
-        total_plan = path_total + travel_seconds
-        wall_elapsed = self._playback_wall_elapsed_s
-        if self._playback_wall_started_at is not None:
-            wall_elapsed += max(
-                0.0, time.monotonic() - self._playback_wall_started_at
-            )
+        total = 0
+        if isinstance(self.trajectory_data, dict):
+            total = len(self.trajectory_data.get("nozzle_points", []))
+        current = self._playback_index if index is None else int(index)
         label.setText(
-            f"WALL {self._format_playback_duration(wall_elapsed)} | "
-            f"PATH {path_text} | "
-            f"TRAVEL +{self._format_playback_duration(travel_seconds)} | "
-            f"PLAN {self._format_playback_duration(total_plan)}"
+            f"VISUAL POINT {max(0, current) + 1:,} / {total:,} "
+            "| ROBOT TIMING NOT CONFIGURED"
         )
 
     def is_trajectory_playing(self):
@@ -7544,21 +7516,10 @@ class ProductViewer(QWidget):
         half_angle = math.radians(cone_angle * 0.5)
         cone_tangent = math.tan(half_angle)
         cone_cosine = max(math.cos(half_angle), 0.2)
-        pattern_type = str(profile.get("pattern_type", "flat_fan")).strip().lower()
+        pattern_type = "round_cone"
         standoff_mm = standoff_units * mm_per_unit
         footprint_width_units = 2.0 * standoff_units * cone_tangent
-        fan_reference_distance_units = max(
-            float(profile.get("fan_reference_distance_mm", 200.0) or 200.0) / mm_per_unit,
-            1e-9,
-        )
-        fan_thickness_units = max(
-            0.0,
-            float(profile.get("fan_thickness_at_reference_mm", 0.0) or 0.0) / mm_per_unit,
-        )
-        footprint_thickness_units = (
-            footprint_width_units if pattern_type == "round_cone"
-            else fan_thickness_units * standoff_units / fan_reference_distance_units
-        )
+        footprint_thickness_units = footprint_width_units
 
         paint_color_text = str(
             self._trajectory_paint_color_hex or profile.get("paint_color", "#D95B43")
@@ -7599,14 +7560,6 @@ class ProductViewer(QWidget):
             "segment_ids": segment_ids,
             "spray_on_mask": spray_on_mask,
             "spray_off_boundary_indices": spray_off_boundary_indices,
-            "travel_speeds_mm_s": np.asarray(
-                data.get("travel_speeds_mm_s", np.full(len(nozzle_points), 150.0)),
-                dtype=float,
-            ),
-            "trajectory_time_s": np.asarray(
-                data.get("trajectory_time_s", np.arange(len(nozzle_points), dtype=float) * 0.1),
-                dtype=float,
-            ),
             "face_samples": face_samples,
             "sample_normals": sample_normals,
             "face_areas": face_areas,
@@ -7722,10 +7675,6 @@ class ProductViewer(QWidget):
             return cache["last_hit_sample_indices"].copy()
         if cache["cone_tangent"] <= 0.0:
             return np.empty(0, dtype=np.int64)
-        # Never invent a circular footprint for a flat fan with unknown thickness.
-        if cache["pattern_type"] == "flat_fan" and cache["fan_thickness_units"] <= 0.0:
-            return np.empty(0, dtype=np.int64)
-
         nozzle = cache["nozzle_points"][path_index]
         direction = cache["spray_directions"][path_index]
         if not np.all(np.isfinite(nozzle)) or np.linalg.norm(direction) <= 1e-12:
@@ -7751,19 +7700,8 @@ class ProductViewer(QWidget):
         frame = cache["nozzle_frames"][path_index]
         local_x = delta @ frame[:, 0]
         local_y = delta @ frame[:, 1]
-        if cache["pattern_type"] == "flat_fan":
-            half_width = axial * cache["cone_tangent"]
-            half_thickness = (
-                0.5 * cache["fan_thickness_units"]
-                * axial / cache["fan_reference_distance_units"]
-            )
-            inside_pattern = (
-                (np.abs(local_x) <= half_width)
-                & (np.abs(local_y) <= half_thickness)
-            )
-        else:
-            radial = np.sqrt(local_x * local_x + local_y * local_y)
-            inside_pattern = radial <= axial * cache["cone_tangent"]
+        radial = np.sqrt(local_x * local_x + local_y * local_y)
+        inside_pattern = radial <= axial * cache["cone_tangent"]
 
         facing = np.einsum(
             "ij,j->i", cache["sample_normals"][candidates], -direction
@@ -7888,15 +7826,8 @@ class ProductViewer(QWidget):
             axial = delta @ direction
             local_x = delta @ frame[:, 0]
             local_y = delta @ frame[:, 1]
-            if cache["pattern_type"] == "flat_fan":
-                half_width = axial * cache["cone_tangent"]
-                half_height = (
-                    0.5 * cache["fan_thickness_units"]
-                    * axial / cache["fan_reference_distance_units"]
-                )
-            else:
-                half_width = axial * cache["cone_tangent"]
-                half_height = half_width.copy()
+            half_width = axial * cache["cone_tangent"]
+            half_height = half_width.copy()
             valid = (
                 np.isfinite(half_width) & np.isfinite(half_height)
                 & (half_width > 1e-12) & (half_height > 1e-12)
@@ -8071,16 +8002,6 @@ class ProductViewer(QWidget):
             )
             cache["coverage_correction_plan"] = None
             return None
-        if (
-            cache["pattern_type"] == "flat_fan"
-            and cache["fan_thickness_units"] <= 0.0
-        ):
-            self.trajectory_correction_label.setText(
-                "COVERAGE CORRECTION | N/A — MEASURED FLAT-FAN THICKNESS REQUIRED"
-            )
-            cache["coverage_correction_plan"] = None
-            return None
-
         process = cache["coating_process"]
         parameters = self.trajectory_data.get("parameters", {})
         sampling_spacing_mm = float(parameters.get("sampling_spacing_mm", 10.0))
@@ -8160,65 +8081,12 @@ class ProductViewer(QWidget):
         return plan
 
     def _apply_coverage_correction_preview(self):
-        """Append CAD-space deficit strokes to the preview trajectory only."""
-        if self._playback_timer.isActive() or not self._playback_finished:
-            self.trajectory_correction_label.setText(
-                "CORRECTION APPEND | COMPLETE PLAYBACK BEFORE APPLYING"
-            )
-            return
-        cache = self._prepare_trajectory_playback_cache()
-        plan = cache.get("coverage_correction_plan") if cache is not None else None
-        if not isinstance(plan, dict) or self.trajectory_data is None:
-            return
-        strokes = plan.get("correction_strokes", {})
-        if not strokes.get("stroke_ranges") or self._correction_preview_appended:
-            return
-
-        process = cache["coating_process"]
-        base_speed = float(process.get("base_travel_speed_mm_s", 500.0))
-        minimum_speed = float(process.get("min_travel_speed_mm_s", 300.0))
-        source_face_ids = np.repeat(
-            cache["target_face_ids"], cache["sample_count_per_face"]
-        )
-        base_trajectory = dict(self.trajectory_data)
-        base_trajectory["travel_speeds_mm_s"] = cache["travel_speeds_mm_s"].copy()
-        base_trajectory["trajectory_time_s"] = cache["trajectory_time_s"].copy()
-        base_trajectory["nozzle_frames"] = np.asarray(
-            self.trajectory_data["nozzle_frames"], dtype=float
-        )
-        try:
-            updated = append_correction_strokes_to_trajectory(
-                trajectory=base_trajectory,
-                correction_strokes=strokes,
-                source_face_ids=source_face_ids,
-                mm_per_unit=cache["mm_per_unit"],
-                base_speed_mm_s=base_speed,
-                minimum_speed_mm_s=minimum_speed,
-            )
-        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
-            self.trajectory_correction_label.setText(
-                "CORRECTION APPEND | FAILED — " + str(exc)
-            )
-            return
-
-        added = int(updated["correction_path_metadata"]["added_sample_count"])
-        self.trajectory_data = updated
-        self._correction_preview_appended = True
-        self._playback_cache = None
-        self._render_product(reset_camera=False)
-        total = len(self.trajectory_data["nozzle_points"])
-        self.trajectory_playback_slider.blockSignals(True)
-        self.trajectory_playback_slider.setRange(0, max(0, total - 1))
-        self.trajectory_playback_slider.setValue(0)
-        self.trajectory_playback_slider.blockSignals(False)
-        self.trajectory_playback_label.setText(f"0 / {total}")
-        self.trajectory_correction_apply_button.setEnabled(False)
+        """Keep correction strokes disabled until robot motion planning is added."""
         self.trajectory_correction_label.setText(
-            f"CORRECTION PREVIEW APPENDED | {added} SAMPLES | "
-            "PRODUCT_CAD | PREVIEW ONLY — REPLAY FROM RESET"
+            "CORRECTION APPEND | DISABLED — ROBOT MOTION PLANNING NOT CONFIGURED"
         )
-        self._update_trajectory_playback_visuals(0, update_coverage=False)
-        self.plotter.render()
+        self.trajectory_correction_apply_button.setEnabled(False)
+        return
 
     def _on_film_thickness_visibility_changed(self, checked):
         cache = self._prepare_trajectory_playback_cache()
@@ -8377,13 +8245,7 @@ class ProductViewer(QWidget):
         ):
             self._update_film_thickness_visualization()
         if hasattr(self, "trajectory_coverage_label"):
-            if cache["pattern_type"] == "flat_fan":
-                model_label = (
-                    "FLAT FAN" if cache["fan_thickness_units"] > 0.0
-                    else "FAN THICKNESS REQUIRED"
-                )
-            else:
-                model_label = "ROUND CONE"
+            model_label = "ROUND CONE"
             if cache["target_mask_status"] != "READY":
                 self.trajectory_coverage_label.setText(
                     "N/A — STAGE 2 TARGET MASK REQUIRED"
@@ -8392,15 +8254,6 @@ class ProductViewer(QWidget):
                 self.trajectory_coverage_label.setText(
                     "N/A — NO STAGE 2 PAINTABLE TARGET AREA"
                 )
-            elif (
-                cache["pattern_type"] == "flat_fan"
-                and cache["fan_thickness_units"] <= 0.0
-            ):
-                self.trajectory_coverage_label.setText(
-                    "N/A — FAN THICKNESS REQUIRED | "
-                    f"TARGET {cache['target_area'] * cache['area_display_scale']:.3f} "
-                    f"{cache['area_display_unit']}"
-                )
             else:
                 self.trajectory_coverage_label.setText(
                     f"{coverage_percent:.1f}% SAMPLED REACH | "
@@ -8408,16 +8261,7 @@ class ProductViewer(QWidget):
                     f"{cache['target_area'] * cache['area_display_scale']:.3f} "
                     f"{cache['area_display_unit']}"
                 )
-            if (
-                cache["pattern_type"] == "flat_fan"
-                and cache["fan_thickness_units"] <= 0.0
-            ):
-                self.trajectory_coverage_label.setToolTip(
-                    "Flat-fan footprint is not displayed or counted because its "
-                    "measured thickness is zero/unknown. Enter the measured fan "
-                    "thickness at the reference distance. No conical substitute is used."
-                )
-            else:
+            if True:
                 self.trajectory_coverage_label.setToolTip(
                     "Sampled geometric reach estimate over the complete Stage 2 paintable "
                     "candidate area. Four test points per mesh triangle are used, and "
@@ -8533,47 +8377,29 @@ class ProductViewer(QWidget):
         # shown as a thin sheet; its thickness is not invented if unmeasured.
         sheet_length = cache["standoff_units"]
         sheet_half_width = max(cache["footprint_width_units"] * 0.5, 1e-6)
-        if cache["pattern_type"] == "round_cone":
-            # Build the spray volume explicitly to avoid cone-orientation
-            # ambiguity: apex is exactly at the nozzle (z=0), and the circular
-            # footprint is exactly at the target plane (z=standoff).
-            # For a full included spray angle theta:
-            # target radius = standoff * tan(theta / 2).
-            cone_resolution = 64
-            cone_angles = np.linspace(
-                0.0, 2.0 * math.pi, cone_resolution, endpoint=False
-            )
-            cone_ring = np.column_stack((
-                sheet_half_width * np.cos(cone_angles),
-                sheet_half_width * np.sin(cone_angles),
-                np.full(cone_resolution, sheet_length, dtype=float),
-            ))
-            cone_points = np.vstack((
-                np.zeros((1, 3), dtype=float),
-                cone_ring,
-            ))
-            cone_faces = []
-            for cone_index in range(cone_resolution):
-                next_index = (cone_index + 1) % cone_resolution
-                cone_faces.extend((
-                    3, 0, 1 + cone_index, 1 + next_index
-                ))
-            sheet_mesh = pv.PolyData(
-                cone_points, np.asarray(cone_faces, dtype=np.int64)
-            )
-        else:
-            sheet_points = np.asarray([
-                [0.0, 0.0, 0.0],
-                [-sheet_half_width, 0.0, sheet_length],
-                [sheet_half_width, 0.0, sheet_length],
-            ], dtype=float)
-            sheet_faces = np.asarray([3, 0, 1, 2], dtype=np.int64)
-            sheet_mesh = pv.PolyData(sheet_points, sheet_faces)
+        # Circular spray volume: nozzle apex to the circular target footprint.
+        cone_resolution = 64
+        cone_angles = np.linspace(
+            0.0, 2.0 * math.pi, cone_resolution, endpoint=False
+        )
+        cone_ring = np.column_stack((
+            sheet_half_width * np.cos(cone_angles),
+            sheet_half_width * np.sin(cone_angles),
+            np.full(cone_resolution, sheet_length, dtype=float),
+        ))
+        cone_points = np.vstack((np.zeros((1, 3), dtype=float), cone_ring))
+        cone_faces = []
+        for cone_index in range(cone_resolution):
+            next_index = (cone_index + 1) % cone_resolution
+            cone_faces.extend((3, 0, 1 + cone_index, 1 + next_index))
+        sheet_mesh = pv.PolyData(
+            cone_points, np.asarray(cone_faces, dtype=np.int64)
+        )
         self._playback_spray_sheet_actor = self.plotter.add_mesh(
             sheet_mesh,
             color=self._trajectory_paint_color_hex or "#D95B43",
             opacity=0.34,
-            show_edges=(cache["pattern_type"] == "flat_fan"),
+            show_edges=False,
             edge_color="#FFD08A",
             line_width=2,
             lighting=False,
@@ -8693,10 +8519,9 @@ class ProductViewer(QWidget):
             self._update_paint_coverage_visualization(index)
 
         total = len(nozzle_points)
-        current_speed = float(cache["travel_speeds_mm_s"][index])
         spray_text = "SPRAY ON" if spray_on else "SPRAY OFF"
         self.trajectory_playback_label.setText(
-            f"{index + 1:,} / {total:,}  ·  {current_speed:.0f} mm/s  ·  {spray_text}"
+            f"{index + 1:,} / {total:,}  ·  {spray_text}"
         )
         self._update_trajectory_time_label(index)
         self.trajectory_playback_slider.blockSignals(True)
@@ -8778,10 +8603,6 @@ class ProductViewer(QWidget):
             self._playback_wall_started_at = None
             self._update_trajectory_playback_visuals(0)
         else:
-            cache = self._prepare_trajectory_playback_cache()
-            times = cache["trajectory_time_s"]
-            if len(times) == total and np.all(np.isfinite(times)):
-                self._playback_elapsed_s = float(times[self._playback_index])
             if self._playback_path_actor is None and self._playback_nozzle_actor is None:
                 self._update_trajectory_playback_visuals(self._playback_index)
         self._playback_wall_started_at = time.monotonic()
@@ -8849,24 +8670,9 @@ class ProductViewer(QWidget):
             self._complete_trajectory_playback()
             return
         cache = self._prepare_trajectory_playback_cache()
-        sample_times = cache["trajectory_time_s"]
-        if len(sample_times) != total or not np.all(np.isfinite(sample_times)):
-            base_step = max(1, int(np.ceil(total / 600.0)))
-            step = max(1, int(round(base_step * self.trajectory_playback_speed.value())))
-            next_index = min(total - 1, self._playback_index + step)
-        else:
-            # The visual playback follows the calculated mm/s speed profile.
-            # The UI multiplier changes playback time only, not robot speed.
-            self._playback_elapsed_s += (
-                self._playback_timer.interval() / 1000.0
-                * self.trajectory_playback_speed.value()
-            )
-            next_index = int(np.searchsorted(
-                sample_times, self._playback_elapsed_s, side="right"
-            ) - 1)
-            next_index = int(np.clip(next_index, self._playback_index, total - 1))
-            if next_index == self._playback_index and next_index < total - 1:
-                return
+        base_step = max(1, int(np.ceil(total / 600.0)))
+        step = max(1, int(round(base_step * self.trajectory_playback_speed.value())))
+        next_index = min(total - 1, self._playback_index + step)
 
         # Never skip a spray-OFF boundary, even at high visual playback speed.
         off_boundaries = cache["spray_off_boundary_indices"]
