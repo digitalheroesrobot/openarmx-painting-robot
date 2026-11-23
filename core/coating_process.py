@@ -19,6 +19,7 @@ DEFAULT_COATING_PROCESS = {
     "transfer_efficiency_percent": 50.0,
     "volume_solids_percent": 50.0,
     "base_travel_speed_mm_s": 500.0,
+    "robot_control_frequency_hz": 100.0,
     "min_travel_speed_mm_s": 300.0,
     "max_travel_acceleration_mm_s2": 1000.0,
     "number_of_coats": 1,
@@ -40,6 +41,7 @@ def validate_coating_process(parameters: dict) -> dict:
         "transfer_efficiency_percent": (0.0, 100.0),
         "volume_solids_percent": (0.0, 100.0),
         "base_travel_speed_mm_s": (0.1, 2000.0),
+        "robot_control_frequency_hz": (1.0, 1000.0),
         "min_travel_speed_mm_s": (0.1, 2000.0),
         "max_travel_acceleration_mm_s2": (0.1, 10000.0),
         "spray_on_delay_ms": (0.0, 10000.0),
@@ -62,6 +64,24 @@ def validate_coating_process(parameters: dict) -> dict:
     values["number_of_coats"] = coats
     if values["min_travel_speed_mm_s"] > values["base_travel_speed_mm_s"]:
         raise ValueError("Minimum travel speed cannot exceed base travel speed.")
+def calculate_robot_waypoint_spacing_mm(
+    travel_speed_mm_s: float,
+    control_frequency_hz: float,
+) -> float:
+    """Return distance travelled per robot control cycle, in millimetres.
+
+    This is the longitudinal robot waypoint interval. It is independent of
+    the lateral spray-track pitch calculated from spray footprint and overlap.
+    """
+    speed = float(travel_speed_mm_s)
+    frequency = float(control_frequency_hz)
+    if not math.isfinite(speed) or speed <= 0.0:
+        raise ValueError("Robot travel speed must be a positive finite value.")
+    if not math.isfinite(frequency) or frequency <= 0.0:
+        raise ValueError("Robot control frequency must be a positive finite value.")
+    return speed / frequency
+
+
     values["name"] = str(values.get("name", "default coating process")).strip()
     if not values["name"]:
         raise ValueError("Coating process name cannot be empty.")
