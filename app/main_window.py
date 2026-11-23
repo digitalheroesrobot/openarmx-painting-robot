@@ -4407,26 +4407,27 @@ class MainWindow(QMainWindow):
         self.analysis_summary.setStyleSheet("color: #00E676;")
         self.analysis_summary.setText(
             (
-                "SPRAY ROUTE READY FOR SIMULATION\n\n"
-                f"TOTAL ROUTE LENGTH: {float(result.get('total_route_distance_mm', spray_distance + connector_distance)):.1f} mm\n"
-                f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
-                f"SPRAY-OFF CONNECTORS: {connector_distance:.1f} mm\n"
-                f"ESTIMATED PAINTING TIME: {self.viewer._format_route_time(float(result.get('estimated_duration_s', 0.0)))}\n"
-            ) if route_ready else
-            (
-                "SPRAY STROKES RECORDED · CONNECTORS REQUIRED\n\n"
-                f"RECORDED POSES: {len(result.get('nozzle_points_product', [])):,}\n"
-                f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\n"
-                f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
-                "SPRAY-OFF CONNECTORS: PENDING MANUAL ENDPOINT CONNECTION\n"
-                "TOTAL ROUTE LENGTH / TIME: AVAILABLE AFTER SAFETY VALIDATION\n"
+                (
+                    "SPRAY ROUTE READY FOR SIMULATION\\n\\n"
+                    f"TOTAL ROUTE LENGTH: {float(result.get('total_route_distance_mm', spray_distance + connector_distance)):.1f} mm\\n"
+                    f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\\n"
+                    f"SPRAY-OFF CONNECTORS: {connector_distance:.1f} mm\\n"
+                    f"ESTIMATED PAINTING TIME: {self.viewer._format_route_time(float(result.get('estimated_duration_s', 0.0)))}\\n"
+                ) if route_ready else (
+                    "SPRAY STROKES RECORDED · CONNECTORS REQUIRED\\n\\n"
+                    f"RECORDED POSES: {len(result.get('nozzle_points_product', [])):,}\\n"
+                    f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\\n"
+                    f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\\n"
+                    "SPRAY-OFF CONNECTORS: PENDING MANUAL ENDPOINT CONNECTION\\n"
+                    "TOTAL ROUTE LENGTH / TIME: AVAILABLE AFTER SAFETY VALIDATION\\n"
+                )
             )
-            + f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\n"
-            + f"ROUTING: {route_info.get('algorithm', 'USER DRAWN ORDER PRESERVED')}\n\n"
+            + f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\\n"
+            + f"ROUTING: {route_info.get('algorithm', 'USER DRAWN ORDER PRESERVED')}\\n\\n"
             + (
-                "Review the user-ordered spray strokes and connect each end to the next start in the 3D view.\n"
+                "Review the user-ordered spray strokes and connect each end to the next start in the 3D view.\\n"
                 if not route_ready else
-                "Review the validated user-ordered route in the 3D view.\n"
+                "Review the validated user-ordered route in the 3D view.\\n"
             )
             + f"Simulation duration is calculated at {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s. "
             "Control frequency is stored for future spray-point export."
