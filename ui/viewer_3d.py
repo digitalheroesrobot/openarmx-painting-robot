@@ -509,6 +509,9 @@ class ProductViewer(QWidget):
         # the left mouse button. This is visualization only; recording and
         # deposition remain full-rate and use the existing trajectory schema.
         self._interactive_spray_live_route_refresh_at = 0.0
+        # Route drawing captures raw mouse poses at full input rate, but the
+        # expensive footprint/collision preview is evaluated at most 30 Hz.
+        self._interactive_spray_last_expensive_preview_time = 0.0
         self._interactive_saved_style_enabled = True
         self._interactive_saved_style = None
         self._interactive_spray_input_style = None
@@ -5812,6 +5815,25 @@ class ProductViewer(QWidget):
         nozzle = pose["nozzle_point_world"]
         direction = pose["spray_direction_world"]
 
+        route_only = bool(
+            getattr(self, "_interactive_route_generation_only", False)
+        )
+        if route_only and self._interactive_spray_recording:
+            # Preserve every valid mouse control pose for the final smoothing
+            # pass. Do not run VTK footprint/collision work at mouse-event
+            # frequency; FINISH performs the authoritative checks on the
+            # fixed-distance samples.
+            self._interactive_spray_stroke_input_poses.append(
+                self._interactive_copy_input_pose(pose)
+            )
+            now = time.monotonic()
+            previous = getattr(
+                self, "_interactive_spray_last_expensive_preview_time", 0.0
+            )
+            if previous > 0.0 and now - previous < (1.0 / 30.0):
+                return
+            self._interactive_spray_last_expensive_preview_time = now
+
         # Evaluate the complete sprayer envelope before allowing this mouse
         # sample to record or deposit paint.
         gun_actors, gun_polydata = self._interactive_build_gun_visual(
@@ -5852,14 +5874,7 @@ class ProductViewer(QWidget):
             # Generate and coat every fixed-distance sample. The cursor event
             # rate is deliberately not used as the trajectory spacing.
             if self._interactive_spray_recording and not spray_blocked:
-                if getattr(self, "_interactive_route_generation_only", False):
-                    # Route editing collects raw surface control poses only.
-                    # Smoothing and fixed-distance point generation happen on
-                    # mouse release, never at the mouse-event frequency.
-                    self._interactive_spray_stroke_input_poses.append(
-                        self._interactive_copy_input_pose(pose)
-                    )
-                else:
+                if not route_only:
                     recorded_samples = self._interactive_append_record(
                         pose, local_pose, force=bool(force_record)
                     )
