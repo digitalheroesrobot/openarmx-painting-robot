@@ -758,6 +758,7 @@ class MainWindow(QMainWindow):
             self.viewer.interaction_mode_panel,
             self.viewer.interactive_recorded_path_panel,
             self.viewer.display_control_panel,
+            self.simulation_back_button,
         )
         viewer_layout = self.viewer.layout()
         for widget in controls:
@@ -2789,7 +2790,7 @@ class MainWindow(QMainWindow):
         previous_stage = self.active_stage
         self.active_stage = stage_index
         self._refresh_workflow_ui()
-        if stage_index == STAGE_SPRAY_TRAJECTORY:
+        if stage_index in (STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION):
             route_button = self._right_section_buttons.get("route_generation_controls")
             if route_button is not None:
                 route_button.setChecked(True)
@@ -2825,7 +2826,19 @@ class MainWindow(QMainWindow):
     
     def _refresh_workflow_ui(self):
         route_generation_page = self.active_stage == STAGE_SPRAY_TRAJECTORY
-        self.route_controls_section.setVisible(route_generation_page)
+        simulation_page = self.active_stage == STAGE_SPRAY_SIMULATION
+        self.route_controls_section.setVisible(
+            route_generation_page or simulation_page
+        )
+        route_header = self._right_section_buttons.get(
+            "route_generation_controls"
+        )
+        if route_header is not None:
+            route_header.setText(
+                "ROUTE GENERATION CONTROLS"
+                if route_generation_page
+                else "SPRAY SIMULATION CONTROLS"
+            )
 
         self.start_analysis_button.setVisible(
             self.active_stage not in (
