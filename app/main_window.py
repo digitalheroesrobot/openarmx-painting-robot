@@ -666,6 +666,7 @@ class MainWindow(QMainWindow):
         # Right sidebar
         self.right_panel = self._build_right_panel()
         self.right_panel.setFixedWidth(400)
+        self._move_route_controls_to_sidebar()
 
         # ----------------------------------------------------
         # RIGHT SIDEBAR TOGGLE BUTTON
@@ -749,6 +750,21 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
 
 
+
+    def _move_route_controls_to_sidebar(self):
+        """Move nonessential viewport controls into the Route Generation sidebar."""
+        controls = (
+            self.viewer.interaction_mode_panel,
+            self.viewer.interactive_recorded_path_panel,
+            self.viewer.display_control_panel,
+        )
+        viewer_layout = self.viewer.layout()
+        for widget in controls:
+            viewer_layout.removeWidget(widget)
+            widget.setParent(self.route_controls_content)
+            self.route_controls_layout.addWidget(widget)
+
+        self.route_controls_layout.addStretch(1)
 
     # ========================================================
     # HEADER
@@ -977,6 +993,43 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
+
+        # ----------------------------------------------------
+        # ROUTE GENERATION CONTROLS
+        # These controls are hosted in the sidebar so the 3D
+        # viewport retains only Hook and Attitude RPY controls.
+        # ----------------------------------------------------
+        self.route_controls_content = QWidget()
+        self.route_controls_layout = QVBoxLayout(self.route_controls_content)
+        self.route_controls_layout.setContentsMargins(6, 6, 6, 8)
+        self.route_controls_layout.setSpacing(8)
+        self.route_controls_section = self._make_collapsible_section(
+            "ROUTE GENERATION CONTROLS",
+            "route_generation_controls",
+            self.route_controls_content,
+        )
+        self.route_controls_section.setStyleSheet("""
+            QFrame {
+                background-color: #0D1822;
+                border: 1px solid #294858;
+                border-radius: 6px;
+            }
+            QToolButton#CollapsibleSectionHeader {
+                color: #00E5FF;
+                background-color: #142B3A;
+                border: 1px solid #36566A;
+                border-radius: 5px;
+                padding: 9px 10px;
+                font-weight: 800;
+                text-align: left;
+            }
+            QToolButton#CollapsibleSectionHeader:hover {
+                border-color: #00E5FF;
+                background-color: #19394B;
+            }
+        """)
+        layout.addWidget(self.route_controls_section)
+        self.route_controls_section.hide()
 
         # ----------------------------------------------------
         # ACTIVE WORKFLOW SECTION
@@ -2715,6 +2768,10 @@ class MainWindow(QMainWindow):
         previous_stage = self.active_stage
         self.active_stage = stage_index
         self._refresh_workflow_ui()
+        if stage_index == STAGE_SPRAY_TRAJECTORY:
+            route_button = self._right_section_buttons.get("route_generation_controls")
+            if route_button is not None:
+                route_button.setChecked(True)
 
         if stage_index == STAGE_SURFACE_IDENTIFICATION:
             self._show_surface_identification_summary()
@@ -2746,6 +2803,9 @@ class MainWindow(QMainWindow):
     
     
     def _refresh_workflow_ui(self):
+        route_generation_page = self.active_stage == STAGE_SPRAY_TRAJECTORY
+        self.route_controls_section.setVisible(route_generation_page)
+
         self.start_analysis_button.setVisible(
             self.active_stage not in (
                 STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION
