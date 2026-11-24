@@ -324,6 +324,12 @@ class MainWindow(QMainWindow):
     def __init__(self, project_root: Path, fonts: dict):
         super().__init__()
 
+        # Increase the inherited application UI font modestly while keeping
+        # widget-specific font families and explicit emphasis intact.
+        base_font = self.font()
+        base_font.setPointSize(max(base_font.pointSize() + 1, 10))
+        self.setFont(base_font)
+
         self.project_root = Path(project_root).resolve()
         self.fonts = fonts
 
@@ -1039,7 +1045,7 @@ class MainWindow(QMainWindow):
         self.route_controls_scroll.setFrameShape(QFrame.NoFrame)
         self.route_controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.route_controls_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.route_controls_scroll.setMaximumHeight(660)
+        self.route_controls_scroll.setMaximumHeight(800)
 
         route_controls_body = QWidget()
         self.route_controls_layout = QVBoxLayout(route_controls_body)
