@@ -228,6 +228,11 @@ INTERACTIVE_SPRAY_MIN_STANDOFF_MM = 10.0
 INTERACTIVE_SPRAY_MAX_STANDOFF_MM = 500.0
 INTERACTIVE_SPRAY_WHEEL_STEP_MM = 5.0
 
+# Must match PRODUCT_RPY in the downstream ROS2 CSV-to-robot-frame converter.
+# The user's supplied converter currently uses (0, 0, 0), so product +X/+Y
+# coincide with robot-base +X/+Y. Keep this value synchronized if calibration changes.
+INTERACTIVE_ROBOT_PRODUCT_RPY = (0.0, 0.0, 0.0)
+
 FACE_EXCLUDED = 0
 FACE_PAINTABLE_CANDIDATE = 1
 FACE_REQUIRES_INSPECTION = 2
@@ -4887,19 +4892,60 @@ class ProductViewer(QWidget):
         }
 
     @staticmethod
+    def _interactive_robot_axes_in_product_frame():
+        """Return robot forward/left unit axes expressed in product coordinates.
+
+        INTERACTIVE_ROBOT_PRODUCT_RPY must match PRODUCT_RPY in the downstream
+        ROS2 converter. R_base_product maps product vectors into the robot base;
+        its transpose therefore maps robot-base axes into the product frame.
+        """
+        roll, pitch, yaw = INTERACTIVE_ROBOT_PRODUCT_RPY
+        cr, sr = math.cos(roll), math.sin(roll)
+        cp, sp = math.cos(pitch), math.sin(pitch)
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        rotation_base_product = np.asarray([
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr],
+        ], dtype=np.float64)
+        rotation_product_base = rotation_base_product.T
+        forward_product = rotation_product_base @ np.array([1.0, 0.0, 0.0])
+        left_product = rotation_product_base @ np.array([0.0, 1.0, 0.0])
+        return forward_product, left_product
+
+    @staticmethod
     def _interactive_pose_quaternion_from_direction(direction_product):
-        """Return a stable XYZW quaternion for the nozzle tool frame."""
+        """Build a product-frame XYZW pose using the URDF nozzle-axis convention.
+
+        Tool +Z is opposite the spray direction (therefore tool -Z sprays).
+        Tool +X follows the robot-forward direction projected onto the plane
+        perpendicular to tool +Z. Tool +Y completes the right-handed frame;
+        this also keeps it aligned with robot-left as far as the spray-axis
+        constraint permits.
+        """
         z_axis = -np.asarray(direction_product, dtype=np.float64)
         z_norm = float(np.linalg.norm(z_axis))
         if z_norm <= 1e-12:
             raise ValueError("Cannot build nozzle orientation from a zero direction.")
         z_axis /= z_norm
-        reference = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-        if abs(float(np.dot(reference, z_axis))) > 0.92:
-            reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-        x_axis = np.cross(reference, z_axis)
+
+        forward_product, left_product = ProductViewer._interactive_robot_axes_in_product_frame()
+        x_axis = forward_product - float(np.dot(forward_product, z_axis)) * z_axis
+        x_norm = float(np.linalg.norm(x_axis))
+        if x_norm <= 1e-8:
+            # If spray +Z is parallel to robot forward, use robot-left to
+            # determine roll while preserving the right-handed frame.
+            left_tangent = left_product - float(np.dot(left_product, z_axis)) * z_axis
+            left_norm = float(np.linalg.norm(left_tangent))
+            if left_norm <= 1e-8:
+                raise ValueError("Robot forward and left axes cannot define the nozzle roll.")
+            left_tangent /= left_norm
+            x_axis = np.cross(left_tangent, z_axis)
         x_axis /= max(float(np.linalg.norm(x_axis)), 1e-12)
         y_axis = np.cross(z_axis, x_axis)
+        y_axis /= max(float(np.linalg.norm(y_axis)), 1e-12)
+        # Recompute X to remove accumulated numerical non-orthogonality.
+        x_axis = np.cross(y_axis, z_axis)
         rotation = np.column_stack((x_axis, y_axis, z_axis))
         trace = float(np.trace(rotation))
         if trace > 0.0:
