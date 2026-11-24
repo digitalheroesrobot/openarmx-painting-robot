@@ -1390,12 +1390,10 @@ class ProductViewer(QWidget):
         ], dtype=np.float64)
 
     def _export_interactive_trajectory_csv(self):
-        """Export timed spray poses with a 1-based group ID in column 10.
+        """Export only spray-ON poses; group_id changes mark transfer boundaries.
 
-        group_id identifies the human-drawn spray stroke. SPRAY-ON rows use
-        their own group. A SPRAY-OFF transfer marker uses the next group ID,
-        so MoveIt2 can detect the boundary and plan the transfer from the last
-        pose of the previous group to the first pose of the next group.
+        The CSV contains no transfer geometry or SPRAY-OFF rows. MoveIt2
+        detects group changes and plans the inter-group robot motion.
         """
         records = list(getattr(self, "_interactive_spray_records", []))
         if len(records) < 2:
@@ -1549,11 +1547,11 @@ class ProductViewer(QWidget):
         )
         QMessageBox.information(
             self, "Export trajectory",
-            f"Exported {len(output_rows):,} samples.\n"
-            f"Controller frequency: {frequency:g} Hz\n"
-            f"Duration: {duration:.3f} s\n"
-            f"Spray-ON rows: product-local mm, XYZW quaternion, and 1-based group_id.\n"
-            f"Spray-OFF rows: time, on/off, and the following group's group_id; pose fields are empty."
+            f"Exported {len(output_rows):,} spray poses in {len(grouped_edges)} groups.\\n"
+            f"Sampling frequency: {frequency:g} Hz\\n"
+            f"Total spray duration: {duration:.3f} s\\n"
+            "All rows are SPRAY-ON and include product-local XYZ, XYZW quaternion, and 1-based group_id.\\n"
+            "No SPRAY-OFF rows or transfer poses are exported. MoveIt2 plans transfers when group_id changes."
         )
         return True
 
@@ -1773,14 +1771,24 @@ class ProductViewer(QWidget):
             end = parsed[index]
             if end["t"] <= start["t"]:
                 continue
-            timeline.append({
-                "start_s": float(start["t"]),
-                "end_s": float(end["t"]),
-                "start_record": records[index - 1],
-                "end_record": records[index],
-                "spray_on": bool(start["spray_on"]),
-                "kind": "IMPORTED_CSV_SPRAY_ON" if start["spray_on"] else "IMPORTED_CSV_SPRAY_OFF",
-            })
+            same_spray_group = (
+                bool(start["spray_on"]) and bool(end["spray_on"])
+                and int(start["group_id"]) == int(end["group_id"])
+            )
+            if same_spray_group:
+                timeline.append({
+                    "start_s": float(start["t"]), "end_s": float(end["t"]),
+                    "start_record": records[index - 1], "end_record": records[index],
+                    "spray_on": True, "kind": "IMPORTED_CSV_SPRAY_ON",
+                })
+            else:
+                # Group changes are implicit transfer boundaries. Hold the
+                # previous pose; never interpolate a connector between groups.
+                timeline.append({
+                    "start_s": float(start["t"]), "end_s": float(end["t"]),
+                    "start_record": records[index - 1], "end_record": records[index - 1],
+                    "spray_on": False, "kind": "IMPORTED_GROUP_TRANSFER_BOUNDARY",
+                })
 
         if not timeline:
             QMessageBox.warning(self, "Import trajectory", "CSV contains no playable time intervals.")
@@ -1797,7 +1805,10 @@ class ProductViewer(QWidget):
                 np.linalg.norm(
                     np.asarray(records[i]["nozzle_point_world"])
                     - np.asarray(records[i - 1]["nozzle_point_world"])
-                ) * mm_factor for i in range(1, len(records))
+                ) * mm_factor
+                for i in range(1, len(records))
+                if parsed[i - 1]["spray_on"] and parsed[i]["spray_on"]
+                and int(parsed[i - 1]["group_id"]) == int(parsed[i]["group_id"])
             ])),
             "spray_distance_mm": 0.0,
             
