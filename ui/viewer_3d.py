@@ -4828,7 +4828,7 @@ class ProductViewer(QWidget):
 
     def _interactive_stable_planar_normal_local(
         self, cell_id, point_local, fallback_normal, barycentric=None,
-        seed_normal=None,
+        seed_normal=None, allow_mesh_estimation=False,
     ):
         """Return a stable outward normal for a planar CAD/mesh face.
 
@@ -4931,6 +4931,9 @@ class ProductViewer(QWidget):
             if alignment >= angular_cosine and plane_distance <= entry["tolerance"]:
                 return entry["normal"].copy()
 
+        if not allow_mesh_estimation:
+            return fallback
+
         normals = self._interactive_mesh_face_normals
         areas = self._interactive_mesh_face_areas
         centroids = self._interactive_mesh_face_centroids
@@ -4967,7 +4970,7 @@ class ProductViewer(QWidget):
         })
         return consensus
 
-    def _interactive_pick_surface_pose(self, x, y):
+    def _interactive_pick_surface_pose(self, x, y, estimate_planar=False):
         if self._pose_actor is None or self.current_mesh is None:
             return None
         picker = self._patch_cell_picker
@@ -5034,6 +5037,7 @@ class ProductViewer(QWidget):
             cell_id, hit_local, normal_local,
             barycentric=pick_barycentric,
             seed_normal=face_normals[cell_id],
+            allow_mesh_estimation=bool(estimate_planar),
         )
         normal_length = float(np.linalg.norm(normal_local))
         if not np.isfinite(normal_length) or normal_length <= 1e-12:
@@ -5157,9 +5161,12 @@ class ProductViewer(QWidget):
         inverse = np.linalg.inv(self._interactive_spray_transform)
         point_h = np.append(pose["nozzle_point_world"], 1.0)
         surface_h = np.append(pose["surface_point_world"], 1.0)
-        direction_product = inverse[:3, :3] @ pose["spray_direction_world"]
+        product_rotation = self._interactive_product_rotation_matrix(
+            self._interactive_spray_transform[:3, :3]
+        )
+        direction_product = product_rotation.T @ pose["spray_direction_world"]
         direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
-        normal_product = self._interactive_spray_transform[:3, :3].T @ np.asarray(
+        normal_product = product_rotation.T @ np.asarray(
             pose["surface_normal_world"], dtype=np.float64
         )
         normal_product /= max(float(np.linalg.norm(normal_product)), 1e-12)
@@ -7501,7 +7508,9 @@ class ProductViewer(QWidget):
         ):
             return
         x, y = interactor.GetEventPosition()
-        pose = self._interactive_pick_surface_pose(x, y)
+        pose = self._interactive_pick_surface_pose(
+            x, y, estimate_planar=True
+        )
         if pose is None:
             return
         if not bool(pose.get("paintable", True)):
