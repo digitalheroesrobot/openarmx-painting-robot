@@ -2768,6 +2768,10 @@ class MainWindow(QMainWindow):
         previous_stage = self.active_stage
         self.active_stage = stage_index
         self._refresh_workflow_ui()
+        if stage_index == STAGE_SPRAY_TRAJECTORY:
+            route_button = self._right_section_buttons.get("route_generation_controls")
+            if route_button is not None:
+                route_button.setChecked(True)
 
         if stage_index == STAGE_SURFACE_IDENTIFICATION:
             self._show_surface_identification_summary()
@@ -2801,10 +2805,6 @@ class MainWindow(QMainWindow):
     def _refresh_workflow_ui(self):
         route_generation_page = self.active_stage == STAGE_SPRAY_TRAJECTORY
         self.route_controls_section.setVisible(route_generation_page)
-        if route_generation_page:
-            route_button = self._right_section_buttons.get("route_generation_controls")
-            if route_button is not None and not route_button.isChecked():
-                route_button.setChecked(True)
 
         self.start_analysis_button.setVisible(
             self.active_stage not in (
