@@ -4435,7 +4435,7 @@ class MainWindow(QMainWindow):
         self.analysis_summary.setText(
             "USER-ORDERED INTERACTIVE SPRAY ROUTE\n\n"
             f"RECORDED POSES: {len(nozzle_points):,}\n"
-            f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\n"
+            f"STROKES: {len(np.unique(result.get('group_ids', result.get('stroke_ids', [])))):,}\n"
             f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
             + (
                 f"SPRAY-OFF CONNECTORS: {connector_distance:.1f} mm\n"
@@ -4456,11 +4456,11 @@ class MainWindow(QMainWindow):
         )
         self.status_bar.showMessage(
             (
-                f"ROUTE GENERATED | {len(np.unique(result.get('stroke_ids', [])))} STROKES | "
+                f"ROUTE GENERATED | {len(np.unique(result.get('group_ids', result.get('stroke_ids', []))))} STROKES | "
                 f"SPRAY {spray_distance:.1f} mm | CONNECTORS {connector_distance:.1f} mm"
             ) if route_ready else
             (
-                f"{len(np.unique(result.get('stroke_ids', [])))} STROKES RECORDED | "
+                f"{len(np.unique(result.get('group_ids', result.get('stroke_ids', []))))} STROKES RECORDED | "
                 "CONNECT EACH ENDPOINT PAIR TO COMPLETE THE ROUTE"
             )
         )
@@ -4494,7 +4494,7 @@ class MainWindow(QMainWindow):
                 ) if route_ready else (
                     "SPRAY STROKES RECORDED · CONNECTORS REQUIRED\n\n"
                     f"RECORDED POSES: {len(result.get('nozzle_points_product', [])):,}\n"
-                    f"STROKES: {len(np.unique(result.get('stroke_ids', []))):,}\n"
+                    f"STROKES: {len(np.unique(result.get('group_ids', result.get('stroke_ids', [])))):,}\n"
                     f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
                     "SPRAY-OFF CONNECTORS: PENDING MANUAL ENDPOINT CONNECTION\n"
                     "TOTAL ROUTE LENGTH / TIME: AVAILABLE AFTER SAFETY VALIDATION\n"
