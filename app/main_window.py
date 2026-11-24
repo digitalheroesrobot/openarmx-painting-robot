@@ -1314,7 +1314,7 @@ class MainWindow(QMainWindow):
         self.interactive_spray_path_button.setObjectName("SecondaryButton")
         self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
         self.interactive_spray_path_button.setToolTip(
-            "Finish the spray strokes. Then use CONNECT ENDPOINTS to join each stroke end to the next stroke start. Hold the left mouse button to paint."
+            "Each left-button press and release records one independent spray stroke. Hold the left mouse button to paint."
         )
         self.interactive_spray_path_button.clicked.connect(
             self._finish_interactive_spray_path
@@ -4349,7 +4349,7 @@ class MainWindow(QMainWindow):
         )
 
     def _on_manual_route_readiness_changed(self, ready):
-        """Enable the next workflow stage only after every manual connector is safe."""
+        """Enable the next stage when independent spray strokes are finalized."""
         ready = bool(ready)
         self.stage_completed[STAGE_SPRAY_TRAJECTORY] = ready
         if ready:
@@ -4359,8 +4359,7 @@ class MainWindow(QMainWindow):
             route = getattr(self, "interactive_spray_path", None)
             if isinstance(route, dict):
                 route["spray_length_mm"] = float(timing.get("spray_distance_mm", 0.0))
-                route["travel_length_mm"] = float(timing.get("connector_distance_mm", 0.0))
-                route["total_route_distance_mm"] = float(timing.get("total_route_distance_mm", 0.0))
+                route["total_route_distance_mm"] = float(timing.get("spray_distance_mm", 0.0))
                 route["estimated_duration_s"] = float(timing.get("estimated_duration_s", 0.0))
                 route["route_timing"] = {
                     key: value for key, value in timing.items() if key != "timeline"
@@ -4369,13 +4368,9 @@ class MainWindow(QMainWindow):
                     getattr(self.viewer, "_interactive_spray_route_optimization", {})
                 )
                 self._show_interactive_route_summary(route)
-            self.status_bar.showMessage(
-                "ALL MANUAL CONNECTORS VALIDATED · SPRAY ROUTE READY"
-            )
+            self.status_bar.showMessage("INDEPENDENT SPRAY STROKES READY")
         else:
-            self.status_bar.showMessage(
-                "CONNECT EACH STROKE END TO THE NEXT START TO COMPLETE THE ROUTE"
-            )
+            self.status_bar.showMessage("DRAW AND FINISH THE SPRAY STROKES")
         self._refresh_workflow_ui()
 
     def _finish_interactive_spray_path(self):
@@ -4387,7 +4382,7 @@ class MainWindow(QMainWindow):
         self.interactive_spray_path_button.setEnabled(False)
         self.interactive_spray_path_button.setText("GENERATING ROUTE...")
         self.interactive_spray_path_button.setToolTip(
-            "Finalizing spray points and preparing the manual connector workflow."
+            "Finalizing each spray stroke independently. No inter-stroke path is generated."
         )
         self.route_generation_progress.show()
         self.status_bar.showMessage(
@@ -4432,42 +4427,20 @@ class MainWindow(QMainWindow):
         self._refresh_workflow_ui()
 
         nozzle_points = np.asarray(result["nozzle_points_product"], dtype=float)
-        path_length = float(result.get("route_length_product_units", 0.0))
         spray_distance = float(result.get("spray_length_mm", 0.0))
-        connector_distance = float(result.get("travel_length_mm", 0.0))
-        route_info = result.get("route_optimization") or {}
-        route_algorithm = route_info.get("algorithm", "USER DRAWN ORDER PRESERVED")
         self.analysis_summary.setText(
-            "USER-ORDERED INTERACTIVE SPRAY ROUTE\n\n"
-            f"RECORDED POSES: {len(nozzle_points):,}\n"
-            f"STROKES: {len(np.unique(result.get('group_ids', result.get('stroke_ids', [])))):,}\n"
-            f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
-            + (
-                f"SPRAY-OFF CONNECTORS: {connector_distance:.1f} mm\n"
-                f"TOTAL ROUTE LENGTH: {float(result.get('total_route_distance_mm', spray_distance + connector_distance)):.1f} mm\n"
-                f"ESTIMATED PAINTING TIME: {self.viewer._format_route_time(float(result.get('estimated_duration_s', 0.0)))}\n"
-                if route_ready else
-                "SPRAY-OFF CONNECTORS: PENDING MANUAL ENDPOINT CONNECTION\n"
-                "TOTAL ROUTE LENGTH / TIME: AVAILABLE AFTER ALL CONNECTORS PASS SAFETY CHECK\n"
-            )
-            + f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\n\n"
-            + f"ROUTING: {route_algorithm}\n"
-            "PALE GREEN: SPRAY-ON STROKES  |  PALE BLUE: MANUAL SPRAY-OFF CONNECTORS\n"
-            "Spray points are highlighted. Stroke order and direction are preserved.\n"
-            "Each connector follows the CAD surface at the configured spray distance and "
-            "is accepted only after full sprayer collision checks.\n"
-            "All route segments are timed at the configured constant painting speed.\n"
-            "Control frequency is reserved for future spray-point export."
+            "INDEPENDENT INTERACTIVE SPRAY STROKES\n\n"
+            f"RECORDED SPRAY POSES: {len(nozzle_points):,}\n"
+            f"SPRAY GROUPS: {len(np.unique(result.get('group_ids', result.get('stroke_ids', [])))):,}\n"
+            f"SPRAY DISTANCE: {spray_distance:.1f} mm\n"
+            f"ESTIMATED SPRAY TIME: {self.viewer._format_route_time(float(result.get('estimated_duration_s', 0.0)))}\n"
+            f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\n\n"
+            "Each group is an independent spray stroke.\n"
+            "No line, sample, or interpolation is inserted between groups.\n"
+            "MoveIt2 plans robot transfer motion between groups."
         )
         self.status_bar.showMessage(
-            (
-                f"ROUTE GENERATED | {len(np.unique(result.get('group_ids', result.get('stroke_ids', []))))} STROKES | "
-                f"SPRAY {spray_distance:.1f} mm | CONNECTORS {connector_distance:.1f} mm"
-            ) if route_ready else
-            (
-                f"{len(np.unique(result.get('group_ids', result.get('stroke_ids', []))))} STROKES RECORDED | "
-                "CONNECT EACH ENDPOINT PAIR TO COMPLETE THE ROUTE"
-            )
+            f"SPRAY ROUTE GENERATED | {len(np.unique(result.get('group_ids', result.get('stroke_ids', []))))} INDEPENDENT GROUPS | SPRAY {spray_distance:.1f} mm"
         )
         self.route_next_button.setVisible(True)
         self.route_next_button.setEnabled(True)
@@ -4477,43 +4450,23 @@ class MainWindow(QMainWindow):
         self._refresh_workflow_ui()
 
     def _show_interactive_route_summary(self, result):
-        """Summarize the route using geometry only, without motion-time estimates."""
+        """Summarize independent spray strokes without transfer geometry."""
         if not isinstance(result, dict):
             return
-        route_info = result.get("route_optimization") or {}
         spray_distance = float(result.get("spray_length_mm", 0.0))
-        connector_distance = float(result.get("travel_length_mm", 0.0))
-        route_timing = result.get("route_timing") or {}
-        route_ready = route_timing.get("safety_status") == "SAFE"
+        groups = len(np.unique(result.get("group_ids", result.get("stroke_ids", []))))
         self.summary_chart.hide()
         self.summary_section.setText("ROUTE GENERATION")
         self.analysis_summary.setStyleSheet("color: #00E676;")
         self.analysis_summary.setText(
-            (
-                (
-                    "SPRAY ROUTE READY FOR SIMULATION\n\n"
-                    f"TOTAL ROUTE LENGTH: {float(result.get('total_route_distance_mm', spray_distance + connector_distance)):.1f} mm\n"
-                    f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
-                    f"SPRAY-OFF CONNECTORS: {connector_distance:.1f} mm\n"
-                    f"ESTIMATED PAINTING TIME: {self.viewer._format_route_time(float(result.get('estimated_duration_s', 0.0)))}\n"
-                ) if route_ready else (
-                    "SPRAY STROKES RECORDED · CONNECTORS REQUIRED\n\n"
-                    f"RECORDED POSES: {len(result.get('nozzle_points_product', [])):,}\n"
-                    f"STROKES: {len(np.unique(result.get('group_ids', result.get('stroke_ids', [])))):,}\n"
-                    f"SPRAY-ON DISTANCE: {spray_distance:.1f} mm\n"
-                    "SPRAY-OFF CONNECTORS: PENDING MANUAL ENDPOINT CONNECTION\n"
-                    "TOTAL ROUTE LENGTH / TIME: AVAILABLE AFTER SAFETY VALIDATION\n"
-                )
-            )
-            + f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\n"
-            + f"ROUTING: {route_info.get('algorithm', 'USER DRAWN ORDER PRESERVED')}\n\n"
-            + (
-                "Review the user-ordered spray strokes and connect each end to the next start in the 3D view.\n"
-                if not route_ready else
-                "Review the validated user-ordered route in the 3D view.\n"
-            )
-            + f"Simulation duration is calculated at {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s. "
-            "Control frequency is stored for future spray-point export."
+            "INDEPENDENT SPRAY STROKES READY FOR SIMULATION\n\n"
+            f"RECORDED SPRAY POSES: {len(result.get('nozzle_points_product', [])):,}\n"
+            f"SPRAY GROUPS: {groups:,}\n"
+            f"SPRAY DISTANCE: {spray_distance:.1f} mm\n"
+            f"ROBOT SPEED: {float(self.robot_settings['painting_speed_mm_s']):.1f} mm/s\n\n"
+            "Each group is a separate spray stroke.\n"
+            "No inter-stroke connector or interpolated spray path exists.\n"
+            "MoveIt2 plans transfer motion between groups."
         )
 
     def _show_spray_simulation_summary(self):
@@ -4524,7 +4477,7 @@ class MainWindow(QMainWindow):
             "SPRAY ROUTE SIMULATION\n\n"
             "The product starts in its unpainted state.\n"
             "Only the surface reached during SPRAY ON is coated.\n"
-            "SPRAY OFF connectors move between strokes without deposition.\n\n"
+            "The spray sequence stops at every group boundary. MoveIt2 plans the transfer to the next group.\n\n"
             "Simulation playback uses the recorded path sequence.\n"
             "No robot execution speed or controller frequency is assumed."
         )

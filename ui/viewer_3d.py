@@ -2041,7 +2041,6 @@ class ProductViewer(QWidget):
         segment_ids = np.asarray([item["stroke_id"] for item in records], dtype=np.int64)
         starts = np.r_[0, np.flatnonzero(np.diff(segment_ids) != 0) + 1]
         ends = np.r_[starts[1:], len(records)]
-        stroke_endpoints = []
         arrow_points = []
         arrow_vectors = []
         for start_index, end_index in zip(starts, ends):
@@ -2083,8 +2082,6 @@ class ProductViewer(QWidget):
                             dtype=np.float64,
                         )
                     )
-            stroke_endpoints.append((points[0], points[-1]))
-
         # Keep the trajectory line visually quiet and make the actual
         # spray sample locations the dominant route layer.
         spray_point_data = pv.PolyData(np.asarray([
@@ -7418,7 +7415,13 @@ class ProductViewer(QWidget):
         self._interactive_pending_spray_strokes = []
 
         finalized_sample_count = 0
-        for raw_stroke in pending_strokes:
+        for stroke_index, raw_stroke in enumerate(pending_strokes):
+            if stroke_index:
+                # The raw strokes are finalized after mouse input has ended.
+                # Advance the ID explicitly between queued strokes; the
+                # finalizer advances IDs only for excluded-region splits
+                # within its current raw stroke.
+                self._interactive_spray_stroke_id += 1
             finalized_sample_count += self._interactive_finalize_smoothed_spray_stroke(
                 raw_poses=raw_stroke, refresh_actor=False
             )
