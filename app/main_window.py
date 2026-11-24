@@ -826,7 +826,9 @@ class MainWindow(QMainWindow):
         csv_layout.addLayout(csv_buttons)
 
         right_panel_layout = self.right_panel.layout()
-        right_panel_layout.addStretch(1)
+        # _build_right_panel already places a stretch before the action footer.
+        # Do not add another stretch here: it would push the action buttons
+        # upward and leave empty space beneath them when the CSV footer is hidden.
         right_panel_layout.addWidget(csv_footer)
         self.simulation_csv_footer = csv_footer
         csv_footer.hide()
