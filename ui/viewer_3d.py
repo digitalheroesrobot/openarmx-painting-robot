@@ -1642,6 +1642,39 @@ class ProductViewer(QWidget):
             QMessageBox.critical(self, "Import trajectory", f"Invalid trajectory data:\n{exc}")
             return False
 
+        # Validate the explicit group sequence before constructing replay
+        # records. ON groups must be contiguous 1,2,3,... in the exact
+        # operator-drawn order. An OFF marker belongs to the following group.
+        on_group_ids = [
+            int(item["group_id"]) for item in parsed if item["spray_on"]
+        ]
+        if not on_group_ids:
+            QMessageBox.warning(self, "Import trajectory", "CSV contains no spray-ON pose samples.")
+            return False
+        expected_groups = list(range(1, max(on_group_ids) + 1))
+        if on_group_ids != sorted(on_group_ids) or sorted(set(on_group_ids)) != expected_groups:
+            QMessageBox.critical(
+                self, "Import trajectory",
+                "group_id must preserve contiguous spray-group order: 1, 2, 3, ...",
+            )
+            return False
+        for index, item in enumerate(parsed):
+            if not item["spray_on"]:
+                next_on_group = next(
+                    (
+                        int(next_item["group_id"])
+                        for next_item in parsed[index + 1:]
+                        if next_item["spray_on"]
+                    ),
+                    None,
+                )
+                if next_on_group is not None and int(item["group_id"]) != next_on_group:
+                    QMessageBox.critical(
+                        self, "Import trajectory",
+                        f"Line {index + 2}: OFF group_id must identify the following spray group ({next_on_group}).",
+                    )
+                    return False
+
         # Spray-OFF rows intentionally contain no pose: MoveIt2 will generate
         # the collision-free transfer. For this application's visualization,
         # hold the most recent valid nozzle pose during those intervals. If
