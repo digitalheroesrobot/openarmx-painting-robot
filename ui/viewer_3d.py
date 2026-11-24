@@ -7415,7 +7415,13 @@ class ProductViewer(QWidget):
         self._interactive_pending_spray_strokes = []
 
         finalized_sample_count = 0
-        for raw_stroke in pending_strokes:
+        for stroke_index, raw_stroke in enumerate(pending_strokes):
+            if stroke_index:
+                # The raw strokes are finalized after mouse input has ended.
+                # Advance the ID explicitly between queued strokes; the
+                # finalizer advances IDs only for excluded-region splits
+                # within its current raw stroke.
+                self._interactive_spray_stroke_id += 1
             finalized_sample_count += self._interactive_finalize_smoothed_spray_stroke(
                 raw_poses=raw_stroke, refresh_actor=False
             )
