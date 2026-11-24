@@ -1370,7 +1370,13 @@ class ProductViewer(QWidget):
         ], dtype=np.float64)
 
     def _export_interactive_trajectory_csv(self):
-        """Export the optimized, time-parameterized robot path in the requested CSV schema."""
+        """Export timed spray poses with a 1-based group ID in column 10.
+
+        group_id identifies the human-drawn spray stroke. SPRAY-ON rows use
+        their own group. A SPRAY-OFF transfer marker uses the next group ID,
+        so MoveIt2 can detect the boundary and plan the transfer from the last
+        pose of the previous group to the first pose of the next group.
+        """
         records = list(getattr(self, "_interactive_spray_records", []))
         if len(records) < 2:
             QMessageBox.warning(self, "Export trajectory", "There is no completed spray route to export.")
@@ -1424,6 +1430,22 @@ class ProductViewer(QWidget):
             edge_duration = max(float(edge["end_s"] - edge["start_s"]), 1e-12)
             fraction = float(np.clip((t - float(edge["start_s"])) / edge_duration, 0.0, 1.0))
             spray_on = bool(edge["spray_on"])
+            # The group ID is independent of timestamp. Time describes spray
+            # execution; group_id describes the operator's exact stroke
+            # segmentation and ordering.
+            if spray_on:
+                group_id = int(edge["start_record"].get("group_id", int(edge["start_record"]["stroke_id"]) + 1))
+            else:
+                group_id = None
+                for next_edge in timeline[edge_index + 1:]:
+                    if next_edge.get("spray_on"):
+                        group_id = int(next_edge["start_record"].get("group_id", int(next_edge["start_record"]["stroke_id"]) + 1))
+                        break
+                if group_id is None:
+                    group_id = int(edge["start_record"].get("group_id", int(edge["start_record"].get("stroke_id", 0)) + 1))
+            if group_id < 1:
+                raise ValueError("Trajectory group IDs must be positive 1-based integers.")
+
             row = {
                 "t": f"{float(t):.9f}",
                 "x": "",
@@ -1434,6 +1456,7 @@ class ProductViewer(QWidget):
                 "qz": "",
                 "qw": "",
                 "on/off": "1" if spray_on else "0",
+                "group_id": str(group_id),
             }
             if spray_on:
                 pose = self._interpolate_replay_record(
@@ -1479,7 +1502,7 @@ class ProductViewer(QWidget):
             with open(filename, "w", newline="", encoding="utf-8") as stream:
                 writer = csv.DictWriter(
                     stream,
-                    fieldnames=["t", "x", "y", "z", "qx", "qy", "qz", "qw", "on/off"],
+                    fieldnames=["t", "x", "y", "z", "qx", "qy", "qz", "qw", "on/off", "group_id"],
                 )
                 writer.writeheader()
                 writer.writerows(output_rows)
@@ -1495,8 +1518,8 @@ class ProductViewer(QWidget):
             f"Exported {len(output_rows):,} samples.\n"
             f"Controller frequency: {frequency:g} Hz\n"
             f"Duration: {duration:.3f} s\n"
-            f"Spray-ON rows: product-local mm and XYZW quaternion.\n"
-            f"Spray-OFF rows: time and on/off only; pose fields are empty."
+            f"Spray-ON rows: product-local mm, XYZW quaternion, and 1-based group_id.\n"
+            f"Spray-OFF rows: time, on/off, and the following group's group_id; pose fields are empty."
         )
         return True
 
@@ -1508,7 +1531,7 @@ class ProductViewer(QWidget):
         if not filename:
             return False
 
-        required = ["t", "x", "y", "z", "qx", "qy", "qz", "qw", "on/off"]
+        required = ["t", "x", "y", "z", "qx", "qy", "qz", "qw", "on/off", "group_id"]
         try:
             with open(filename, "r", newline="", encoding="utf-8-sig") as stream:
                 reader = csv.DictReader(stream)
@@ -1553,13 +1576,20 @@ class ProductViewer(QWidget):
                 state_text = str(row["on/off"]).strip()
                 if state_text not in ("0", "1"):
                     raise ValueError(f"Line {row_number}: on/off must be 0 or 1.")
+                group_text = str(row["group_id"]).strip()
+                try:
+                    group_id = int(group_text)
+                except (TypeError, ValueError):
+                    raise ValueError(f"Line {row_number}: group_id must be a positive integer.")
+                if group_id < 1:
+                    raise ValueError(f"Line {row_number}: group_id must be a positive integer.")
                 pose_fields = [str(row.get(key, "") or "").strip() for key in required[1:8]]
                 if state_text == "0":
                     if any(pose_fields):
                         raise ValueError(
                             f"Line {row_number}: spray-OFF rows must leave x,y,z,qx,qy,qz,qw empty."
                         )
-                    parsed.append({"t": t, "spray_on": False, "pose": None})
+                    parsed.append({"t": t, "spray_on": False, "pose": None, "group_id": group_id})
                 else:
                     if not all(pose_fields):
                         raise ValueError(
@@ -1606,11 +1636,44 @@ class ProductViewer(QWidget):
                         "face_index": cell_id,
                         "cell_id": cell_id,
                     }
-                    parsed.append({"t": t, "spray_on": True, "pose": pose})
+                    parsed.append({"t": t, "spray_on": True, "pose": pose, "group_id": group_id})
                 previous_t = t
         except (ValueError, TypeError, KeyError, IndexError, np.linalg.LinAlgError) as exc:
             QMessageBox.critical(self, "Import trajectory", f"Invalid trajectory data:\n{exc}")
             return False
+
+        # Validate the explicit group sequence before constructing replay
+        # records. ON groups must be contiguous 1,2,3,... in the exact
+        # operator-drawn order. An OFF marker belongs to the following group.
+        on_group_ids = [
+            int(item["group_id"]) for item in parsed if item["spray_on"]
+        ]
+        if not on_group_ids:
+            QMessageBox.warning(self, "Import trajectory", "CSV contains no spray-ON pose samples.")
+            return False
+        expected_groups = list(range(1, max(on_group_ids) + 1))
+        if on_group_ids != sorted(on_group_ids) or sorted(set(on_group_ids)) != expected_groups:
+            QMessageBox.critical(
+                self, "Import trajectory",
+                "group_id must preserve contiguous spray-group order: 1, 2, 3, ...",
+            )
+            return False
+        for index, item in enumerate(parsed):
+            if not item["spray_on"]:
+                next_on_group = next(
+                    (
+                        int(next_item["group_id"])
+                        for next_item in parsed[index + 1:]
+                        if next_item["spray_on"]
+                    ),
+                    None,
+                )
+                if next_on_group is not None and int(item["group_id"]) != next_on_group:
+                    QMessageBox.critical(
+                        self, "Import trajectory",
+                        f"Line {index + 2}: OFF group_id must identify the following spray group ({next_on_group}).",
+                    )
+                    return False
 
         # Spray-OFF rows intentionally contain no pose: MoveIt2 will generate
         # the collision-free transfer. For this application's visualization,
@@ -1621,19 +1684,20 @@ class ProductViewer(QWidget):
             QMessageBox.warning(self, "Import trajectory", "CSV contains no spray-ON pose samples.")
             return False
         records = []
-        stroke_id = -1
-        previous_state = False
         held_pose = first_pose
         for item in parsed:
             if item["pose"] is not None:
                 held_pose = item["pose"]
-            if item["spray_on"] and not previous_state:
-                stroke_id += 1
+            group_id = int(item["group_id"])
             record = dict(held_pose)
-            record["stroke_id"] = stroke_id if item["spray_on"] else -(stroke_id + 1)
+            # ON rows retain the explicit 1-based group ID. OFF rows get a
+            # negative internal segment ID so the visualization never draws a
+            # transfer line between two human-drawn spray groups.
+            record["stroke_id"] = group_id - 1 if item["spray_on"] else -group_id
+            record["group_id"] = group_id
+            record["spray_on"] = bool(item["spray_on"])
             record["timestamp"] = item["t"]
             records.append(record)
-            previous_state = item["spray_on"]
 
         timeline = []
         for index in range(1, len(parsed)):
@@ -1672,7 +1736,7 @@ class ProductViewer(QWidget):
         }
         self._interactive_spray_route_optimization = {
             "algorithm": "IMPORTED_TIME_PARAMETERIZED_CSV",
-            "stroke_count": stroke_id + 1,
+            "stroke_count": max(int(item["group_id"]) for item in parsed if item["spray_on"]),
             "optimality": "EXTERNAL_SEQUENCE_PRESERVED",
         }
         self._interactive_spray_replay_button_state = None
@@ -1687,8 +1751,8 @@ class ProductViewer(QWidget):
         QMessageBox.information(
             self, "Import trajectory",
             f"Loaded {len(records):,} samples for simulation.\n"
-            "Spray-ON rows: XYZ in product-local millimetres and XYZW quaternion.\n"
-            "Spray-OFF rows: only time and on/off are required; pose fields must be empty.\n"
+            "Spray-ON rows: XYZ in product-local millimetres, XYZW quaternion, and group_id.\n"
+            "Spray-OFF rows: time, on/off, and the next group's group_id; pose fields must be empty.\n"
             "For visualization, OFF intervals hold the last valid nozzle pose; MoveIt2 handles transfer planning."
         )
         self.plotter.render()
@@ -6564,6 +6628,9 @@ class ProductViewer(QWidget):
             "t_product_s": relative_time,
             "face_index": int(pose["cell_id"]),
             "stroke_id": int(self._interactive_spray_stroke_id),
+            # CSV exposes human-readable group IDs as 1, 2, 3, ...;
+            # internal stroke IDs remain zero-based for compatibility.
+            "group_id": int(self._interactive_spray_stroke_id) + 1,
         }
         self._interactive_spray_records.append(record)
 
