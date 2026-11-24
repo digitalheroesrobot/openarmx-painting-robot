@@ -792,7 +792,7 @@ class MainWindow(QMainWindow):
 
 
     def _move_route_controls_to_sidebar(self):
-        """Move nonessential viewport controls into the Route Generation sidebar."""
+        """Move viewer controls into the Recorded Spray Path sidebar section."""
         controls = (
             self.viewer.interaction_mode_panel,
             self.viewer.interactive_recorded_path_panel,
@@ -1057,9 +1057,9 @@ class MainWindow(QMainWindow):
         layout.setSpacing(6)
 
         # ----------------------------------------------------
-        # ROUTE GENERATION CONTROLS
-        # These controls are hosted in the sidebar so the 3D
-        # viewport retains only Hook and Attitude RPY controls.
+        # RECORDED SPRAY PATH
+        # The ordered spray-group manager and related viewer controls
+        # are hosted here so the 3D viewport retains only Hook and Attitude RPY controls.
         # ----------------------------------------------------
         self.route_controls_content = QWidget()
         route_outer_layout = QVBoxLayout(self.route_controls_content)
@@ -4419,9 +4419,13 @@ class MainWindow(QMainWindow):
                 row_layout.setContentsMargins(8, 5, 8, 5)
                 row_layout.setSpacing(8)
 
+                drag_handle = QLabel("⋮⋮")
+                drag_handle.setObjectName("Muted")
+                row_layout.addWidget(drag_handle)
+
                 order_label = QLabel(f"{index:02d}")
                 order_label.setObjectName("MetricValue")
-                order_label.setFixedWidth(26)
+                order_label.setFixedWidth(22)
                 row_layout.addWidget(order_label)
 
                 group_label = QLabel(f"SPRAY GROUP {index}")
@@ -4429,8 +4433,8 @@ class MainWindow(QMainWindow):
                 row_layout.addWidget(group_label, 1)
 
                 metrics_label = QLabel(
-                    f"{metric['distance_mm']:.1f} mm\n"
-                    f"{self.viewer._format_route_time(metric['duration_s'])}"
+                    f"LENGTH  {metric['distance_mm']:.1f} mm\n"
+                    f"TIME  {self.viewer._format_route_time(metric['duration_s'])}"
                 )
                 metrics_label.setObjectName("MetricValue")
                 metrics_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -4487,6 +4491,9 @@ class MainWindow(QMainWindow):
 
         self.viewer._interactive_spray_records = reordered_records
         self.viewer._optimize_interactive_recorded_path()
+        self.viewer._interactive_spray_route_optimization["stroke_order"] = (
+            "USER_DEFINED_DRAG_AND_DROP"
+        )
         self.viewer._refresh_interactive_recorded_path_actor()
 
         route = self.interactive_spray_path
@@ -4538,6 +4545,9 @@ class MainWindow(QMainWindow):
                 },
                 "route_optimization": dict(
                     getattr(self.viewer, "_interactive_spray_route_optimization", {})
+                ),
+                "route_optimization_metrics": dict(
+                    getattr(self.viewer, "_interactive_route_optimization_metrics", {})
                 ),
             })
             timing = self.viewer._interactive_recorded_replay_timing or {}
