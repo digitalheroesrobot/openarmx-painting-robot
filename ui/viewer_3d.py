@@ -1546,7 +1546,7 @@ class ProductViewer(QWidget):
     def _import_interactive_trajectory_csv(self):
         """Load and validate a timed XYZW robot trajectory for simulation playback."""
         filename, _ = QFileDialog.getOpenFileName(
-            self, "Import robot trajectory CSV", "", "CSV files (*.csv)"
+            self, "Import spray route CSV", "", "CSV files (*.csv)"
         )
         if not filename:
             return False
@@ -1717,6 +1717,12 @@ class ProductViewer(QWidget):
             record["group_id"] = group_id
             record["spray_on"] = bool(item["spray_on"])
             record["timestamp"] = item["t"]
+            record["t_product_s"] = float(item["t"])
+            # Match the native route-record schema so imported samples can
+            # enter the same additive Stage 3 editing/finalization pipeline.
+            record["quaternion_product_xyzw"] = np.asarray(
+                record["nozzle_quaternion_product_xyzw"], dtype=np.float64
+            ).copy()
             records.append(record)
 
         timeline = []
@@ -1883,7 +1889,7 @@ class ProductViewer(QWidget):
             self.recorded_path_export_button.setEnabled(False)
             self.route_readiness_changed.emit(False)
             return False
-        seen, previous, stroke_count = set(), None, 0
+        seen, previous = set(), None
         for record in records:
             sid = int(record["stroke_id"])
             if sid != previous:
@@ -1895,7 +1901,12 @@ class ProductViewer(QWidget):
                     return False
                 seen.add(sid)
                 previous = sid
-                stroke_count += 1
+        # Negative IDs are spray-OFF transition markers, not spray groups.
+        stroke_count = len({
+            int(record["group_id"])
+            for record in records
+            if bool(record.get("spray_on", int(record["stroke_id"]) >= 0))
+        })
         self._interactive_spray_records = records
         metrics = self._build_interactive_route_metrics(records)
         self._interactive_recorded_replay_timing = metrics
@@ -4128,9 +4139,15 @@ class ProductViewer(QWidget):
                     item["timestamp"] = (
                         float(item.get("timestamp", 0.0)) + timestamp_shift
                     )
-            self._interactive_spray_start_timestamp = max(
-                float(item.get("timestamp", 0.0))
+            latest_product_time = max(
+                float(item.get("t_product_s", 0.0))
                 for item in existing_records
+            )
+            # Keep the product-relative time column monotonic when imported
+            # or previously recorded groups are followed by new hand-drawn
+            # groups in this editing session.
+            self._interactive_spray_start_timestamp = (
+                time.monotonic() - latest_product_time
             )
         else:
             self._interactive_spray_stroke_id = -1
@@ -7454,6 +7471,10 @@ class ProductViewer(QWidget):
             "stroke_ids": np.asarray(
                 [item["stroke_id"] for item in records], dtype=np.int64
             ),
+            "group_ids": np.asarray(
+                [int(item.get("group_id", int(item["stroke_id"]) + 1)) for item in records],
+                dtype=np.int64,
+            ),
             "route_length_product_units": route_length,
             "spray_length_mm": (
                 float(route_timing["spray_distance_mm"]) if route_timing else 0.0
@@ -7496,7 +7517,7 @@ class ProductViewer(QWidget):
             self.interactive_recorded_path_panel.show()
             self.recorded_path_replay_button.setEnabled(True)
             self.recorded_path_status_label.setText(
-                f"{len(records)} poses · {len(np.unique([r['stroke_id'] for r in records]))} strokes"
+                f"{len(records)} poses · {len({int(r.get('group_id', int(r['stroke_id']) + 1)) for r in records if bool(r.get('spray_on', int(r['stroke_id']) >= 0))})} spray groups"
             )
             if route_timing:
                 self.recorded_path_time_label.setText(
