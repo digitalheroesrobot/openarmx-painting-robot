@@ -4920,9 +4920,9 @@ class ProductViewer(QWidget):
 
         # Reuse a previously identified mesh plane when the new hit has a
         # matching normal and lies within that plane's geometric tolerance.
-        angular_cosine = math.cos(math.radians(8.0))
+        angular_cosine = math.cos(math.radians(5.0))
         diagonal = max(float(self._interactive_mesh_diagonal), 1e-9)
-        plane_tolerance = max(diagonal * 2.0e-4, 1.0e-8)
+        plane_tolerance = max(diagonal * 1.0e-4, 1.0e-8)
         for entry in self._interactive_planar_normal_cache:
             alignment = float(np.dot(entry["normal"], seed))
             plane_distance = abs(float(np.dot(
