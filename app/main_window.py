@@ -2884,9 +2884,26 @@ class MainWindow(QMainWindow):
         # The same Recorded Spray Path accordion is used on both route
         # generation and simulation pages; keep one authoritative group list.
         self.route_controls_section.setVisible(route_generation_page or simulation_page)
+
+        spray_settings_button = self._right_section_buttons.get("spray_settings")
         recorded_path_button = self._right_section_buttons.get("recorded_spray_path")
-        if (route_generation_page or simulation_page) and recorded_path_button is not None and not recorded_path_button.isChecked():
-            recorded_path_button.setChecked(True)
+        # Before FINISH SPRAY PATH, open Spray Setting by default so the
+        # operator can see the active spray parameters and mode instructions.
+        # Once the route is finalized, make Recorded Spray Path the default.
+        route_is_finalized = (
+            self.interactive_spray_path is not None
+            and self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
+        )
+        if route_generation_page and not route_is_finalized:
+            if spray_settings_button is not None and not spray_settings_button.isChecked():
+                spray_settings_button.setChecked(True)
+            if recorded_path_button is not None and recorded_path_button.isChecked():
+                recorded_path_button.setChecked(False)
+        elif route_generation_page or simulation_page:
+            if spray_settings_button is not None and spray_settings_button.isChecked():
+                spray_settings_button.setChecked(False)
+            if recorded_path_button is not None and not recorded_path_button.isChecked():
+                recorded_path_button.setChecked(True)
         self._refresh_recorded_spray_path_panel()
         self.simulation_csv_footer.setVisible(simulation_page)
         self.start_analysis_button.setVisible(
