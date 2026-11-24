@@ -1511,7 +1511,6 @@ class ProductViewer(QWidget):
                     "qy": f"{quaternion[1]:.9f}",
                     "qz": f"{quaternion[2]:.9f}",
                     "qw": f"{quaternion[3]:.9f}",
-                    "on/off": "1",
                     "group_id": str(compact_group_id),
                 })
 
@@ -1534,7 +1533,7 @@ class ProductViewer(QWidget):
             with open(filename, "w", newline="", encoding="utf-8") as stream:
                 writer = csv.DictWriter(
                     stream,
-                    fieldnames=["t", "x", "y", "z", "qx", "qy", "qz", "qw", "on/off", "group_id"],
+                    fieldnames=["t", "x", "y", "z", "qx", "qy", "qz", "qw", "group_id"],
                 )
                 writer.writeheader()
                 writer.writerows(output_rows)
@@ -1550,8 +1549,8 @@ class ProductViewer(QWidget):
             f"Exported {len(output_rows):,} spray poses in {len(grouped_edges)} groups.\\n"
             f"Sampling frequency: {frequency:g} Hz\\n"
             f"Total spray duration: {duration:.3f} s\\n"
-            "All rows are SPRAY-ON and include product-local XYZ, XYZW quaternion, and 1-based group_id.\\n"
-            "No SPRAY-OFF rows or transfer poses are exported. MoveIt2 plans transfers when group_id changes."
+            "CSV columns: t, XYZ (product-local mm), XYZW quaternion, group_id.\\n"
+            "No on/off column, SPRAY-OFF rows, or transfer poses are exported. MoveIt2 uses group_id changes to switch spray OFF and plan transfers."
         )
         return True
 
@@ -1563,11 +1562,24 @@ class ProductViewer(QWidget):
         if not filename:
             return False
 
-        required = ["t", "x", "y", "z", "qx", "qy", "qz", "qw", "on/off", "group_id"]
+        pose_columns = ["t", "x", "y", "z", "qx", "qy", "qz", "qw"]
+        required = pose_columns + ["group_id"]
+        legacy_required = pose_columns + ["on/off", "group_id"]
+        legacy_format = False
         try:
             with open(filename, "r", newline="", encoding="utf-8-sig") as stream:
                 reader = csv.DictReader(stream)
-                if reader.fieldnames is None or [name.strip() for name in reader.fieldnames] != required:
+                headers = (
+                    [name.strip() for name in reader.fieldnames]
+                    if reader.fieldnames is not None else []
+                )
+                if headers == required:
+                    legacy_format = False
+                elif headers == legacy_required:
+                    # Backward compatibility for CSVs exported before the
+                    # redundant on/off column was removed.
+                    legacy_format = True
+                else:
                     raise ValueError(
                         "CSV header must be exactly: " + ",".join(required)
                     )
@@ -1605,7 +1617,10 @@ class ProductViewer(QWidget):
                     raise ValueError(f"Line {row_number}: t must be non-negative and strictly increasing.")
                 if row_number == 2 and abs(t) > 1e-9:
                     raise ValueError("The first trajectory timestamp must be 0 seconds.")
-                state_text = str(row["on/off"]).strip()
+                # In the current 9-column format every row is a spray
+                # pose. Group-ID changes alone mark SPRAY-OFF transfer
+                # boundaries. Read on/off only for legacy 10-column files.
+                state_text = str(row.get("on/off", "1") if legacy_format else "1").strip()
                 if state_text not in ("0", "1"):
                     raise ValueError(f"Line {row_number}: on/off must be 0 or 1.")
                 group_text = str(row["group_id"]).strip()
@@ -1830,9 +1845,9 @@ class ProductViewer(QWidget):
         QMessageBox.information(
             self, "Import trajectory",
             f"Loaded {len(records):,} samples for simulation.\\n"
-            "Each new-format row is a SPRAY-ON pose with product-local XYZ, XYZW quaternion, and group_id.\\n"
+            "CSV rows contain product-local XYZ, XYZW quaternion, and group_id; all rows are spray poses.\\n"
             "A group_id change marks an implicit SPRAY-OFF transfer boundary; no connector is interpolated.\\n"
-            "Legacy CSV files with explicit SPRAY-OFF rows are also accepted."
+            "Legacy CSV files containing the on/off column are also accepted."
         )
         self.plotter.render()
         return True
