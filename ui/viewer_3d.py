@@ -1148,11 +1148,12 @@ class ProductViewer(QWidget):
                 font-weight: 700;
             }
         """)
-        row = QHBoxLayout(panel)
-        row.setContentsMargins(8, 4, 8, 4)
+        row = QVBoxLayout(panel)
+        row.setContentsMargins(10, 10, 10, 10)
         row.setSpacing(8)
-
-        row.addWidget(QLabel("SPRAY CONTROLS"))
+        heading = QLabel("SPRAY SETTINGS")
+        heading.setStyleSheet("color: #00E5FF; font-weight: 800;")
+        row.addWidget(heading)
 
         self.working_distance_label = QLabel("WORK DIST")
         self.working_distance_spin = QDoubleSpinBox()
@@ -1173,13 +1174,18 @@ class ProductViewer(QWidget):
         self.working_distance_spin.valueChanged.connect(
             self._on_interactive_working_distance_changed
         )
+        self.working_distance_label.setText("WORKING DISTANCE (mm)")
         row.addWidget(self.working_distance_label)
+        self.working_distance_spin.setEnabled(True)
+        self.working_distance_spin.setMinimumWidth(120)
+        self.working_distance_spin.setMaximumWidth(180)
         row.addWidget(self.working_distance_spin)
 
         self.interaction_mode_status = QLabel("SPRAY INPUT INACTIVE")
         self.interaction_mode_status.setStyleSheet(
             "color: #69C8D5; font-size: 9px; padding-left: 8px;"
         )
+        self.interaction_mode_status.setWordWrap(True)
         row.addWidget(self.interaction_mode_status)
 
         self.return_to_paint_button = QPushButton("PAINT MODE")
@@ -1189,10 +1195,12 @@ class ProductViewer(QWidget):
         self.return_to_paint_button.clicked.connect(
             self._return_to_interactive_spray_mode
         )
+        self.return_to_paint_button.setMinimumHeight(36)
         row.addWidget(self.return_to_paint_button)
 
         self.spray_perpendicular_status = QLabel("SURFACE ANGLE: --")
-        self.spray_perpendicular_status.setMinimumWidth(178)
+        self.spray_perpendicular_status.setMinimumWidth(0)
+        self.spray_perpendicular_status.setWordWrap(True)
         self.spray_perpendicular_status.setToolTip(
             "Angle between the spray centerline and the picked surface normal. "
             "0 degrees means perpendicular spraying. This is an indicator only; "
@@ -1211,6 +1219,7 @@ class ProductViewer(QWidget):
         self.interactive_paint_color_view_button.toggled.connect(
             self._on_interactive_paint_display_mode_changed
         )
+        self.interactive_paint_color_view_button.setMinimumHeight(36)
         row.addWidget(self.interactive_paint_color_view_button)
         row.addStretch(1)
         return panel
@@ -1234,10 +1243,12 @@ class ProductViewer(QWidget):
                 color: #71818C; background: #15232D;
             }
         """)
-        row = QHBoxLayout(panel)
-        row.setContentsMargins(8, 4, 8, 4)
+        row = QVBoxLayout(panel)
+        row.setContentsMargins(10, 10, 10, 10)
         row.setSpacing(7)
-        row.addWidget(QLabel("RECORDED SPRAY PATH"))
+        heading = QLabel("RECORDED SPRAY PATH")
+        heading.setStyleSheet("color: #00E5FF; font-weight: 800;")
+        row.addWidget(heading)
         self.recorded_path_optimize_button = QPushButton("FINALIZE SPRAY ROUTE")
         self.recorded_path_optimize_button.setToolTip(
             "Finalize spray strokes only. MoveIt2 plans transfers between strokes."
@@ -1245,17 +1256,20 @@ class ProductViewer(QWidget):
         self.recorded_path_optimize_button.clicked.connect(
             self._optimize_interactive_recorded_path
         )
+        self.recorded_path_optimize_button.setMinimumHeight(36)
         row.addWidget(self.recorded_path_optimize_button)
         self.recorded_path_replay_button = QPushButton("▶ SIMULATE")
         self.recorded_path_replay_button.clicked.connect(
             self._start_interactive_recorded_replay
         )
+        self.recorded_path_replay_button.setMinimumHeight(36)
         row.addWidget(self.recorded_path_replay_button)
         self.recorded_path_stop_button = QPushButton("STOP")
         self.recorded_path_stop_button.setEnabled(False)
         self.recorded_path_stop_button.clicked.connect(
             self._stop_interactive_recorded_replay
         )
+        self.recorded_path_stop_button.setMinimumHeight(36)
         row.addWidget(self.recorded_path_stop_button)
         self.recorded_path_export_button = QPushButton("EXPORT CSV")
         self.recorded_path_export_button.setToolTip(
@@ -1264,6 +1278,7 @@ class ProductViewer(QWidget):
         self.recorded_path_export_button.clicked.connect(
             self._export_interactive_trajectory_csv
         )
+        self.recorded_path_export_button.setMinimumHeight(36)
         row.addWidget(self.recorded_path_export_button)
         self.recorded_path_import_button = QPushButton("IMPORT CSV")
         self.recorded_path_import_button.setToolTip(
@@ -1272,11 +1287,14 @@ class ProductViewer(QWidget):
         self.recorded_path_import_button.clicked.connect(
             self._import_interactive_trajectory_csv
         )
+        self.recorded_path_import_button.setMinimumHeight(36)
         row.addWidget(self.recorded_path_import_button)
         self.recorded_path_status_label = QLabel("No recorded path")
-        row.addWidget(self.recorded_path_status_label, 1)
+        self.recorded_path_status_label.setWordWrap(True)
+        row.addWidget(self.recorded_path_status_label)
         self.recorded_path_time_label = QLabel("ROUTE DISTANCE: --")
-        self.recorded_path_time_label.setMinimumWidth(220)
+        self.recorded_path_time_label.setMinimumWidth(0)
+        self.recorded_path_time_label.setWordWrap(True)
         self.recorded_path_time_label.setStyleSheet(
             "color: #79D7A5; font-weight: 800;"
         )
@@ -1289,6 +1307,7 @@ class ProductViewer(QWidget):
         self.recorded_path_color_view_button.setToolTip(
             "Switch the product surface between film-thickness visualization and actual paint color."
         )
+        self.recorded_path_color_view_button.setMinimumHeight(36)
         row.addWidget(self.recorded_path_color_view_button)
         panel.hide()
         return panel
