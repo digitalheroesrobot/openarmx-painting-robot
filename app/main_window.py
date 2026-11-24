@@ -661,6 +661,9 @@ class MainWindow(QMainWindow):
         self.viewer.route_readiness_changed.connect(
             self._on_manual_route_readiness_changed
         )
+        self.viewer.spray_samples_changed.connect(
+            self._on_spray_samples_changed
+        )
 
         # Left sidebar
         self.left_panel = self._build_left_panel()
@@ -4287,6 +4290,10 @@ class MainWindow(QMainWindow):
             "Hold the left mouse button to paint and record the path.\n"
             "Use FINISH SPRAY PATH in this panel to complete recording."
         )
+
+    def _on_spray_samples_changed(self):
+        """Refresh the Finish Spray Path control after a completed mouse stroke."""
+        self._refresh_workflow_ui()
 
     def _on_manual_route_readiness_changed(self, ready):
         """Enable the next stage when independent spray strokes are finalized."""
