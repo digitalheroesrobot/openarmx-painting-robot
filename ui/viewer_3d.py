@@ -6713,10 +6713,14 @@ class ProductViewer(QWidget):
         self._interactive_spray_angle_last_position = tuple(
             int(value) for value in interactor.GetEventPosition()
         )
-        # Capture the pose once. Subsequent middle-drag events must not repick.
-        anchor = self._interactive_spray_latest_pose
+        # Capture a stable face normal once. Subsequent middle-drag events
+        # must not repick or repeat the mesh-wide planar-face estimate.
+        anchor = self._interactive_pick_surface_pose(
+            *self._interactive_spray_angle_last_position,
+            estimate_planar=True,
+        )
         if anchor is None:
-            anchor = self._interactive_pick_surface_pose(*self._interactive_spray_angle_last_position)
+            anchor = self._interactive_spray_latest_pose
         self._interactive_spray_angle_anchor_pose = None
         if anchor is not None:
             anchor_pose = {
