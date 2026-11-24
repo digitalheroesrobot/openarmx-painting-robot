@@ -416,6 +416,9 @@ class ProductViewer(QWidget):
         self._playback_timer.timeout.connect(self._advance_trajectory_playback)
 
         self.plotter = QtInteractor(self)
+        # Catch Qt's native double-click event before VTK's active spray
+        # interactor style can consume it.
+        self.plotter.interactor.installEventFilter(self)
 
         # Direct single-click picking of the original mesh triangles.
         # This avoids PyVista's area-selection interaction, which can
@@ -7248,6 +7251,23 @@ class ProductViewer(QWidget):
         self._interactive_spray_sampling_distance_accumulator = 0.0
         self._interactive_spray_stroke_input_poses = []
         self._interactive_remove_stroke_preview()
+
+    def eventFilter(self, watched, event):
+        """Use Qt's native double-click event to reliably enter camera mode."""
+        if (
+            watched is getattr(getattr(self, "plotter", None), "interactor", None)
+            and event.type() == QEvent.Type.MouseButtonDblClick
+            and event.button() == Qt.MouseButton.LeftButton
+            and self._interactive_spray_active
+            and self._interactive_spray_mode == "spray"
+        ):
+            self._on_interactive_spray_left_double_click(
+                self.plotter.iren.interactor, event
+            )
+            # Prevent the spray interactor style from interpreting the
+            # second click as the beginning of another paint stroke.
+            return True
+        return super().eventFilter(watched, event)
 
     def _on_interactive_spray_left_press(self, interactor, event):
         if (
