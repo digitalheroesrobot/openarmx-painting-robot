@@ -1176,7 +1176,6 @@ class ProductViewer(QWidget):
         )
         self.working_distance_label.setText("WORKING DISTANCE (mm)")
         row.addWidget(self.working_distance_label)
-        self.working_distance_spin.setEnabled(True)
         self.working_distance_spin.setMinimumWidth(120)
         self.working_distance_spin.setMaximumWidth(180)
         row.addWidget(self.working_distance_spin)
@@ -2652,9 +2651,11 @@ class ProductViewer(QWidget):
         root.setContentsMargins(8, 5, 8, 5)
         root.setSpacing(5)
 
-        display_row = QHBoxLayout()
-        display_row.setSpacing(8)
-        display_row.addWidget(QLabel("3D DISPLAY:"))
+        display_row = QVBoxLayout()
+        display_row.setSpacing(6)
+        display_heading = QLabel("3D DISPLAY LAYERS")
+        display_heading.setStyleSheet("color: #00E5FF; font-weight: 800;")
+        display_row.addWidget(display_heading)
         self.trajectory_checkboxes = {}
 
         # Show only the three primary spray-trajectory layers.
@@ -2758,7 +2759,6 @@ class ProductViewer(QWidget):
             display_row.addWidget(checkbox)
             self.trajectory_checkboxes[key] = checkbox
 
-        display_row.addStretch()
         root.addLayout(display_row)
 
         self.trajectory_safety_label = QLabel(
