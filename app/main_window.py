@@ -939,54 +939,9 @@ class MainWindow(QMainWindow):
         )
         layout.addWidget(self.unit_selector)
 
-        layout.addSpacing(5)
-        layout.addWidget(self._section("GEOMETRY"))
-
-        self.metric_labels = {}
-        self.metric_title_labels = {}
-
-        metrics = [
-            ("VERTICES", "vertices"),
-            ("TRIANGLES", "triangles"),
-            ("SURFACE AREA", "area"),
-            ("VOLUME (mm³)", "volume"),
-            ("CAD FACES", "cad_faces"),
-            ("CAD EDGES", "cad_edges"),
-            ("CAD SOLIDS", "cad_solids"),
-        ]
-
-        grid = QGridLayout()
-        grid.setVerticalSpacing(10)
-
-        for row, (name, key) in enumerate(metrics):
-            label, value = self._metric(name)
-            grid.addWidget(label, row, 0)
-            grid.addWidget(value, row, 1)
-            self.metric_title_labels[key] = label
-            self.metric_labels[key] = value
-
-        layout.addLayout(grid)
-
-        layout.addSpacing(8)
-        layout.addWidget(self._section("BOUNDING DIMENSIONS"))
-
-        self.dimension_labels = {}
-        self.dimension_title_labels = {}
-
-        dimension_grid = QGridLayout()
-
-        for row, (title, axis) in enumerate([
-            ("WIDTH (X)", "W"),
-            ("DEPTH (Y)", "D"),
-            ("HEIGHT (Z)", "H"),
-        ]):
-            label, value = self._metric(title)
-            dimension_grid.addWidget(label, row, 0)
-            dimension_grid.addWidget(value, row, 1)
-            self.dimension_title_labels[axis] = label
-            self.dimension_labels[axis] = value
-
-        layout.addLayout(dimension_grid)
+        # Geometry statistics and bounding dimensions are intentionally
+        # removed from the left sidebar. Geometry analysis remains available
+        # through the workflow and its summary panels.
 
         layout.addSpacing(8)
         layout.addWidget(self._section("VIEW"))
@@ -2567,44 +2522,9 @@ class MainWindow(QMainWindow):
         )
 
     def _update_unit_labels(self):
-        if not self._source_unit_ready():
-            self.metric_title_labels["area"].setText(
-                "SURFACE AREA (COORDINATE UNITS²)"
-            )
-            self.metric_title_labels["volume"].setText(
-                "VOLUME (COORDINATE UNITS³)"
-            )
-
-            names = {
-                "W": "WIDTH (X)",
-                "D": "DEPTH (Y)",
-                "H": "HEIGHT (Z)",
-            }
-
-            for axis, label in self.dimension_title_labels.items():
-                label.setText(
-                    f"{names[axis]} (COORDINATE UNITS)"
-                )
-            return
-
-        unit = self._get_display_unit()
-
-        self.metric_title_labels["area"].setText(
-            f"SURFACE AREA ({unit}²)"
-        )
-        self.metric_title_labels["volume"].setText(
-            f"VOLUME ({unit}³)"
-        )
-
-        self.dimension_title_labels["W"].setText(
-            f"WIDTH (X) ({unit})"
-        )
-        self.dimension_title_labels["D"].setText(
-            f"DEPTH (Y) ({unit})"
-        )
-        self.dimension_title_labels["H"].setText(
-            f"HEIGHT (Z) ({unit})"
-        )
+        # Geometry and dimension readouts were removed from the left panel.
+        # Keep this method as a compatibility no-op for existing call sites.
+        return
 
     # ========================================================
     # STAGE 3 PARAMETER STATE
@@ -3802,151 +3722,9 @@ class MainWindow(QMainWindow):
 
     
     def _update_geometry_metrics(self):
-        if self.current_mesh is None:
-            return
-
-        mesh = self.current_mesh
-
-        if self.current_step_report is None:
-            for key in ("cad_faces", "cad_edges", "cad_solids"):
-                self.metric_labels[key].setText("--")
-
-        # STEP values come from the exact B-Rep, not from the display mesh.
-        if self.current_step_report is not None:
-            report = self.current_step_report
-            topology = report["topology"]
-            mesh_info = report["mesh"]
-            bbox = report["bounding_box"]
-            mass = report["mass_properties"]
-
-            self.metric_labels["vertices"].setText(
-                f"{mesh_info['vertices']:,}"
-            )
-            self.metric_labels["triangles"].setText(
-                f"{mesh_info['triangles']:,}"
-            )
-            display_values = convert_step_report_units(
-                report,
-                self._get_display_unit(),
-            )
-            self.metric_labels["area"].setText(
-                f"{display_values['surface_area']:,.2f}"
-            )
-            self.metric_labels["volume"].setText(
-                f"{display_values['volume']:,.2f}"
-            )
-            self.metric_labels["cad_faces"].setText(
-                f"{topology['faces']:,}"
-            )
-            self.metric_labels["cad_edges"].setText(
-                f"{topology['edges']:,}"
-            )
-            self.metric_labels["cad_solids"].setText(
-                f"{topology['solids']:,}"
-            )
-            for axis, value in zip(
-                ("W", "D", "H"), display_values["dimensions"]
-            ):
-                self.dimension_labels[axis].setText(f"{value:,.3f}")
-            self._update_unit_labels()
-            return
-
-        # Source mesh statistics remain unchanged.
-        self.metric_labels["vertices"].setText(
-            f"{len(mesh.vertices):,}"
-        )
-        self.metric_labels["triangles"].setText(
-            f"{len(mesh.faces):,}"
-        )
-
-        # Get volume from the topology-reconstructed Stage 1 result.
-        # Do not use mesh.is_volume on the original STL mesh.
-        volume_coordinate_units_cubed = None
-
-        if isinstance(self.current_report, dict):
-            geometry = self.current_report.get(
-                "geometry",
-                {},
-            )
-
-            if isinstance(geometry, dict):
-                raw_volume = geometry.get(
-                    "volume_coordinate_units_cubed"
-                )
-
-                if raw_volume is not None:
-                    try:
-                        candidate_volume = float(raw_volume)
-
-                        if np.isfinite(candidate_volume):
-                            volume_coordinate_units_cubed = abs(
-                                candidate_volume
-                            )
-                    except (TypeError, ValueError):
-                        volume_coordinate_units_cubed = None
-
-        # Coordinate unit is not configured yet.
-        if not self._source_unit_ready():
-            self.metric_labels["area"].setText(
-                f"{mesh.area:,.3f}"
-            )
-
-            self.metric_labels["volume"].setText(
-                "N/A"
-            )
-
-            for axis, value in zip(("W", "D", "H"), mesh.extents):
-                self.dimension_labels[axis].setText(
-                    f"{value:.3f}"
-                )
-
-            self._update_unit_labels()
-            return
-
-        display_unit = self._get_display_unit()
-
-        length_factor = self._display_length_factor()
-
-        area_factor = get_display_area_factor(
-            self.coordinate_unit,
-            display_unit,
-        )
-
-        volume_factor = get_display_volume_factor(
-            self.coordinate_unit,
-            display_unit,
-        )
-
-        dimensions = mesh.extents * length_factor
-        display_area = mesh.area * area_factor
-
-        # Convert the volume calculated by Stage 1.
-        display_volume = None
-
-        if (
-            volume_coordinate_units_cubed is not None
-            and volume_factor is not None
-        ):
-            display_volume = (
-                volume_coordinate_units_cubed * volume_factor
-            )
-
-        self.metric_labels["area"].setText(
-            f"{display_area:,.3f}"
-        )
-
-        self.metric_labels["volume"].setText(
-            f"{display_volume:,.3f}"
-            if display_volume is not None
-            else "N/A"
-        )
-
-        for axis, value in zip(("W", "D", "H"), dimensions):
-            self.dimension_labels[axis].setText(
-                f"{value:.3f}"
-            )
-
-        self._update_unit_labels()
+        # Geometry and bounding-dimension values are no longer displayed
+        # in the left sidebar. Analysis data and reports remain unchanged.
+        return
 
 
     # ========================================================
