@@ -26,9 +26,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QScrollArea,
     QSizePolicy,
-    QTableWidget,
-    QTableWidgetItem,
-    QHeaderView,
     QStyle,
     QColorDialog,
     QAbstractItemView,
@@ -802,6 +799,7 @@ class MainWindow(QMainWindow):
             QSizePolicy.Maximum,
         )
         self.spray_settings_layout.addWidget(interaction_controls)
+        interaction_controls.show()
 
         for widget in (
             self.viewer.interactive_recorded_path_panel,
@@ -3055,7 +3053,6 @@ class MainWindow(QMainWindow):
             for values in (
                 getattr(self.viewer, "_interactive_spray_records", None),
                 getattr(self.viewer, "_interactive_pending_spray_strokes", None),
-                getattr(self.viewer, "_interactive_spray_stroke_input_poses", None),
             )
         )
         can_generate_route = (
