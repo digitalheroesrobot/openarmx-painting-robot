@@ -1546,7 +1546,7 @@ class ProductViewer(QWidget):
     def _import_interactive_trajectory_csv(self):
         """Load and validate a timed XYZW robot trajectory for simulation playback."""
         filename, _ = QFileDialog.getOpenFileName(
-            self, "Import robot trajectory CSV", "", "CSV files (*.csv)"
+            self, "Import spray route CSV", "", "CSV files (*.csv)"
         )
         if not filename:
             return False
@@ -7465,6 +7465,10 @@ class ProductViewer(QWidget):
             "stroke_ids": np.asarray(
                 [item["stroke_id"] for item in records], dtype=np.int64
             ),
+            "group_ids": np.asarray(
+                [int(item.get("group_id", int(item["stroke_id"]) + 1)) for item in records],
+                dtype=np.int64,
+            ),
             "route_length_product_units": route_length,
             "spray_length_mm": (
                 float(route_timing["spray_distance_mm"]) if route_timing else 0.0
@@ -7507,7 +7511,7 @@ class ProductViewer(QWidget):
             self.interactive_recorded_path_panel.show()
             self.recorded_path_replay_button.setEnabled(True)
             self.recorded_path_status_label.setText(
-                f"{len(records)} poses · {len(np.unique([r['stroke_id'] for r in records]))} strokes"
+                f"{len(records)} poses · {len({int(r.get('group_id', int(r['stroke_id']) + 1)) for r in records if bool(r.get('spray_on', int(r['stroke_id']) >= 0))})} spray groups"
             )
             if route_timing:
                 self.recorded_path_time_label.setText(
