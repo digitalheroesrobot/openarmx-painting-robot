@@ -1162,6 +1162,11 @@ class MainWindow(QMainWindow):
             process_content,
         )
 
+        # The first (Product Setup) page should open Process Overview by
+        # default, regardless of the hidden route-controls accordion created
+        # earlier in the sidebar build sequence.
+        self._right_section_buttons["process_overview"].setChecked(True)
+
         layout.addWidget(process_section)
 
         # ----------------------------------------------------
