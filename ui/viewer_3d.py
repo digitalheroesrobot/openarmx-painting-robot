@@ -318,6 +318,7 @@ class ProductViewer(QWidget):
     pose_confirmed = Signal(dict)
     patch_selected = Signal(int)
     route_readiness_changed = Signal(bool)
+    spray_samples_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -7392,6 +7393,7 @@ class ProductViewer(QWidget):
                 pending.append(raw_stroke)
                 self._interactive_route_undo_stack.append(copy.deepcopy(raw_stroke))
             self._interactive_spray_stroke_input_poses = []
+            self.spray_samples_changed.emit()
 
             # Promote the current live preview to a completed preview. It stays
             # visible while the operator draws subsequent independent strokes.
