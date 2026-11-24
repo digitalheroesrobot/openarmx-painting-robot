@@ -1428,20 +1428,6 @@ class MainWindow(QMainWindow):
 
         action_layout.addWidget(self.start_analysis_button)
 
-        self.interactive_spray_path_button = QPushButton(
-            "INTERACTIVE SPRAY PATH"
-        )
-        self.interactive_spray_path_button.setObjectName("SecondaryButton")
-        self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
-        self.interactive_spray_path_button.setToolTip(
-            "Each left-button press and release records one independent spray stroke. Hold the left mouse button to paint."
-        )
-        self.interactive_spray_path_button.clicked.connect(
-            self._finish_interactive_spray_path
-        )
-        self.interactive_spray_path_button.hide()
-        action_layout.addWidget(self.interactive_spray_path_button)
-
         self.import_route_csv_button = QPushButton("IMPORT ROUTE CSV")
         self.import_route_csv_button.setObjectName("SecondaryButton")
         self.import_route_csv_button.setToolTip(
@@ -1480,9 +1466,7 @@ class MainWindow(QMainWindow):
 
         self.route_next_button = QPushButton("NEXT: SPRAY SIMULATION")
         self.route_next_button.setObjectName("PrimaryButton")
-        self.route_next_button.clicked.connect(
-            lambda: self._select_workflow_stage(STAGE_SPRAY_SIMULATION)
-        )
+        self.route_next_button.clicked.connect(self._on_route_next_clicked)
         self.route_next_button.hide()
         action_layout.addWidget(self.route_next_button)
 
@@ -2992,57 +2976,58 @@ class MainWindow(QMainWindow):
 
             self.start_analysis_button.setEnabled(False)
 
-        if hasattr(self, "interactive_spray_path_button"):
-            route_page = self.active_stage == STAGE_SPRAY_TRAJECTORY
-            simulation_page = self.active_stage == STAGE_SPRAY_SIMULATION
-            route_exists = (
-                self.interactive_spray_path is not None
-                and self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
+        route_page = self.active_stage == STAGE_SPRAY_TRAJECTORY
+        simulation_page = self.active_stage == STAGE_SPRAY_SIMULATION
+        route_exists = (
+            self.interactive_spray_path is not None
+            and self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
+        )
+        recording = bool(self.viewer._interactive_spray_active)
+        route_has_unfinished_samples = any(
+            values is not None and len(values) > 0
+            for values in (
+                getattr(self.viewer, "_interactive_spray_records", None),
+                getattr(self.viewer, "_interactive_pending_spray_strokes", None),
+                getattr(self.viewer, "_interactive_spray_stroke_input_poses", None),
             )
-            recording = bool(self.viewer._interactive_spray_active)
-            route_has_unfinished_samples = any(
-                values is not None and len(values) > 0
-                for values in (
-                    getattr(self.viewer, "_interactive_spray_records", None),
-                    getattr(self.viewer, "_interactive_pending_spray_strokes", None),
-                    getattr(self.viewer, "_interactive_spray_stroke_input_poses", None),
-                )
-            )
-            self.interactive_spray_path_button.setVisible(route_page and recording)
-            self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
-            self.interactive_spray_path_button.setEnabled(
-                route_page
-                and recording
-                and route_has_unfinished_samples
-                and not self._operation_running
-            )
-            self.import_route_csv_button.setVisible(
-                route_page and not route_exists and not route_has_unfinished_samples
-            )
-            self.import_route_csv_button.setEnabled(
-                route_page and not self._operation_running
-            )
-            self.interactive_paint_color_button.setVisible(route_page)
-            self.interactive_paint_color_button.setEnabled(
-                route_page and not self._operation_running
-            )
-            self.route_next_button.setText("NEXT: SPRAY SIMULATION  →")
-            self.route_next_button.setMinimumHeight(42)
-            self.route_next_button.setVisible(route_page and route_exists and not recording)
-            self.route_next_button.setEnabled(
-                route_page and route_exists and not recording and not self._operation_running
-            )
-            if route_page and route_exists and not recording:
-                self.route_next_button.show()
-                self.route_next_button.raise_()
-            self.route_edit_button.setVisible(route_page and route_exists and not recording)
-            self.route_edit_button.setEnabled(
-                route_page and route_exists and not recording and not self._operation_running
-            )
-            self.simulation_back_button.setVisible(simulation_page)
-            self.simulation_back_button.setEnabled(
-                simulation_page and not self._operation_running
-            )
+        )
+        can_generate_route = (
+            route_page and recording and route_has_unfinished_samples
+        )
+        self.import_route_csv_button.setVisible(
+            route_page and not route_exists and not route_has_unfinished_samples
+        )
+        self.import_route_csv_button.setEnabled(
+            route_page and not self._operation_running
+        )
+        self.interactive_paint_color_button.setVisible(route_page)
+        self.interactive_paint_color_button.setEnabled(
+            route_page and not self._operation_running
+        )
+        self.route_next_button.setMinimumHeight(42)
+        self.route_next_button.setText(
+            "GENERATE SPRAY ROUTE" if can_generate_route
+            else "NEXT: SPRAY SIMULATION  →"
+        )
+        self.route_next_button.setVisible(
+            route_page and (can_generate_route or (route_exists and not recording))
+        )
+        self.route_next_button.setEnabled(
+            route_page
+            and (can_generate_route or (route_exists and not recording))
+            and not self._operation_running
+        )
+        if route_page and (can_generate_route or (route_exists and not recording)):
+            self.route_next_button.show()
+            self.route_next_button.raise_()
+        self.route_edit_button.setVisible(route_page and route_exists and not recording)
+        self.route_edit_button.setEnabled(
+            route_page and route_exists and not recording and not self._operation_running
+        )
+        self.simulation_back_button.setVisible(simulation_page)
+        self.simulation_back_button.setEnabled(
+            simulation_page and not self._operation_running
+        )
 
         if self.active_stage in (
             STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION
@@ -4258,12 +4243,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Interactive Spray Path Error", str(exc))
             return
-        self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
-        # The workflow refresh derives enabled state from actual recorded
-        # spray samples. Keep the button disabled until a stroke exists.
         self._refresh_workflow_ui()
-        self.interactive_spray_path_button.setVisible(True)
-        self.interactive_spray_path_button.raise_()
         stage2_labels = np.asarray(
             self.current_stage2_result.get("face_status_labels", [])
             if isinstance(self.current_stage2_result, dict)
@@ -4294,11 +4274,11 @@ class MainWindow(QMainWindow):
             "Press SPACE to switch to spray mode.\n"
             "Move the mouse over paintable Stage 2 surfaces.\n"
             "Hold the left mouse button to paint and record the path.\n"
-            "Use FINISH SPRAY PATH in this panel to complete recording."
+            "When all strokes are drawn, select GENERATE SPRAY ROUTE to build the spray points."
         )
 
     def _on_spray_samples_changed(self):
-        """Refresh the Finish Spray Path control after a completed mouse stroke."""
+        """Refresh route-generation controls after a completed mouse stroke."""
         self._refresh_workflow_ui()
 
     def _on_manual_route_readiness_changed(self, ready):
@@ -4326,17 +4306,23 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("DRAW AND FINISH THE SPRAY STROKES")
         self._refresh_workflow_ui()
 
+    def _on_route_next_clicked(self):
+        """Generate the recorded spray route, or continue to simulation when ready."""
+        if self.viewer._interactive_spray_active:
+            self._finish_interactive_spray_path()
+            return
+        if (
+            self.interactive_spray_path is not None
+            and self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
+        ):
+            self._select_workflow_stage(STAGE_SPRAY_SIMULATION)
+
     def _finish_interactive_spray_path(self):
         """Stop interactive input, optimize the recorded stroke route and report it."""
         if self._operation_running or not self.viewer._interactive_spray_active:
             return
 
         # Give Qt a chance to paint the loading state before route optimization.
-        self.interactive_spray_path_button.setEnabled(False)
-        self.interactive_spray_path_button.setText("GENERATING ROUTE...")
-        self.interactive_spray_path_button.setToolTip(
-            "Finalizing each spray stroke independently. No inter-stroke path is generated."
-        )
         self.route_generation_progress.show()
         self.status_bar.showMessage(
             "GENERATING SPRAY ROUTE... PLEASE WAIT"
@@ -4350,11 +4336,6 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.route_generation_progress.hide()
             QApplication.restoreOverrideCursor()
-            self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
-            self.interactive_spray_path_button.setToolTip("")
-            self.interactive_spray_path_button.setEnabled(
-                bool(self.viewer._interactive_spray_active)
-            )
             QMessageBox.critical(
                 self, "Spray Route Generation Error", str(exc)
             )
@@ -4363,9 +4344,7 @@ class MainWindow(QMainWindow):
         self.route_generation_progress.hide()
         QApplication.restoreOverrideCursor()
         self.interactive_spray_path = result
-        self.interactive_spray_path_button.setToolTip("")
         if result is None:
-            self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
             self.status_bar.showMessage("INTERACTIVE SPRAY PATH CANCELLED")
             self._refresh_workflow_ui()
             return
