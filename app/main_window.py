@@ -4355,7 +4355,7 @@ class MainWindow(QMainWindow):
         total_distance = sum(item["distance_mm"] for item in metrics)
         total_duration = sum(item["duration_s"] for item in metrics)
         total_text = (
-            f"TOTAL SPRAY LENGTH: {total_distance:.1f} mm\\n"
+            f"TOTAL SPRAY LENGTH: {total_distance:.1f} mm\n"
             f"TOTAL EXECUTION TIME: {self.viewer._format_route_time(total_duration)}"
         )
 
@@ -4407,7 +4407,7 @@ class MainWindow(QMainWindow):
                     row_layout.addWidget(group_label, 1)
 
                     metrics_label = QLabel(
-                        f"LENGTH  {metric['distance_mm']:.1f} mm\\n"
+                        f"LENGTH  {metric['distance_mm']:.1f} mm\n"
                         f"TIME  {self.viewer._format_route_time(metric['duration_s'])}"
                     )
                     metrics_label.setObjectName("MetricValue")
