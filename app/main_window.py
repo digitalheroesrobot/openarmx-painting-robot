@@ -3021,9 +3021,6 @@ class MainWindow(QMainWindow):
             STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION
         ):
             self.operation_panel.hide()
-            self.results_path_label.hide()
-        else:
-            self.results_path_label.show()
 
         # ----------------------------------------------------
         # WORKFLOW STATUS
@@ -4700,11 +4697,6 @@ class MainWindow(QMainWindow):
             f"DECIDED: {inspected:,} / {total:,}"
         )
 
-        if self.patch_inspection_path:
-            self.results_path_label.setText(
-                "PATCH INSPECTION RESULTS:\n"
-                f"{self.patch_inspection_path}"
-            )
 
     # ========================================================
     # WORKER CLEANUP
