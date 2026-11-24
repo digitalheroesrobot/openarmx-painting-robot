@@ -6406,7 +6406,7 @@ class ProductViewer(QWidget):
             "stroke_id": int(self._interactive_spray_stroke_id),
             # CSV exposes human-readable group IDs as 1, 2, 3, ...;
             # internal stroke IDs remain zero-based for compatibility.
-            "group_id": int(self._interactive_spray_stroke_id) + 1,
+            "group_id": int(pose.get("group_id", int(self._interactive_spray_stroke_id) + 1)),
         }
         self._interactive_spray_records.append(record)
 
@@ -6889,7 +6889,7 @@ class ProductViewer(QWidget):
         )
 
     def _interactive_finalize_smoothed_spray_stroke(
-        self, raw_poses=None, refresh_actor=True
+        self, raw_poses=None, refresh_actor=True, group_id=None
     ):
         """Finalize one queued stroke; expensive projection/collision work is deferred to FINISH."""
         if raw_poses is None:
@@ -7136,6 +7136,10 @@ class ProductViewer(QWidget):
                     "cell_id": cell_id,
                     "paintable": True,
                     "timestamp": timestamp,
+                    "group_id": (
+                        int(group_id) if group_id is not None
+                        else int(self._interactive_spray_stroke_id) + 1
+                    ),
                 }
 
                 # Recheck the complete sprayer envelope at the final, smoothed
@@ -7482,16 +7486,23 @@ class ProductViewer(QWidget):
         self._interactive_pending_spray_strokes = []
 
         finalized_sample_count = 0
-        for stroke_index, raw_stroke in enumerate(pending_strokes):
-            if stroke_index:
-                # The raw strokes are finalized after mouse input has ended.
-                # Advance the ID explicitly between queued strokes; the
-                # finalizer advances IDs only for excluded-region splits
-                # within its current raw stroke.
-                self._interactive_spray_stroke_id += 1
-            finalized_sample_count += self._interactive_finalize_smoothed_spray_stroke(
-                raw_poses=raw_stroke, refresh_actor=False
+        # A user group is exactly one left-button press-to-release gesture.
+        # Internal excluded-face/collision splits retain distinct stroke IDs
+        # for safe playback, but share this single recorder group ID.
+        existing_group_ids = [
+            int(item.get("group_id", int(item.get("stroke_id", -1)) + 1))
+            for item in self._interactive_spray_records
+        ]
+        next_group_id = max(existing_group_ids, default=0) + 1
+        for raw_stroke in pending_strokes:
+            stroke_sample_count = self._interactive_finalize_smoothed_spray_stroke(
+                raw_poses=raw_stroke,
+                refresh_actor=False,
+                group_id=next_group_id,
             )
+            finalized_sample_count += stroke_sample_count
+            if stroke_sample_count:
+                next_group_id += 1
         if finalized_sample_count:
             self._refresh_interactive_recorded_path_actor()
 
