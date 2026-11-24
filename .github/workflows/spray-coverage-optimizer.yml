@@ -18,15 +18,10 @@ on:
       - "scripts/test_spray_deposition_model.py"
       - "stages/spray_coverage_path_planner.py"
       - "scripts/test_spray_coverage_path_planner.py"
-      - "ui/viewer_3d.py"
-      - "ui/coating_process_settings.py"
-      - "ui/robot_settings.py"
       - "core/coating_deposition.py"
       - "core/coating_process.py"
       - "scripts/test_coating_process.py"
       - "tests/test_cone_deposition_geometry.py"
-      - "ui/sprayer_settings.py"
-      - "app/main_window.py"
       - ".github/workflows/spray-coverage-optimizer.yml"
   pull_request:
     paths:
@@ -43,14 +38,10 @@ on:
       - "scripts/test_spray_deposition_model.py"
       - "stages/spray_coverage_path_planner.py"
       - "scripts/test_spray_coverage_path_planner.py"
-      - "ui/viewer_3d.py"
-      - "ui/coating_process_settings.py"
       - "core/coating_deposition.py"
       - "core/coating_process.py"
       - "scripts/test_coating_process.py"
       - "tests/test_cone_deposition_geometry.py"
-      - "ui/sprayer_settings.py"
-      - "app/main_window.py"
       - ".github/workflows/spray-coverage-optimizer.yml"
 
 jobs:
@@ -65,7 +56,8 @@ jobs:
           python-version: "3.12"
       - name: Install numerical dependencies
         run: python -m pip install --upgrade numpy scipy trimesh pytest
-      - name: Compile trajectory, safety, optimizer, and GUI modules
+      - name: Compile numerical modules and tests
+        run: python -m compileall -q core stages scripts tests
       - name: Run coverage optimizer tests
         run: python scripts/test_spray_coverage_optimizer.py
       - name: Run trajectory safety tests
