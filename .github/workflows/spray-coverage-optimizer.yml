@@ -22,7 +22,6 @@ on:
       - "core/coating_process.py"
       - "scripts/test_coating_process.py"
       - "tests/test_cone_deposition_geometry.py"
-      - ".github/workflows/spray-coverage-optimizer.yml"
   pull_request:
     paths:
       - "core/spray_coverage_optimizer.py"
@@ -42,7 +41,6 @@ on:
       - "core/coating_process.py"
       - "scripts/test_coating_process.py"
       - "tests/test_cone_deposition_geometry.py"
-      - ".github/workflows/spray-coverage-optimizer.yml"
 
 jobs:
   numerical-tests:
