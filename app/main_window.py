@@ -2915,8 +2915,7 @@ class MainWindow(QMainWindow):
                 route_page and not route_exists
             )
             self.import_route_csv_button.setEnabled(
-                route_page and not self._operation_running and not recording
-                or route_page and recording and not self._operation_running
+                route_page and not self._operation_running
             )
             self.interactive_paint_color_button.setVisible(route_page)
             self.interactive_paint_color_button.setEnabled(
