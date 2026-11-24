@@ -5022,9 +5022,17 @@ class ProductViewer(QWidget):
             )[:3]
         except np.linalg.LinAlgError:
             return None
+        pick_parametric = np.asarray(picker.GetPCoords(), dtype=np.float64)
+        pick_barycentric = None
+        if pick_parametric.shape == (3,):
+            pick_barycentric = np.asarray([
+                1.0 - pick_parametric[0] - pick_parametric[1],
+                pick_parametric[0],
+                pick_parametric[1],
+            ], dtype=np.float64)
         normal_local = self._interactive_stable_planar_normal_local(
             cell_id, hit_local, normal_local,
-            barycentric=np.asarray(picker.GetPCoords(), dtype=np.float64),
+            barycentric=pick_barycentric,
             seed_normal=face_normals[cell_id],
         )
         normal_length = float(np.linalg.norm(normal_local))
