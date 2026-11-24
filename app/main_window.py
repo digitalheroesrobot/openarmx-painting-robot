@@ -1114,10 +1114,6 @@ class MainWindow(QMainWindow):
         self.route_controls_layout.setContentsMargins(4, 4, 12, 8)
         self.route_controls_layout.setSpacing(8)
 
-        recorded_title = QLabel("SPRAY GROUPS · DRAG TO REORDER")
-        recorded_title.setObjectName("SectionTitle")
-        self.route_controls_layout.addWidget(recorded_title)
-
         self.recorded_spray_group_list = ReorderableSprayGroupList()
         self.recorded_spray_group_list.setToolTip(
             "Drag a spray group up or down to change the execution order. "
