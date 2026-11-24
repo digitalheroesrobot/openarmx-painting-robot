@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QCheckBox,
     QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
