@@ -142,8 +142,8 @@ WORKFLOW_STAGES = [
     {
         "name": "ROUTE GENERATION",
         "description": (
-            "Record spray strokes in the desired order, then manually connect "
-            "each stroke end to the next stroke start at the configured spray distance."
+            "Record spray strokes in the exact desired order. MoveIt2 creates "
+            "the collision-free transfer motion between separate spray groups."
         ),
         "action": "RECORD SPRAY ROUTE",
     },
