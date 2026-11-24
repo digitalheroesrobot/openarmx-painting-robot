@@ -457,7 +457,6 @@ class ProductViewer(QWidget):
         # Undo/redo history contains only newly drawn raw route strokes.
         # Existing strokes loaded with ADD EXISTING are never added here.
         self._interactive_route_undo_stack = []
-        self._interactive_route_redo_stack = []
         self._interactive_spray_display_mode = "thickness"
         self._interactive_recorded_replay_index = 0
         self._interactive_recorded_replay_actor = None
@@ -558,17 +557,6 @@ class ProductViewer(QWidget):
         self._interactive_route_undo_shortcut.activated.connect(
             self._interactive_route_undo
         )
-        self._interactive_route_redo_shortcut = QShortcut(
-            QKeySequence.StandardKey.Redo, self
-        )
-        self._interactive_route_redo_shortcut.setContext(
-            Qt.ShortcutContext.WidgetWithChildrenShortcut
-        )
-        self._interactive_route_redo_shortcut.setAutoRepeat(False)
-        self._interactive_route_redo_shortcut.activated.connect(
-            self._interactive_route_redo
-        )
-
         # Discrete quarter-turn camera controls in the product-local frame.
         # Each key press rotates exactly 90 degrees; auto-repeat is disabled.
         self._camera_rotation_shortcuts = {}
@@ -3967,7 +3955,6 @@ class ProductViewer(QWidget):
         preserve_existing = bool(resume_existing)
         existing_records = list(self._interactive_spray_records) if preserve_existing else []
         self._interactive_route_undo_stack = []
-        self._interactive_route_redo_stack = []
         self._interactive_pending_spray_strokes = []
         # Always initialize this local before the conditional. "ADD EXISTING"
         # enters this method with resume_existing=True, so the previous code
@@ -7475,28 +7462,8 @@ class ProductViewer(QWidget):
         history = getattr(self, "_interactive_route_undo_stack", [])
         if not history:
             return False
-        history_stroke = history.pop()
-        self._interactive_route_redo_stack.append(copy.deepcopy(history_stroke))
+        history.pop()
         self._interactive_pending_spray_strokes = list(history)
-        self._interactive_refresh_stroke_previews_from_history()
-        self.plotter.render()
-        return True
-
-    def _interactive_route_redo(self):
-        """Redo the most recently undone spray stroke during route creation."""
-        if not (
-            self._interactive_spray_active
-            and getattr(self, "_interactive_route_generation_only", False)
-        ):
-            return False
-        redo = getattr(self, "_interactive_route_redo_stack", [])
-        if not redo:
-            return False
-        history_stroke = redo.pop()
-        self._interactive_route_undo_stack.append(copy.deepcopy(history_stroke))
-        self._interactive_pending_spray_strokes = list(
-            self._interactive_route_undo_stack
-        )
         self._interactive_refresh_stroke_previews_from_history()
         self.plotter.render()
         return True
@@ -7667,8 +7634,6 @@ class ProductViewer(QWidget):
                     self._interactive_pending_spray_strokes = pending
                 pending.append(raw_stroke)
                 self._interactive_route_undo_stack.append(copy.deepcopy(raw_stroke))
-                # A new stroke after Ctrl+Z starts a new history branch.
-                self._interactive_route_redo_stack = []
             self._interactive_spray_stroke_input_poses = []
 
             # Promote the current live preview to a completed preview. It stays
@@ -7769,7 +7734,6 @@ class ProductViewer(QWidget):
 
         self._interactive_spray_active = False
         self._interactive_route_undo_stack = []
-        self._interactive_route_redo_stack = []
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
         self._interactive_remove_live_actors()
