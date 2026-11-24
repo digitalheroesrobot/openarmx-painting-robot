@@ -802,6 +802,11 @@ class MainWindow(QMainWindow):
                 background: #21485D;
                 border-color: #00DDF5;
             }
+            QFrame#SimulationCsvFooter QPushButton:disabled {
+                background: #18232C;
+                color: #586873;
+                border: 1px solid #293943;
+            }
         """)
         csv_layout = QVBoxLayout(csv_footer)
         csv_layout.setContentsMargins(10, 8, 10, 8)
