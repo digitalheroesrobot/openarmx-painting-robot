@@ -772,8 +772,8 @@ class MainWindow(QMainWindow):
             self.route_controls_layout.addWidget(widget)
 
         # CSV import/export are simulation file actions, not playback
-        # controls. Give them a dedicated footer at the bottom of the
-        # right sidebar, outside the scrolling control groups.
+        # controls. Keep them in a fixed footer at the bottom of the
+        # entire right sidebar, outside every accordion and scroll area.
         recorded_layout = self.viewer.interactive_recorded_path_panel.layout()
         csv_footer = QFrame()
         csv_footer.setObjectName("SimulationCsvFooter")
@@ -819,7 +819,10 @@ class MainWindow(QMainWindow):
             button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             csv_buttons.addWidget(button, 1)
         csv_layout.addLayout(csv_buttons)
-        self.route_controls_outer_layout.addWidget(csv_footer)
+
+        right_panel_layout = self.right_panel.layout()
+        right_panel_layout.addStretch(1)
+        right_panel_layout.addWidget(csv_footer)
         self.simulation_csv_footer = csv_footer
         csv_footer.hide()
 
