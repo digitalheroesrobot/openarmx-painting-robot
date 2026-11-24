@@ -3939,8 +3939,10 @@ class ProductViewer(QWidget):
         # been sprayed and add only the missing coverage.
         preserve_existing = bool(resume_existing)
         existing_records = list(self._interactive_spray_records) if preserve_existing else []
-        if not preserve_existing:
-            connect_button = getattr(self, "recorded_path_connect_button", None)
+        # Always initialize this local before the conditional. "ADD EXISTING"
+        # enters this method with resume_existing=True, so the previous code
+        # could reference connect_button before assignment.
+        connect_button = getattr(self, "recorded_path_connect_button", None)
         if connect_button is not None:
             connect_button.blockSignals(True)
             connect_button.setChecked(False)
