@@ -1717,6 +1717,12 @@ class ProductViewer(QWidget):
             record["group_id"] = group_id
             record["spray_on"] = bool(item["spray_on"])
             record["timestamp"] = item["t"]
+            record["t_product_s"] = float(item["t"])
+            # Match the native route-record schema so imported samples can
+            # enter the same additive Stage 3 editing/finalization pipeline.
+            record["quaternion_product_xyzw"] = np.asarray(
+                record["nozzle_quaternion_product_xyzw"], dtype=np.float64
+            ).copy()
             records.append(record)
 
         timeline = []
@@ -1883,7 +1889,7 @@ class ProductViewer(QWidget):
             self.recorded_path_export_button.setEnabled(False)
             self.route_readiness_changed.emit(False)
             return False
-        seen, previous, stroke_count = set(), None, 0
+        seen, previous = set(), None
         for record in records:
             sid = int(record["stroke_id"])
             if sid != previous:
@@ -1895,7 +1901,12 @@ class ProductViewer(QWidget):
                     return False
                 seen.add(sid)
                 previous = sid
-                stroke_count += 1
+        # Negative IDs are spray-OFF transition markers, not spray groups.
+        stroke_count = len({
+            int(record["group_id"])
+            for record in records
+            if bool(record.get("spray_on", int(record["stroke_id"]) >= 0))
+        })
         self._interactive_spray_records = records
         metrics = self._build_interactive_route_metrics(records)
         self._interactive_recorded_replay_timing = metrics
