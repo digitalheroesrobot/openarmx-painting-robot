@@ -623,7 +623,7 @@ class ProductViewer(QWidget):
         self.interaction_mode_panel.hide()
         self.display_control_panel.hide()
         self.hole_control_panel.hide()
-        self.pose_control_panel.hide()
+        self.pose_control_panel.setVisible(self._interactive_route_generation_only)
         self._draw_empty_scene()
 
     # =========================================================
@@ -1316,6 +1316,7 @@ class ProductViewer(QWidget):
             raise ValueError("Recorded path page must be 'route' or 'simulation'.")
         route_page = page == "route"
         self._interactive_route_generation_only = route_page
+        self.pose_control_panel.setVisible(route_page)
         # Verification replay intentionally uses a temporary bare-product
         # coating field. When the operator returns to route generation, restore
         # the saved route coating so ADD / EDIT starts from the actual recorded
