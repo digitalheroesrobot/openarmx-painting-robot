@@ -4940,7 +4940,7 @@ class ProductViewer(QWidget):
         ):
             return fallback
         alignment = normals @ seed
-        plane_distance = np.abs((centroids - point_local) @ fallback)
+        plane_distance = np.abs((centroids - point_local) @ seed)
         candidates = (
             (alignment >= angular_cosine)
             & (plane_distance <= plane_tolerance)
