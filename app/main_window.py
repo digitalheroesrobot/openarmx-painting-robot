@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QCheckBox,
     QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
@@ -761,7 +762,12 @@ class MainWindow(QMainWindow):
         viewer_layout = self.viewer.layout()
         for widget in controls:
             viewer_layout.removeWidget(widget)
-            widget.setParent(self.route_controls_content)
+            widget.setParent(self.route_controls_scroll.widget())
+            widget.setMinimumWidth(0)
+            widget.setSizePolicy(
+                QSizePolicy.Expanding,
+                QSizePolicy.Maximum,
+            )
             self.route_controls_layout.addWidget(widget)
 
         self.route_controls_layout.addStretch(1)
@@ -1000,9 +1006,24 @@ class MainWindow(QMainWindow):
         # viewport retains only Hook and Attitude RPY controls.
         # ----------------------------------------------------
         self.route_controls_content = QWidget()
-        self.route_controls_layout = QVBoxLayout(self.route_controls_content)
-        self.route_controls_layout.setContentsMargins(6, 6, 6, 8)
-        self.route_controls_layout.setSpacing(8)
+        route_outer_layout = QVBoxLayout(self.route_controls_content)
+        route_outer_layout.setContentsMargins(4, 4, 4, 4)
+        route_outer_layout.setSpacing(0)
+
+        self.route_controls_scroll = QScrollArea()
+        self.route_controls_scroll.setObjectName("RouteControlsScroll")
+        self.route_controls_scroll.setWidgetResizable(True)
+        self.route_controls_scroll.setFrameShape(QFrame.NoFrame)
+        self.route_controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.route_controls_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.route_controls_scroll.setMaximumHeight(440)
+
+        route_controls_body = QWidget()
+        self.route_controls_layout = QVBoxLayout(route_controls_body)
+        self.route_controls_layout.setContentsMargins(4, 4, 12, 8)
+        self.route_controls_layout.setSpacing(10)
+        self.route_controls_scroll.setWidget(route_controls_body)
+        route_outer_layout.addWidget(self.route_controls_scroll)
         self.route_controls_section = self._make_collapsible_section(
             "ROUTE GENERATION CONTROLS",
             "route_generation_controls",
