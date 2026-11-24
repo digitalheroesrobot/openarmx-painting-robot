@@ -7530,9 +7530,10 @@ class ProductViewer(QWidget):
             )
         self._interactive_spray_input_style = None
         self._interactive_saved_style = None
-        self.interaction_mode_panel.hide()
-        self.working_distance_spin.setEnabled(False)
-        self._update_interaction_mode_indicators(None)
+        # Keep SPRAY SETTING visible after finalization so the operator can
+        # review working distance and interaction guidance on the route page.
+        self.interaction_mode_panel.show()
+        self._update_interaction_mode_indicators("camera")
 
         if self._interactive_hud_actor is not None:
             try:

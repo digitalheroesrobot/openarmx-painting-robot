@@ -801,6 +801,33 @@ class MainWindow(QMainWindow):
         self.spray_settings_layout.addWidget(interaction_controls)
         interaction_controls.show()
 
+        # A dedicated drag-and-drop order list is available while generating
+        # the route. The Recorded Spray Path accordion remains simulation-only.
+        order_title = QLabel("SPRAY GROUP ORDER · DRAG TO REORDER")
+        order_title.setObjectName("SectionTitle")
+        self.spray_settings_layout.addWidget(order_title)
+        self.route_spray_order_list = ReorderableSprayGroupList()
+        self.route_spray_order_list.setToolTip(
+            "Drag groups to change spray execution order. "
+            "The geometry and direction inside each group are preserved."
+        )
+        self.route_spray_order_list.orderChanged.connect(
+            self._on_recorded_spray_groups_reordered
+        )
+        self.spray_settings_layout.addWidget(self.route_spray_order_list)
+        self.route_spray_order_empty_label = QLabel(
+            "Draw and finish at least one spray stroke to arrange its output order."
+        )
+        self.route_spray_order_empty_label.setObjectName("Muted")
+        self.route_spray_order_empty_label.setWordWrap(True)
+        self.spray_settings_layout.addWidget(self.route_spray_order_empty_label)
+        self.route_spray_order_total_label = QLabel(
+            "TOTAL SPRAY LENGTH: 0.0 mm  |  TOTAL EXECUTION TIME: 00:00"
+        )
+        self.route_spray_order_total_label.setObjectName("MetricValue")
+        self.route_spray_order_total_label.setWordWrap(True)
+        self.spray_settings_layout.addWidget(self.route_spray_order_total_label)
+
         for widget in (
             self.viewer.interactive_recorded_path_panel,
             self.viewer.display_control_panel,
@@ -2880,6 +2907,7 @@ class MainWindow(QMainWindow):
         route_generation_page = self.active_stage == STAGE_SPRAY_TRAJECTORY
         simulation_page = self.active_stage == STAGE_SPRAY_SIMULATION
         self.spray_settings_section.setVisible(route_generation_page)
+        self.viewer.interaction_mode_panel.setVisible(route_generation_page)
         self.route_controls_section.setVisible(simulation_page)
         spray_settings_button = self._right_section_buttons.get("spray_settings")
         recorded_path_button = self._right_section_buttons.get("recorded_spray_path")
@@ -4319,59 +4347,74 @@ class MainWindow(QMainWindow):
         return result
 
     def _refresh_recorded_spray_path_panel(self):
-        """Refresh the ordered drag-and-drop spray group list and total metrics."""
+        """Refresh both route-generation and simulation views of spray group order."""
         if not hasattr(self, "recorded_spray_group_list"):
             return
 
         metrics = self._recorded_spray_group_metrics()
-        list_widget = self.recorded_spray_group_list
+        total_distance = sum(item["distance_mm"] for item in metrics)
+        total_duration = sum(item["duration_s"] for item in metrics)
+        total_text = (
+            f"TOTAL SPRAY LENGTH: {total_distance:.1f} mm\n"
+            f"TOTAL EXECUTION TIME: {self.viewer._format_route_time(total_duration)}"
+        )
+
+        list_targets = [
+            (
+                self.recorded_spray_group_list,
+                self.recorded_spray_path_empty_label,
+                self.recorded_spray_path_total_label,
+            ),
+        ]
+        if hasattr(self, "route_spray_order_list"):
+            list_targets.append((
+                self.route_spray_order_list,
+                self.route_spray_order_empty_label,
+                self.route_spray_order_total_label,
+            ))
+
         self._recorded_spray_list_updating = True
         try:
-            list_widget.clear()
-            self.recorded_spray_path_empty_label.setVisible(not metrics)
-            list_widget.setVisible(bool(metrics))
+            for list_widget, empty_label, total_label in list_targets:
+                list_widget.clear()
+                empty_label.setVisible(not metrics)
+                list_widget.setVisible(bool(metrics))
+                total_label.setText(total_text)
 
-            for index, metric in enumerate(metrics, start=1):
-                item = QListWidgetItem()
-                item.setData(Qt.UserRole, int(metric["group_id"]))
-                item.setSizeHint(QSize(340, 58))
-                list_widget.addItem(item)
+                for index, metric in enumerate(metrics, start=1):
+                    item = QListWidgetItem()
+                    item.setData(Qt.UserRole, int(metric["group_id"]))
+                    item.setSizeHint(QSize(340, 58))
+                    list_widget.addItem(item)
 
-                row = QWidget()
-                row.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-                row_layout = QHBoxLayout(row)
-                row_layout.setContentsMargins(8, 5, 8, 5)
-                row_layout.setSpacing(8)
+                    row = QWidget()
+                    row.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                    row_layout = QHBoxLayout(row)
+                    row_layout.setContentsMargins(8, 5, 8, 5)
+                    row_layout.setSpacing(8)
 
-                drag_handle = QLabel("⋮⋮")
-                drag_handle.setObjectName("Muted")
-                row_layout.addWidget(drag_handle)
+                    drag_handle = QLabel("⋮⋮")
+                    drag_handle.setObjectName("Muted")
+                    row_layout.addWidget(drag_handle)
 
-                order_label = QLabel(f"{index:02d}")
-                order_label.setObjectName("MetricValue")
-                order_label.setFixedWidth(22)
-                row_layout.addWidget(order_label)
+                    order_label = QLabel(f"{index:02d}")
+                    order_label.setObjectName("MetricValue")
+                    order_label.setFixedWidth(22)
+                    row_layout.addWidget(order_label)
 
-                group_label = QLabel(f"SPRAY GROUP {index}")
-                group_label.setObjectName("SectionTitle")
-                row_layout.addWidget(group_label, 1)
+                    group_label = QLabel(f"SPRAY GROUP {index}")
+                    group_label.setObjectName("SectionTitle")
+                    row_layout.addWidget(group_label, 1)
 
-                metrics_label = QLabel(
-                    f"LENGTH  {metric['distance_mm']:.1f} mm\n"
-                    f"TIME  {self.viewer._format_route_time(metric['duration_s'])}"
-                )
-                metrics_label.setObjectName("MetricValue")
-                metrics_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                row_layout.addWidget(metrics_label)
+                    metrics_label = QLabel(
+                        f"LENGTH  {metric['distance_mm']:.1f} mm\n"
+                        f"TIME  {self.viewer._format_route_time(metric['duration_s'])}"
+                    )
+                    metrics_label.setObjectName("MetricValue")
+                    metrics_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    row_layout.addWidget(metrics_label)
 
-                list_widget.setItemWidget(item, row)
-
-            total_distance = sum(item["distance_mm"] for item in metrics)
-            total_duration = sum(item["duration_s"] for item in metrics)
-            self.recorded_spray_path_total_label.setText(
-                f"TOTAL SPRAY LENGTH: {total_distance:.1f} mm\n"
-                f"TOTAL EXECUTION TIME: {self.viewer._format_route_time(total_duration)}"
-            )
+                    list_widget.setItemWidget(item, row)
         finally:
             self._recorded_spray_list_updating = False
 
@@ -4380,7 +4423,15 @@ class MainWindow(QMainWindow):
         if self._recorded_spray_list_updating or self._operation_running:
             return
 
-        list_widget = self.recorded_spray_group_list
+        source_list = self.sender()
+        list_widget = (
+            source_list
+            if source_list in (
+                self.recorded_spray_group_list,
+                getattr(self, "route_spray_order_list", None),
+            )
+            else self.recorded_spray_group_list
+        )
         ordered_group_ids = [
             int(list_widget.item(index).data(Qt.UserRole))
             for index in range(list_widget.count())
