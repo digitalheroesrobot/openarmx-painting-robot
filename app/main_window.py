@@ -500,26 +500,25 @@ class MainWindow(QMainWindow):
             for button in self._right_section_buttons.values()
         )
 
-        header = QToolButton()
-        header.setText(title)
+        # QPushButton supports an explicit text alignment rule. QToolButton
+        # ignored the previous text-align stylesheet on some Qt styles, so
+        # its label remained visually right-shifted.
+        header = QPushButton()
         header.setCheckable(True)
 
         # Only the first section starts expanded.
         initially_expanded = not another_section_open
         header.setChecked(initially_expanded)
-
-        header.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        header.setArrowType(
-            Qt.DownArrow if initially_expanded else Qt.RightArrow
+        header.setText(
+            ("▼  " if initially_expanded else "▶  ") + title
         )
         header.setObjectName("CollapsibleSectionHeader")
-        # The header itself sits at the right edge, but its label must
-        # remain left-aligned inside the button for consistent reading.
         header.setStyleSheet(
-            "QToolButton#CollapsibleSectionHeader { text-align: left; }"
+            "QPushButton#CollapsibleSectionHeader { text-align: left; }"
         )
 
-        # Keep accordion headers compact and align them to the right edge.
+        # Keep accordion headers compact and align the button to the
+        # sidebar's right edge while keeping its title left-aligned.
         header.setSizePolicy(
             QSizePolicy.Maximum,
             QSizePolicy.Fixed,
@@ -539,8 +538,8 @@ class MainWindow(QMainWindow):
 
             body.setVisible(expanded)
 
-            button.setArrowType(
-                Qt.DownArrow if expanded else Qt.RightArrow
+            button.setText(
+                ("▼  " if expanded else "▶  ") + title
             )
 
         header.toggled.connect(on_toggled)
