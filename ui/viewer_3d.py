@@ -4890,7 +4890,7 @@ class ProductViewer(QWidget):
         vertices = self._interactive_mesh_vertices
         triangles_local = vertices[local_faces]
         centroids_local = np.mean(triangles_local, axis=1)
-        transform = self._actor_matrix_array()
+        transform = self._interactive_spray_transform
         centroids_world = centroids_local @ transform[:3, :3].T + transform[:3, 3]
         triangles_world = (
             triangles_local @ transform[:3, :3].T + transform[:3, 3]
