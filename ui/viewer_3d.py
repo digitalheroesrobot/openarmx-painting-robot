@@ -1662,22 +1662,47 @@ class ProductViewer(QWidget):
             QMessageBox.critical(self, "Import trajectory", f"Invalid trajectory data:\n{exc}")
             return False
 
-        # Validate the explicit group sequence before constructing replay
-        # records. ON groups must be contiguous 1,2,3,... in the exact
-        # operator-drawn order. An OFF marker belongs to the following group.
+        # Validate operator-drawn order, then compact sparse IDs. Older
+        # exports can retain gaps after undo (for example groups 1 and 3).
         on_group_ids = [
             int(item["group_id"]) for item in parsed if item["spray_on"]
         ]
         if not on_group_ids:
             QMessageBox.warning(self, "Import trajectory", "CSV contains no spray-ON pose samples.")
             return False
-        expected_groups = list(range(1, max(on_group_ids) + 1))
-        if on_group_ids != sorted(on_group_ids) or sorted(set(on_group_ids)) != expected_groups:
+
+        ordered_source_groups = []
+        closed_source_groups = set()
+        previous_source_group = None
+        for group_id in on_group_ids:
+            if group_id != previous_source_group:
+                if group_id in closed_source_groups:
+                    QMessageBox.critical(
+                        self, "Import trajectory",
+                        "group_id order is invalid: a spray group appears again after a later group.",
+                    )
+                    return False
+                if previous_source_group is not None:
+                    closed_source_groups.add(previous_source_group)
+                ordered_source_groups.append(group_id)
+                previous_source_group = group_id
+
+        if any(
+            later <= earlier
+            for earlier, later in zip(ordered_source_groups, ordered_source_groups[1:])
+        ):
             QMessageBox.critical(
                 self, "Import trajectory",
-                "group_id must preserve contiguous spray-group order: 1, 2, 3, ...",
+                "group_id must increase in the operator-drawn order.",
             )
             return False
+
+        source_to_compact_group = {
+            source_id: index + 1
+            for index, source_id in enumerate(ordered_source_groups)
+        }
+        # Each OFF marker must identify the next ON group using the original
+        # CSV IDs. Then apply the same compaction to ON and OFF rows.
         for index, item in enumerate(parsed):
             if not item["spray_on"]:
                 next_on_group = next(
@@ -1694,6 +1719,9 @@ class ProductViewer(QWidget):
                         f"Line {index + 2}: OFF group_id must identify the following spray group ({next_on_group}).",
                     )
                     return False
+
+        for item in parsed:
+            item["group_id"] = source_to_compact_group[int(item["group_id"])]
 
         # Spray-OFF rows intentionally contain no pose: MoveIt2 will generate
         # the collision-free transfer. For this application's visualization,
