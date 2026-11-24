@@ -1086,27 +1086,16 @@ class MainWindow(QMainWindow):
             "route_generation_controls",
             self.route_controls_content,
         )
-        self.route_controls_section.setStyleSheet("""
-            QFrame {
-                background-color: #0D1822;
-                border: 1px solid #294858;
-                border-radius: 6px;
-            }
-            QToolButton#CollapsibleSectionHeader {
-                color: #00E5FF;
-                background-color: #142B3A;
-                border: 1px solid #36566A;
-                border-radius: 5px;
-                padding: 9px 10px;
-                font-weight: 800;
-                text-align: left;
-            }
-            QToolButton#CollapsibleSectionHeader:hover {
-                border-color: #00E5FF;
-                background-color: #19394B;
-            }
-        """)
-        layout.addWidget(self.route_controls_section)
+        # Match the ordinary sidebar accordion appearance. Give this
+        # long title the full sidebar width so its text is never clipped.
+        route_header = self._right_section_buttons[
+            "route_generation_controls"
+        ]
+        route_header.setMinimumWidth(360)
+        route_header.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
         self.route_controls_section.hide()
 
         # ----------------------------------------------------
@@ -1578,6 +1567,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(
             self.results_path_label
         )
+
+        # Keep the route/simulation accordion as the final sidebar item,
+        # after all other collapsible sections and operational controls.
+        layout.addWidget(self.route_controls_section)
 
         return panel
 
