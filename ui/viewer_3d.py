@@ -5166,7 +5166,7 @@ class ProductViewer(QWidget):
         )
         direction_product = product_rotation.T @ pose["spray_direction_world"]
         direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
-        normal_product = product_rotation.T @ np.asarray(
+        normal_product = self._interactive_spray_transform[:3, :3].T @ np.asarray(
             pose["surface_normal_world"], dtype=np.float64
         )
         normal_product /= max(float(np.linalg.norm(normal_product)), 1e-12)
