@@ -1423,84 +1423,89 @@ class ProductViewer(QWidget):
             return False
 
         timeline = timing["timeline"]
-        duration = float(timeline[-1]["end_s"])
-        if duration <= 0.0:
-            QMessageBox.warning(self, "Export trajectory", "The route has no positive duration.")
+        spray_edges = [edge for edge in timeline if bool(edge.get("spray_on"))]
+        if not spray_edges:
+            QMessageBox.warning(self, "Export trajectory", "The route contains no spray-ON segments.")
+            return False
+        period = 1.0 / frequency
+
+        # Export only spray segments. Group changes encode transfer boundaries;
+        # OFF transfer markers are intentionally absent from the CSV.
+        grouped_edges = []
+        for edge in spray_edges:
+            source_group_id = int(edge["start_record"].get(
+                "group_id", int(edge["start_record"]["stroke_id"]) + 1
+            ))
+            if source_group_id < 1:
+                raise ValueError("Trajectory group IDs must be positive 1-based integers.")
+            if not grouped_edges or grouped_edges[-1]["source_group_id"] != source_group_id:
+                grouped_edges.append({"source_group_id": source_group_id, "edges": []})
+            grouped_edges[-1]["edges"].append(edge)
+
+        source_group_ids = [group["source_group_id"] for group in grouped_edges]
+        if len(set(source_group_ids)) != len(source_group_ids):
+            QMessageBox.critical(
+                self, "Export trajectory",
+                "A spray group appears again after a later group. Finish or reload the route before exporting.",
+            )
             return False
 
-        # Emit a uniform controller-rate sequence. If the route duration is
-        # not an exact controller period, append one final period-aligned row;
-        # its pose is clamped to the route endpoint.
-        period = 1.0 / frequency
-        sample_count = max(1, int(math.ceil(duration * frequency - 1e-10)))
-        sample_times = np.arange(sample_count + 1, dtype=np.float64) * period
-        end_times = np.asarray([edge["end_s"] for edge in timeline], dtype=np.float64)
-
-        output_rows = []
         inverse = self._interactive_spray_transform_inverse
         product_rotation = self._interactive_product_rotation_matrix(
             self._interactive_spray_transform[:3, :3]
         )
-        for sample_index, t in enumerate(sample_times):
-            edge_index = min(
-                int(np.searchsorted(end_times, t + 1e-10, side="right")),
-                len(timeline) - 1,
-            )
-            edge = timeline[edge_index]
-            edge_duration = max(float(edge["end_s"] - edge["start_s"]), 1e-12)
-            fraction = float(np.clip((t - float(edge["start_s"])) / edge_duration, 0.0, 1.0))
-            spray_on = bool(edge["spray_on"])
-            # The group ID is independent of timestamp. Time describes spray
-            # execution; group_id describes the operator's exact stroke
-            # segmentation and ordering.
-            if spray_on:
-                group_id = int(edge["start_record"].get("group_id", int(edge["start_record"]["stroke_id"]) + 1))
-            else:
-                group_id = None
-                for next_edge in timeline[edge_index + 1:]:
-                    if next_edge.get("spray_on"):
-                        group_id = int(next_edge["start_record"].get("group_id", int(next_edge["start_record"]["stroke_id"]) + 1))
-                        break
-                if group_id is None:
-                    group_id = int(edge["start_record"].get("group_id", int(edge["start_record"].get("stroke_id", 0)) + 1))
-            if group_id < 1:
-                raise ValueError("Trajectory group IDs must be positive 1-based integers.")
+        output_rows = []
+        spray_duration = 0.0
+        output_time = 0.0
 
-            row = {
-                "t": f"{float(t):.9f}",
-                "x": "",
-                "y": "",
-                "z": "",
-                "qx": "",
-                "qy": "",
-                "qz": "",
-                "qw": "",
-                "on/off": "1" if spray_on else "0",
-                "group_id": str(group_id),
-            }
-            if spray_on:
+        for compact_group_id, group in enumerate(grouped_edges, start=1):
+            edges = group["edges"]
+            edge_durations = np.asarray([
+                max(float(edge["end_s"] - edge["start_s"]), 0.0)
+                for edge in edges
+            ], dtype=np.float64)
+            valid = edge_durations > 1e-12
+            edges = [edge for edge, keep in zip(edges, valid) if keep]
+            edge_durations = edge_durations[valid]
+            if not edges:
+                continue
+
+            local_end_times = np.cumsum(edge_durations)
+            group_duration = float(local_end_times[-1])
+            spray_duration += group_duration
+            sample_count = max(1, int(math.ceil(group_duration * frequency - 1e-10)))
+            local_sample_times = np.arange(sample_count + 1, dtype=np.float64) * period
+            local_sample_times[-1] = min(local_sample_times[-1], group_duration)
+            local_sample_times = np.unique(local_sample_times)
+
+            for local_t in local_sample_times:
+                edge_index = min(
+                    int(np.searchsorted(local_end_times, local_t + 1e-10, side="right")),
+                    len(edges) - 1,
+                )
+                edge = edges[edge_index]
+                edge_start = float(local_end_times[edge_index] - edge_durations[edge_index])
+                fraction = float(np.clip(
+                    (local_t - edge_start) / max(float(edge_durations[edge_index]), 1e-12),
+                    0.0, 1.0,
+                ))
                 pose = self._interpolate_replay_record(
                     edge["start_record"], edge["end_record"], fraction
                 )
                 nozzle_world = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
                 nozzle_product = (inverse @ np.append(nozzle_world, 1.0))[:3]
                 position_mm = nozzle_product * mm_factor
-                direction_world = np.asarray(
-                    pose["spray_direction_world"], dtype=np.float64
-                )
+                direction_world = np.asarray(pose["spray_direction_world"], dtype=np.float64)
                 direction_world /= max(float(np.linalg.norm(direction_world)), 1e-12)
                 direction_product = product_rotation.T @ direction_world
                 direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
-                # Imported full orientations retain their roll. Native spray
-                # poses use the deterministic product-frame roll convention.
                 quaternion = pose.get("nozzle_quaternion_product_xyzw")
                 if quaternion is None:
-                    quaternion = self._interactive_pose_quaternion_from_direction(
-                        direction_product
-                    )
+                    quaternion = self._interactive_pose_quaternion_from_direction(direction_product)
                 quaternion = np.asarray(quaternion, dtype=np.float64)
                 quaternion /= max(float(np.linalg.norm(quaternion)), 1e-12)
-                row.update({
+                output_rows.append({
+                    "t": f"{output_time + float(local_t):.9f}",
                     "x": f"{position_mm[0]:.6f}",
                     "y": f"{position_mm[1]:.6f}",
                     "z": f"{position_mm[2]:.6f}",
@@ -1508,8 +1513,17 @@ class ProductViewer(QWidget):
                     "qy": f"{quaternion[1]:.9f}",
                     "qz": f"{quaternion[2]:.9f}",
                     "qw": f"{quaternion[3]:.9f}",
+                    "on/off": "1",
+                    "group_id": str(compact_group_id),
                 })
-            output_rows.append(row)
+
+            # Timestamp sequence increment only; it is not transfer time.
+            output_time = float(output_rows[-1]["t"]) + period
+
+        if len(output_rows) < 2:
+            QMessageBox.warning(self, "Export trajectory", "The route has fewer than two exportable spray poses.")
+            return False
+        duration = spray_duration
 
         filename, _ = QFileDialog.getSaveFileName(
             self, "Export robot trajectory CSV", "spray_trajectory.csv", "CSV files (*.csv)"
