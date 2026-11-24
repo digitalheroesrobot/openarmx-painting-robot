@@ -1394,7 +1394,6 @@ class MainWindow(QMainWindow):
         action_layout = QVBoxLayout(self.action_footer)
         action_layout.setContentsMargins(9, 8, 9, 9)
         action_layout.setSpacing(6)
-        action_layout.addWidget(QLabel("SPRAY ACTIONS"))
 
         self.start_analysis_button = QPushButton(
             "LOAD STL PRODUCT"
