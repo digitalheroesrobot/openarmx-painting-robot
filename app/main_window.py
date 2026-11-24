@@ -1031,7 +1031,7 @@ class MainWindow(QMainWindow):
         self.route_controls_scroll.setFrameShape(QFrame.NoFrame)
         self.route_controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.route_controls_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.route_controls_scroll.setMaximumHeight(440)
+        self.route_controls_scroll.setMaximumHeight(660)
 
         route_controls_body = QWidget()
         self.route_controls_layout = QVBoxLayout(route_controls_body)
