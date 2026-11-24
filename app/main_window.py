@@ -771,6 +771,58 @@ class MainWindow(QMainWindow):
             )
             self.route_controls_layout.addWidget(widget)
 
+        # CSV import/export are simulation file actions, not playback
+        # controls. Give them a dedicated footer at the bottom of the
+        # right sidebar, outside the scrolling control groups.
+        recorded_layout = self.viewer.interactive_recorded_path_panel.layout()
+        csv_footer = QFrame()
+        csv_footer.setObjectName("SimulationCsvFooter")
+        csv_footer.setStyleSheet("""
+            QFrame#SimulationCsvFooter {
+                background: #10212C;
+                border: 1px solid #36566A;
+                border-radius: 6px;
+            }
+            QFrame#SimulationCsvFooter QLabel {
+                color: #00E5FF;
+                font-weight: 800;
+                border: none;
+            }
+            QFrame#SimulationCsvFooter QPushButton {
+                min-height: 40px;
+                background: #183244;
+                color: #E2EDF4;
+                border: 1px solid #3B687E;
+                border-radius: 5px;
+                padding: 6px 10px;
+                font-weight: 800;
+            }
+            QFrame#SimulationCsvFooter QPushButton:hover {
+                background: #21485D;
+                border-color: #00DDF5;
+            }
+        """)
+        csv_layout = QVBoxLayout(csv_footer)
+        csv_layout.setContentsMargins(10, 8, 10, 8)
+        csv_layout.setSpacing(7)
+        csv_title = QLabel("CSV FILE")
+        csv_layout.addWidget(csv_title)
+        csv_buttons = QHBoxLayout()
+        csv_buttons.setSpacing(8)
+        for button in (
+            self.viewer.recorded_path_import_button,
+            self.viewer.recorded_path_export_button,
+        ):
+            recorded_layout.removeWidget(button)
+            button.setParent(csv_footer)
+            button.setMinimumWidth(0)
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            csv_buttons.addWidget(button, 1)
+        csv_layout.addLayout(csv_buttons)
+        self.route_controls_outer_layout.addWidget(csv_footer)
+        self.simulation_csv_footer = csv_footer
+        csv_footer.hide()
+
         self.route_controls_layout.addStretch(1)
 
     # ========================================================
@@ -1010,6 +1062,7 @@ class MainWindow(QMainWindow):
         route_outer_layout = QVBoxLayout(self.route_controls_content)
         route_outer_layout.setContentsMargins(4, 4, 4, 4)
         route_outer_layout.setSpacing(0)
+        self.route_controls_outer_layout = route_outer_layout
 
         self.route_controls_scroll = QScrollArea()
         self.route_controls_scroll.setObjectName("RouteControlsScroll")
@@ -2830,6 +2883,7 @@ class MainWindow(QMainWindow):
         self.route_controls_section.setVisible(
             route_generation_page or simulation_page
         )
+        self.simulation_csv_footer.setVisible(simulation_page)
         route_header = self._right_section_buttons.get(
             "route_generation_controls"
         )
