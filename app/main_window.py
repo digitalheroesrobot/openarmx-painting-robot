@@ -759,7 +759,6 @@ class MainWindow(QMainWindow):
             self.viewer.interaction_mode_panel,
             self.viewer.interactive_recorded_path_panel,
             self.viewer.display_control_panel,
-            self.simulation_back_button,
         )
         viewer_layout = self.viewer.layout()
         for widget in controls:
@@ -1519,7 +1518,7 @@ class MainWindow(QMainWindow):
             lambda: self._select_workflow_stage(STAGE_SPRAY_TRAJECTORY)
         )
         self.simulation_back_button.hide()
-        layout.addWidget(self.simulation_back_button)
+        action_layout.addWidget(self.simulation_back_button)
 
         # ----------------------------------------------------
         # OPERATION PROGRESS
