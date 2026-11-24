@@ -1197,15 +1197,40 @@ class ProductViewer(QWidget):
         row.addLayout(mode_status_row)
         self._update_interaction_mode_indicators("camera")
 
-        self.return_to_paint_button = QPushButton("PAINT MODE")
-        self.return_to_paint_button.setToolTip(
-            "Return to spray preview. You can also press Space."
+        mode_help_panel = QFrame()
+        mode_help_panel.setObjectName("InteractionModeHelp")
+        mode_help_panel.setStyleSheet("""
+            QFrame#InteractionModeHelp {
+                background: #10212C;
+                border: 1px solid #36566A;
+                border-radius: 5px;
+            }
+            QFrame#InteractionModeHelp QLabel {
+                border: none;
+                padding: 3px 7px;
+                font-size: 9px;
+                font-weight: 800;
+            }
+        """)
+        mode_help_layout = QVBoxLayout(mode_help_panel)
+        mode_help_layout.setContentsMargins(5, 4, 5, 4)
+        mode_help_layout.setSpacing(3)
+
+        paint_mode_hint = QLabel(
+            '<span style="color:#FFD166;">SPACE BAR</span>'
+            '<span style="color:#DCE8EF;">  →  </span>'
+            '<span style="color:#65F0C1;">PAINT MODE</span>'
+            '<span style="color:#9AAAB5;">  ·  Hold LEFT mouse to paint</span>'
         )
-        self.return_to_paint_button.clicked.connect(
-            self._return_to_interactive_spray_mode
+        camera_mode_hint = QLabel(
+            '<span style="color:#FFD166;">DOUBLE-CLICK LEFT</span>'
+            '<span style="color:#DCE8EF;">  →  </span>'
+            '<span style="color:#73C9FF;">CAMERA VIEW</span>'
+            '<span style="color:#9AAAB5;">  ·  Navigate the model</span>'
         )
-        self.return_to_paint_button.setMinimumHeight(36)
-        row.addWidget(self.return_to_paint_button)
+        mode_help_layout.addWidget(paint_mode_hint)
+        mode_help_layout.addWidget(camera_mode_hint)
+        row.addWidget(mode_help_panel)
 
         self.spray_perpendicular_status = QLabel("SURFACE ANGLE: --")
         self.spray_perpendicular_status.setMinimumWidth(0)
@@ -7291,21 +7316,15 @@ class ProductViewer(QWidget):
         return True
 
     def _on_interactive_spray_left_double_click(self, interactor, event):
-        """Keep a double-click from changing the active spray input mode."""
+        """Switch from spray input to normal camera navigation on double-click."""
         if (
             not self._interactive_spray_active
             or self._interactive_spray_mode != "spray"
         ):
             return
 
-        # A double-click is a cursor/preview action, never a request to enter
-        # camera navigation. Reassert spray input ownership in case the
-        # platform's VTK/Qt double-click handling changed the interactor style.
-        # Reassert spray-only input ownership. No camera-mode transition
-        # exists while a spray session is active.
-        interactor.SetInteractorStyle(self._interactive_spray_input_style)
-        self._interactive_spray_input_style.SetEnabled(1)
-
+        # End any in-progress paint gesture before handing input back to the
+        # normal camera interactor style.
         self._interactive_spray_recording = False
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
@@ -7313,19 +7332,18 @@ class ProductViewer(QWidget):
         self._interactive_spray_sampling_distance_accumulator = 0.0
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
-        self._interactive_spray_angle_x_deg = 0.0
-        self._interactive_spray_angle_y_deg = 0.0
         self._interactive_spray_angle_anchor_pose = None
         self._interactive_spray_locked_direction_world = None
 
-        x, y = interactor.GetEventPosition()
-        standard_pose = self._interactive_pick_surface_pose(x, y)
-        if standard_pose is not None:
-            self._interactive_update_cursor(standard_pose)
-        else:
-            self._interactive_spray_latest_pose = None
-            self._interactive_update_surface_angle_indicator(None)
-            self.plotter.render()
+        if self._interactive_saved_style is not None:
+            interactor.SetInteractorStyle(self._interactive_saved_style)
+            self._interactive_saved_style.SetEnabled(1)
+
+        self._interactive_spray_mode = "camera"
+        self._update_interaction_mode_indicators("camera")
+        self._interactive_spray_latest_pose = None
+        self._interactive_update_surface_angle_indicator(None)
+        self.plotter.render()
 
     def _on_interactive_spray_left_release(self, interactor, event):
         if (
