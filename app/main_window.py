@@ -1514,6 +1514,17 @@ class MainWindow(QMainWindow):
         self.route_generation_progress.hide()
         action_layout.addWidget(self.route_generation_progress)
 
+        self.finish_spray_path_button = QPushButton("FINISH SPRAY PATH")
+        self.finish_spray_path_button.setObjectName("PrimaryButton")
+        self.finish_spray_path_button.setToolTip(
+            "Stop recording the current spray strokes and generate the finalized spray route."
+        )
+        self.finish_spray_path_button.clicked.connect(
+            self._finish_interactive_spray_path
+        )
+        self.finish_spray_path_button.hide()
+        action_layout.addWidget(self.finish_spray_path_button)
+
         self.interactive_paint_color_button = QPushButton("PAINT COLOR")
         self.interactive_paint_color_button.setObjectName("SecondaryButton")
         self.interactive_paint_color_button.setToolTip(
@@ -3056,20 +3067,21 @@ class MainWindow(QMainWindow):
         self.interactive_paint_color_button.setEnabled(
             route_page and not self._operation_running
         )
-        self.route_next_button.setMinimumHeight(42)
-        self.route_next_button.setText(
-            "GENERATE SPRAY ROUTE" if can_generate_route
-            else "NEXT: SPRAY SIMULATION  →"
+        self.finish_spray_path_button.setMinimumHeight(42)
+        self.finish_spray_path_button.setVisible(can_generate_route)
+        self.finish_spray_path_button.setEnabled(
+            can_generate_route and not self._operation_running
         )
+        self.route_next_button.setMinimumHeight(42)
+        self.route_next_button.setText("NEXT: SPRAY SIMULATION  →")
         self.route_next_button.setVisible(
-            route_page and (can_generate_route or (route_exists and not recording))
+            route_page and route_exists and not recording
         )
         self.route_next_button.setEnabled(
-            route_page
-            and (can_generate_route or (route_exists and not recording))
+            route_page and route_exists and not recording
             and not self._operation_running
         )
-        if route_page and (can_generate_route or (route_exists and not recording)):
+        if route_page and route_exists and not recording:
             self.route_next_button.show()
             self.route_next_button.raise_()
         self.route_edit_button.setVisible(route_page and route_exists and not recording)
@@ -4566,9 +4578,6 @@ class MainWindow(QMainWindow):
 
     def _on_route_next_clicked(self):
         """Generate the recorded spray route, or continue to simulation when ready."""
-        if self.viewer._interactive_spray_active:
-            self._finish_interactive_spray_path()
-            return
         if (
             self.interactive_spray_path is not None
             and self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
