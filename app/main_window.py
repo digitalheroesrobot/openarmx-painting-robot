@@ -1395,30 +1395,8 @@ class MainWindow(QMainWindow):
                 font-weight: 800;
                 border: none;
             }
-            QFrame#RightPanelActionFooter QPushButton#PrimaryButton {
-                background: #087F8C;
-                color: #F3FCFF;
-                border: 1px solid #19B8C7;
-                border-radius: 5px;
-                padding: 8px 10px;
-                font-weight: 800;
-            }
-            QFrame#RightPanelActionFooter QPushButton#PrimaryButton:hover {
-                background: #0A98A8;
-                border-color: #55E4EF;
-            }
-            QFrame#RightPanelActionFooter QPushButton#SecondaryButton {
-                background: #183244;
-                color: #E2EDF4;
-                border: 1px solid #3B687E;
-                border-radius: 5px;
-                padding: 7px 10px;
-                font-weight: 700;
-            }
-            QFrame#RightPanelActionFooter QPushButton#SecondaryButton:hover {
-                background: #21485D;
-                border-color: #65A9C4;
-            }
+            /* Preserve the application's original enabled QPushButton appearance.
+               Only disabled controls receive a subdued state below. */
             QFrame#RightPanelActionFooter QPushButton:disabled {
                 background: #18232C;
                 color: #586873;
@@ -4272,12 +4250,10 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Interactive Spray Path Error", str(exc))
             return
         self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
-        self.interactive_spray_path_button.setEnabled(True)
-        # Stage entry refresh runs before recording starts. Refresh again now
-        # so the finish control becomes visible immediately after activation.
+        # The workflow refresh derives enabled state from actual recorded
+        # spray samples. Keep the button disabled until a stroke exists.
         self._refresh_workflow_ui()
         self.interactive_spray_path_button.setVisible(True)
-        self.interactive_spray_path_button.setEnabled(True)
         self.interactive_spray_path_button.raise_()
         stage2_labels = np.asarray(
             self.current_stage2_result.get("face_status_labels", [])
