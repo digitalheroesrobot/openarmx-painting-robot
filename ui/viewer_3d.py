@@ -15,10 +15,8 @@ from core.spray_coverage import (
     mark_sample_hits,
 )
 from core.coating_deposition import (
-    accumulate_double_beta_deposition_step,
     calculate_cone_deposition_step,
     calculate_film_thickness_statistics,
-    update_face_thickness_from_changed_samples,
 )
 from core.coating_process import coating_model_readiness
 from core.coating_process import DEFAULT_COATING_PROCESS
@@ -447,6 +445,11 @@ class ProductViewer(QWidget):
         self._interactive_spray_standoff = 0.0
         self._interactive_spray_cone_angle_deg = 0.0
         self._interactive_spray_transform = np.eye(4, dtype=float)
+        self._interactive_spray_transform_inverse = np.eye(4, dtype=float)
+        self._interactive_mesh_vertices = None
+        self._interactive_mesh_faces = None
+        self._interactive_mesh_face_normals = None
+        self._interactive_mesh_face_areas = None
         self._interactive_spray_latest_pose = None
         self._interactive_spray_records = []
         # Raw surface-following control poses are collected during a mouse drag.
@@ -454,7 +457,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_stroke_input_poses = []
         self._interactive_spray_stroke_preview_actor = None
         self._interactive_completed_stroke_preview_actors = []
-        # Undo/redo history contains only newly drawn raw route strokes.
+        # Undo history contains only newly drawn raw route strokes.
         # Existing strokes loaded with ADD EXISTING are never added here.
         self._interactive_route_undo_stack = []
         self._interactive_spray_display_mode = "thickness"
@@ -502,7 +505,6 @@ class ProductViewer(QWidget):
         self._interactive_spray_paint_target_um = 50.0
         self._interactive_spray_paint_state_dirty = False
         self._interactive_spray_live_actors = []
-        self._interactive_spray_path_actor = None
         # The recorded route is also rendered live while the operator holds
         # the left mouse button. This is visualization only; recording and
         # deposition remain full-rate and use the existing trajectory schema.
@@ -1432,7 +1434,7 @@ class ProductViewer(QWidget):
         end_times = np.asarray([edge["end_s"] for edge in timeline], dtype=np.float64)
 
         output_rows = []
-        inverse = np.linalg.inv(self._interactive_spray_transform)
+        inverse = self._interactive_spray_transform_inverse
         product_rotation = self._interactive_product_rotation_matrix(
             self._interactive_spray_transform[:3, :3]
         )
@@ -4081,6 +4083,13 @@ class ProductViewer(QWidget):
             self.interactive_recorded_path_panel.show()
             self.recorded_path_replay_button.setEnabled(len(existing_records) >= 2)
         self._interactive_spray_transform = self._actor_matrix_array().copy()
+        self._interactive_spray_transform_inverse = np.linalg.inv(
+            self._interactive_spray_transform
+        )
+        self._interactive_mesh_vertices = np.asarray(self.current_mesh.vertices, dtype=np.float64)
+        self._interactive_mesh_faces = np.asarray(self.current_mesh.faces, dtype=np.int64)
+        self._interactive_mesh_face_normals = np.asarray(self.current_mesh.face_normals, dtype=np.float64)
+        self._interactive_mesh_face_areas = np.asarray(self.current_mesh.area_faces, dtype=np.float64)
         self._interactive_spray_surface = self._to_polydata(self.current_mesh).clean()
         self._interactive_spray_locator = vtkOBBTree()
         self._interactive_spray_locator.SetDataSet(self._interactive_spray_surface)
@@ -4866,9 +4875,16 @@ class ProductViewer(QWidget):
             return
         if flow <= 0.0 or efficiency <= 0.0 or solids <= 0.0:
             return
-        areas = np.asarray(self.current_mesh.area_faces, dtype=np.float64) * float(source_factor) ** 2
-        local_faces = np.asarray(self.current_mesh.faces[ids], dtype=np.int64)
-        vertices = np.asarray(self.current_mesh.vertices, dtype=np.float64)
+        if (
+            self._interactive_mesh_vertices is None
+            or self._interactive_mesh_faces is None
+            or self._interactive_mesh_face_normals is None
+            or self._interactive_mesh_face_areas is None
+        ):
+            return
+        areas = self._interactive_mesh_face_areas * float(source_factor) ** 2
+        local_faces = self._interactive_mesh_faces[ids]
+        vertices = self._interactive_mesh_vertices
         triangles_local = vertices[local_faces]
         centroids_local = np.mean(triangles_local, axis=1)
         transform = self._actor_matrix_array()
@@ -4900,60 +4916,6 @@ class ProductViewer(QWidget):
             )
             self._interactive_spray_paint_state_dirty = True
             return
-        if brep_context is not None:
-            uv_triangles = np.asarray(
-                brep_context["triangle_uvs"], dtype=np.float64
-            )
-            uv_valid = np.asarray(
-                brep_context["triangle_uv_valid"], dtype=bool
-            )
-            surface_samples_by_triangle = {}
-            for local_index, triangle_index in enumerate(ids):
-                if not uv_valid[int(triangle_index)]:
-                    continue
-                center_sample = evaluate_step_triangle_sample(
-                    self.current_mesh, int(triangle_index),
-                    np.asarray([1.0 / 3.0] * 3, dtype=np.float64),
-                )
-                uv = uv_triangles[int(triangle_index)]
-                surface_samples_by_triangle[int(triangle_index)] = center_sample
-                uv_area = 0.5 * abs(
-                    (uv[1, 0] - uv[0, 0]) * (uv[2, 1] - uv[0, 1])
-                    - (uv[1, 1] - uv[0, 1]) * (uv[2, 0] - uv[0, 0])
-                )
-                # Three-point degree-2 quadrature of the CAD surface
-                # Jacobian over this source UV triangle.
-                area_barycentric = (
-                    (2.0 / 3.0, 1.0 / 6.0, 1.0 / 6.0),
-                    (1.0 / 6.0, 2.0 / 3.0, 1.0 / 6.0),
-                    (1.0 / 6.0, 1.0 / 6.0, 2.0 / 3.0),
-                )
-                jacobians = []
-                for area_weights in area_barycentric:
-                    area_uv = get_step_triangle_surface_coordinates(
-                        self.current_mesh, int(triangle_index),
-                        np.asarray(area_weights, dtype=np.float64),
-                    )
-                    area_surface = evaluate_step_face_surface(
-                        self.current_mesh,
-                        int(area_uv["face_id"]),
-                        float(area_uv["uv"][0]),
-                        float(area_uv["uv"][1]),
-                    )
-                    jacobians.append(float(np.linalg.norm(np.cross(
-                        area_surface["du_mm_per_u"],
-                        area_surface["dv_mm_per_v"],
-                    ))))
-                exact_area_mm2 = uv_area * float(np.mean(jacobians))
-                if np.isfinite(exact_area_mm2) and exact_area_mm2 > 1e-12:
-                    areas[int(triangle_index)] = exact_area_mm2
-                centroids_local[local_index] = center_sample["point_mm"]
-                exact_normal = np.asarray(
-                    center_sample["normal"], dtype=np.float64
-                )
-                if float(np.dot(exact_normal, normals_local[local_index])) < 0.0:
-                    exact_normal *= -1.0
-                normals_local[local_index] = exact_normal
 
         normals_world = normals_local @ transform[:3, :3].T
         normals_world /= np.maximum(np.linalg.norm(normals_world, axis=1)[:, None], 1e-12)
@@ -7095,9 +7057,12 @@ class ProductViewer(QWidget):
             self._interactive_spray_transform[:3, :3] @ closest_local
             + self._interactive_spray_transform[:3, 3]
         )
-        normal_local = np.asarray(
-            self.current_mesh.face_normals[cell_id], dtype=np.float64
+        normal_source = (
+            self._interactive_mesh_face_normals
+            if self._interactive_mesh_face_normals is not None
+            else np.asarray(self.current_mesh.face_normals, dtype=np.float64)
         )
+        normal_local = np.asarray(normal_source[cell_id], dtype=np.float64)
         transform = self._actor_matrix_array()
         normal_world = transform[:3, :3] @ normal_local
         normal_length = float(np.linalg.norm(normal_world))
