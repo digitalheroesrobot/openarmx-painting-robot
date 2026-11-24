@@ -7494,7 +7494,11 @@ class ProductViewer(QWidget):
             for item in self._interactive_spray_records
         ]
         next_group_id = max(existing_group_ids, default=0) + 1
-        for raw_stroke in pending_strokes:
+        for stroke_index, raw_stroke in enumerate(pending_strokes):
+            if stroke_index:
+                # Preserve a distinct internal stroke sequence for each
+                # press-release gesture, independent of recorder group IDs.
+                self._interactive_spray_stroke_id += 1
             stroke_sample_count = self._interactive_finalize_smoothed_spray_stroke(
                 raw_poses=raw_stroke,
                 refresh_actor=False,
