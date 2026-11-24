@@ -1306,13 +1306,13 @@ class ProductViewer(QWidget):
         heading = QLabel("RECORDED SPRAY PATH")
         heading.setStyleSheet("color: #00E5FF; font-weight: 800;")
         row.addWidget(heading)
-        self.recorded_path_replay_button = QPushButton("▶ SIMULATE")
+        self.recorded_path_replay_button = QPushButton("▶ START SIMULATION")
         self.recorded_path_replay_button.clicked.connect(
             self._start_interactive_recorded_replay
         )
         self.recorded_path_replay_button.setMinimumHeight(36)
         row.addWidget(self.recorded_path_replay_button)
-        self.recorded_path_stop_button = QPushButton("STOP")
+        self.recorded_path_stop_button = QPushButton("■ STOP SIMULATION")
         self.recorded_path_stop_button.setEnabled(False)
         self.recorded_path_stop_button.clicked.connect(
             self._stop_interactive_recorded_replay
@@ -1421,6 +1421,9 @@ class ProductViewer(QWidget):
         self.interactive_paint_color_view_button.setVisible(not route_page)
         self.recorded_path_time_label.setVisible(True)
         has_route = len(getattr(self, "_interactive_spray_records", [])) >= 2
+        self.recorded_path_replay_button.setEnabled(has_route)
+        if not self._interactive_recorded_replay_timer.isActive():
+            self.recorded_path_stop_button.setEnabled(False)
         self.interactive_recorded_path_panel.setVisible(has_route and not route_page)
         if route_page and has_route:
             self._refresh_interactive_recorded_path_actor()
