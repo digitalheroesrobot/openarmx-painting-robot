@@ -30,7 +30,10 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QHeaderView,
     QStyle,
-    QColorDialog
+    QColorDialog,
+    QAbstractItemView,
+    QListWidget,
+    QListWidgetItem
 )
 
 from core.step_loader import load_step, convert_step_report_units
@@ -55,6 +58,31 @@ from ui.sprayer_settings import (
     load_sprayer_profiles,
     save_sprayer_profiles,
 )
+
+
+class ReorderableSprayGroupList(QListWidget):
+    """Internal drag-and-drop list that reports completed row reordering."""
+
+    orderChanged = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.InternalMove)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setDragDropOverwriteMode(False)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setAlternatingRowColors(False)
+        self.setSpacing(4)
+        self.setMinimumHeight(90)
+        self.setMaximumHeight(280)
+
+    def dropEvent(self, event):
+        super().dropEvent(event)
+        if event.isAccepted():
+            self.orderChanged.emit()
 
 
 # ============================================================
@@ -764,7 +792,7 @@ class MainWindow(QMainWindow):
 
 
     def _move_route_controls_to_sidebar(self):
-        """Move nonessential viewport controls into the Route Generation sidebar."""
+        """Move viewer controls into the Recorded Spray Path sidebar section."""
         controls = (
             self.viewer.interaction_mode_panel,
             self.viewer.interactive_recorded_path_panel,
@@ -1029,9 +1057,9 @@ class MainWindow(QMainWindow):
         layout.setSpacing(6)
 
         # ----------------------------------------------------
-        # ROUTE GENERATION CONTROLS
-        # These controls are hosted in the sidebar so the 3D
-        # viewport retains only Hook and Attitude RPY controls.
+        # RECORDED SPRAY PATH
+        # The ordered spray-group manager and related viewer controls
+        # are hosted here so the 3D viewport retains only Hook and Attitude RPY controls.
         # ----------------------------------------------------
         self.route_controls_content = QWidget()
         route_outer_layout = QVBoxLayout(self.route_controls_content)
@@ -1040,7 +1068,7 @@ class MainWindow(QMainWindow):
         self.route_controls_outer_layout = route_outer_layout
 
         self.route_controls_scroll = QScrollArea()
-        self.route_controls_scroll.setObjectName("RouteControlsScroll")
+        self.route_controls_scroll.setObjectName("RecordedSprayPathScroll")
         self.route_controls_scroll.setWidgetResizable(True)
         self.route_controls_scroll.setFrameShape(QFrame.NoFrame)
         self.route_controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -1050,21 +1078,54 @@ class MainWindow(QMainWindow):
         route_controls_body = QWidget()
         self.route_controls_layout = QVBoxLayout(route_controls_body)
         self.route_controls_layout.setContentsMargins(4, 4, 12, 8)
-        self.route_controls_layout.setSpacing(10)
+        self.route_controls_layout.setSpacing(8)
+
+        recorded_title = QLabel("SPRAY GROUPS · DRAG TO REORDER")
+        recorded_title.setObjectName("SectionTitle")
+        self.route_controls_layout.addWidget(recorded_title)
+
+        self.recorded_spray_group_list = ReorderableSprayGroupList()
+        self.recorded_spray_group_list.setToolTip(
+            "Drag a spray group up or down to change the execution order. "
+            "The path shape and direction inside each group remain unchanged."
+        )
+        self.recorded_spray_group_list.orderChanged.connect(
+            self._on_recorded_spray_groups_reordered
+        )
+        self.route_controls_layout.addWidget(self.recorded_spray_group_list)
+
+        self.recorded_spray_path_empty_label = QLabel(
+            "No finalized spray groups yet. Draw independent strokes, then generate the spray route."
+        )
+        self.recorded_spray_path_empty_label.setObjectName("Muted")
+        self.recorded_spray_path_empty_label.setWordWrap(True)
+        self.route_controls_layout.addWidget(self.recorded_spray_path_empty_label)
+
+        self.recorded_spray_path_total_label = QLabel(
+            "TOTAL SPRAY LENGTH: 0.0 mm  |  TOTAL EXECUTION TIME: 00:00"
+        )
+        self.recorded_spray_path_total_label.setObjectName("MetricValue")
+        self.recorded_spray_path_total_label.setWordWrap(True)
+        self.route_controls_layout.addWidget(self.recorded_spray_path_total_label)
+
+        self.recorded_spray_path_note_label = QLabel(
+            "Execution time is spray motion only; MoveIt2 transfer time between groups is not included."
+        )
+        self.recorded_spray_path_note_label.setObjectName("Muted")
+        self.recorded_spray_path_note_label.setWordWrap(True)
+        self.route_controls_layout.addWidget(self.recorded_spray_path_note_label)
+
         self.route_controls_scroll.setWidget(route_controls_body)
         route_outer_layout.addWidget(self.route_controls_scroll)
         self.route_controls_section = self._make_collapsible_section(
-            "ROUTE GENERATION CONTROLS",
-            "route_generation_controls",
+            "RECORDED SPRAY PATH",
+            "recorded_spray_path",
             self.route_controls_content,
         )
-        # Match the ordinary sidebar accordion appearance. Give this
-        # long title the full sidebar width so its text is never clipped.
-        route_header = self._right_section_buttons[
-            "route_generation_controls"
-        ]
-        route_header.setMinimumWidth(360)
+        recorded_header = self._right_section_buttons["recorded_spray_path"]
+        recorded_header.setMinimumWidth(360)
         self.route_controls_section.hide()
+        self._recorded_spray_list_updating = False
 
         # ----------------------------------------------------
         # ACTIVE WORKFLOW SECTION
@@ -2774,9 +2835,9 @@ class MainWindow(QMainWindow):
         self.active_stage = stage_index
         self._refresh_workflow_ui()
         if stage_index in (STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION):
-            route_button = self._right_section_buttons.get("route_generation_controls")
-            if route_button is not None:
-                route_button.setChecked(True)
+            recorded_path_button = self._right_section_buttons.get("recorded_spray_path")
+            if recorded_path_button is not None:
+                recorded_path_button.setChecked(True)
 
         if stage_index == STAGE_SURFACE_IDENTIFICATION:
             self._show_surface_identification_summary()
@@ -2813,17 +2874,8 @@ class MainWindow(QMainWindow):
         self.route_controls_section.setVisible(
             route_generation_page or simulation_page
         )
+        self._refresh_recorded_spray_path_panel()
         self.simulation_csv_footer.setVisible(simulation_page)
-        route_header = self._right_section_buttons.get(
-            "route_generation_controls"
-        )
-        if route_header is not None:
-            route_header.setText(
-                "ROUTE GENERATION CONTROLS"
-                if route_generation_page
-                else "SPRAY SIMULATION CONTROLS"
-            )
-
         self.start_analysis_button.setVisible(
             self.active_stage not in (
                 STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION
@@ -4279,6 +4331,7 @@ class MainWindow(QMainWindow):
 
     def _on_spray_samples_changed(self):
         """Refresh route-generation controls after a completed mouse stroke."""
+        self._refresh_recorded_spray_path_panel()
         self._refresh_workflow_ui()
 
     def _on_manual_route_readiness_changed(self, ready):
@@ -4305,6 +4358,211 @@ class MainWindow(QMainWindow):
         else:
             self.status_bar.showMessage("DRAW SPRAY STROKES, THEN GENERATE THE ROUTE")
         self._refresh_workflow_ui()
+
+    def _recorded_spray_group_metrics(self):
+        """Return ordered per-group spray distance and time, excluding transfers."""
+        records = list(getattr(self.viewer, "_interactive_spray_records", []))
+        if not records:
+            return []
+
+        mm_factor = self.viewer._get_source_mm_factor()
+        if mm_factor is None or not np.isfinite(mm_factor) or mm_factor <= 0.0:
+            mm_factor = 1.0
+        speed = max(float(self.robot_settings.get("painting_speed_mm_s", 150.0)), 1e-9)
+
+        grouped = {}
+        for record in records:
+            if not bool(record.get("spray_on", True)):
+                continue
+            group_id = int(record.get("group_id", int(record.get("stroke_id", 0)) + 1))
+            grouped.setdefault(group_id, []).append(record)
+
+        result = []
+        for group_id, group_records in grouped.items():
+            points = np.asarray(
+                [record["nozzle_point_product"] for record in group_records],
+                dtype=np.float64,
+            ).reshape(-1, 3)
+            distance_mm = (
+                float(np.sum(np.linalg.norm(np.diff(points, axis=0), axis=1)) * mm_factor)
+                if len(points) > 1 else 0.0
+            )
+            result.append({
+                "group_id": group_id,
+                "distance_mm": distance_mm,
+                "duration_s": distance_mm / speed,
+            })
+        return result
+
+    def _refresh_recorded_spray_path_panel(self):
+        """Refresh the ordered drag-and-drop spray group list and total metrics."""
+        if not hasattr(self, "recorded_spray_group_list"):
+            return
+
+        metrics = self._recorded_spray_group_metrics()
+        list_widget = self.recorded_spray_group_list
+        self._recorded_spray_list_updating = True
+        try:
+            list_widget.clear()
+            self.recorded_spray_path_empty_label.setVisible(not metrics)
+            list_widget.setVisible(bool(metrics))
+
+            for index, metric in enumerate(metrics, start=1):
+                item = QListWidgetItem()
+                item.setData(Qt.UserRole, int(metric["group_id"]))
+                item.setSizeHint(QSize(340, 58))
+                list_widget.addItem(item)
+
+                row = QWidget()
+                row.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                row_layout = QHBoxLayout(row)
+                row_layout.setContentsMargins(8, 5, 8, 5)
+                row_layout.setSpacing(8)
+
+                drag_handle = QLabel("⋮⋮")
+                drag_handle.setObjectName("Muted")
+                row_layout.addWidget(drag_handle)
+
+                order_label = QLabel(f"{index:02d}")
+                order_label.setObjectName("MetricValue")
+                order_label.setFixedWidth(22)
+                row_layout.addWidget(order_label)
+
+                group_label = QLabel(f"SPRAY GROUP {index}")
+                group_label.setObjectName("SectionTitle")
+                row_layout.addWidget(group_label, 1)
+
+                metrics_label = QLabel(
+                    f"LENGTH  {metric['distance_mm']:.1f} mm\n"
+                    f"TIME  {self.viewer._format_route_time(metric['duration_s'])}"
+                )
+                metrics_label.setObjectName("MetricValue")
+                metrics_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                row_layout.addWidget(metrics_label)
+
+                list_widget.setItemWidget(item, row)
+
+            total_distance = sum(item["distance_mm"] for item in metrics)
+            total_duration = sum(item["duration_s"] for item in metrics)
+            self.recorded_spray_path_total_label.setText(
+                f"TOTAL SPRAY LENGTH: {total_distance:.1f} mm\n"
+                f"TOTAL EXECUTION TIME: {self.viewer._format_route_time(total_duration)}"
+            )
+        finally:
+            self._recorded_spray_list_updating = False
+
+    def _on_recorded_spray_groups_reordered(self):
+        """Apply the visible list order to the actual route records and replay."""
+        if self._recorded_spray_list_updating or self._operation_running:
+            return
+
+        list_widget = self.recorded_spray_group_list
+        ordered_group_ids = [
+            int(list_widget.item(index).data(Qt.UserRole))
+            for index in range(list_widget.count())
+        ]
+        if not ordered_group_ids:
+            return
+
+        records = list(getattr(self.viewer, "_interactive_spray_records", []))
+        grouped_records = {}
+        for record in records:
+            group_id = int(record.get("group_id", int(record.get("stroke_id", 0)) + 1))
+            grouped_records.setdefault(group_id, []).append(record)
+
+        if set(ordered_group_ids) != {
+            group_id for group_id, group_records in grouped_records.items()
+            if any(bool(record.get("spray_on", True)) for record in group_records)
+        }:
+            self._refresh_recorded_spray_path_panel()
+            return
+
+        reordered_records = []
+        for new_index, old_group_id in enumerate(ordered_group_ids):
+            new_group_id = new_index + 1
+            for record in grouped_records.get(old_group_id, []):
+                updated = dict(record)
+                updated["group_id"] = new_group_id
+                updated["stroke_id"] = (
+                    new_index if bool(updated.get("spray_on", True))
+                    else -new_group_id
+                )
+                reordered_records.append(updated)
+
+        self.viewer._interactive_spray_records = reordered_records
+        self.viewer._optimize_interactive_recorded_path()
+        self.viewer._interactive_spray_route_optimization["stroke_order"] = (
+            "USER_DEFINED_DRAG_AND_DROP"
+        )
+        self.viewer._refresh_interactive_recorded_path_actor()
+
+        route = self.interactive_spray_path
+        if isinstance(route, dict):
+            mm_factor = self.viewer._get_source_mm_factor() or 1.0
+            route.update({
+                "nozzle_points_product": np.asarray(
+                    [item["nozzle_point_product"] for item in reordered_records], dtype=float
+                ).reshape(-1, 3),
+                "surface_points_product": np.asarray(
+                    [item["surface_point_product"] for item in reordered_records], dtype=float
+                ).reshape(-1, 3),
+                "spray_directions_product": np.asarray(
+                    [item["spray_direction_product"] for item in reordered_records], dtype=float
+                ).reshape(-1, 3),
+                "nozzle_points_world": np.asarray(
+                    [item["nozzle_point_world"] for item in reordered_records], dtype=float
+                ).reshape(-1, 3),
+                "surface_points_world": np.asarray(
+                    [item["surface_point_world"] for item in reordered_records], dtype=float
+                ).reshape(-1, 3),
+                "spray_directions_world": np.asarray(
+                    [item["spray_direction_world"] for item in reordered_records], dtype=float
+                ).reshape(-1, 3),
+                "timestamps_monotonic_s": np.asarray(
+                    [item["timestamp"] for item in reordered_records], dtype=float
+                ),
+                "spray_poses_product": np.asarray([
+                    [
+                        item.get("t_product_s", item["timestamp"]),
+                        *np.asarray(item["nozzle_point_product"], dtype=float).tolist(),
+                        *np.asarray(item["quaternion_product_xyzw"], dtype=float).tolist(),
+                    ]
+                    for item in reordered_records
+                ], dtype=float).reshape(-1, 8),
+                "face_indices": np.asarray(
+                    [item["face_index"] for item in reordered_records], dtype=np.int64
+                ),
+                "stroke_ids": np.asarray(
+                    [item["stroke_id"] for item in reordered_records], dtype=np.int64
+                ),
+                "group_ids": np.asarray(
+                    [item["group_id"] for item in reordered_records], dtype=np.int64
+                ),
+                "route_timing": {
+                    key: value
+                    for key, value in (self.viewer._interactive_recorded_replay_timing or {}).items()
+                    if key != "timeline"
+                },
+                "route_optimization": dict(
+                    getattr(self.viewer, "_interactive_spray_route_optimization", {})
+                ),
+                "route_optimization_metrics": dict(
+                    getattr(self.viewer, "_interactive_route_optimization_metrics", {})
+                ),
+            })
+            timing = self.viewer._interactive_recorded_replay_timing or {}
+            route["spray_length_mm"] = float(timing.get("spray_distance_mm", 0.0))
+            route["total_route_distance_mm"] = float(timing.get("total_route_distance_mm", 0.0))
+            route["estimated_duration_s"] = float(timing.get("estimated_duration_s", 0.0))
+            route["route_length_product_units"] = (
+                route["spray_length_mm"] / float(mm_factor)
+            )
+
+        self._show_interactive_route_summary(route)
+        self._refresh_recorded_spray_path_panel()
+        self.status_bar.showMessage(
+            "SPRAY GROUP ORDER UPDATED · PATH SHAPES AND DIRECTIONS PRESERVED"
+        )
 
     def _on_route_next_clicked(self):
         """Generate the recorded spray route, or continue to simulation when ready."""
@@ -4379,6 +4637,7 @@ class MainWindow(QMainWindow):
         self.route_edit_button.setVisible(True)
         self.route_edit_button.setEnabled(True)
         self._show_interactive_route_summary(result)
+        self._refresh_recorded_spray_path_panel()
         self._refresh_workflow_ui()
 
     def _show_interactive_route_summary(self, result):
