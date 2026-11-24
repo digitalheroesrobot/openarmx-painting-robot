@@ -1306,15 +1306,6 @@ class ProductViewer(QWidget):
         heading = QLabel("RECORDED SPRAY PATH")
         heading.setStyleSheet("color: #00E5FF; font-weight: 800;")
         row.addWidget(heading)
-        self.recorded_path_optimize_button = QPushButton("FINALIZE SPRAY ROUTE")
-        self.recorded_path_optimize_button.setToolTip(
-            "Finalize spray strokes only. MoveIt2 plans transfers between strokes."
-        )
-        self.recorded_path_optimize_button.clicked.connect(
-            self._optimize_interactive_recorded_path
-        )
-        self.recorded_path_optimize_button.setMinimumHeight(36)
-        row.addWidget(self.recorded_path_optimize_button)
         self.recorded_path_replay_button = QPushButton("▶ SIMULATE")
         self.recorded_path_replay_button.clicked.connect(
             self._start_interactive_recorded_replay
@@ -1422,7 +1413,6 @@ class ProductViewer(QWidget):
             # Coating textures are created only after entering simulation.
             self._interactive_build_brep_texture_actors()
 
-        self.recorded_path_optimize_button.setVisible(route_page)
         self.recorded_path_replay_button.setVisible(not route_page)
         self.recorded_path_stop_button.setVisible(not route_page)
         self.recorded_path_export_button.setVisible(not route_page)
@@ -1431,7 +1421,7 @@ class ProductViewer(QWidget):
         self.interactive_paint_color_view_button.setVisible(not route_page)
         self.recorded_path_time_label.setVisible(True)
         has_route = len(getattr(self, "_interactive_spray_records", [])) >= 2
-        self.interactive_recorded_path_panel.setVisible(has_route)
+        self.interactive_recorded_path_panel.setVisible(has_route and not route_page)
         if route_page and has_route:
             self._refresh_interactive_recorded_path_actor()
         self.plotter.render()
