@@ -43,7 +43,6 @@ from core.coating_process import load_coating_process
 
 from stages.stage1_geometry import execute_stage1
 from stages.stage2_surface_identification import execute_stage2
-from stages.cad_surface_analysis import analyze_step_faces
 from stages.stage3_spray_trajectory import (
     execute_stage3,
     _calculate_spray_footprint,
@@ -792,14 +791,22 @@ class MainWindow(QMainWindow):
 
 
     def _move_route_controls_to_sidebar(self):
-        """Move viewer controls into the Recorded Spray Path sidebar section."""
-        controls = (
-            self.viewer.interaction_mode_panel,
+        """Place spray setup controls and recorded-path controls in separate accordions."""
+        viewer_layout = self.viewer.layout()
+        interaction_controls = self.viewer.interaction_mode_panel
+        viewer_layout.removeWidget(interaction_controls)
+        interaction_controls.setParent(self.spray_settings_scroll.widget())
+        interaction_controls.setMinimumWidth(0)
+        interaction_controls.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Maximum,
+        )
+        self.spray_settings_layout.addWidget(interaction_controls)
+
+        for widget in (
             self.viewer.interactive_recorded_path_panel,
             self.viewer.display_control_panel,
-        )
-        viewer_layout = self.viewer.layout()
-        for widget in controls:
+        ):
             viewer_layout.removeWidget(widget)
             widget.setParent(self.route_controls_scroll.widget())
             widget.setMinimumWidth(0)
@@ -1057,9 +1064,38 @@ class MainWindow(QMainWindow):
         layout.setSpacing(6)
 
         # ----------------------------------------------------
+        # SPRAY SETTING
+        # ----------------------------------------------------
+        self.spray_settings_content = QWidget()
+        spray_settings_outer = QVBoxLayout(self.spray_settings_content)
+        spray_settings_outer.setContentsMargins(4, 4, 4, 4)
+        spray_settings_outer.setSpacing(0)
+
+        self.spray_settings_scroll = QScrollArea()
+        self.spray_settings_scroll.setObjectName("SpraySettingsScroll")
+        self.spray_settings_scroll.setWidgetResizable(True)
+        self.spray_settings_scroll.setFrameShape(QFrame.NoFrame)
+        self.spray_settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.spray_settings_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.spray_settings_scroll.setMaximumHeight(520)
+
+        spray_settings_body = QWidget()
+        self.spray_settings_layout = QVBoxLayout(spray_settings_body)
+        self.spray_settings_layout.setContentsMargins(4, 4, 12, 8)
+        self.spray_settings_layout.setSpacing(8)
+        self.spray_settings_scroll.setWidget(spray_settings_body)
+        spray_settings_outer.addWidget(self.spray_settings_scroll)
+
+        self.spray_settings_section = self._make_collapsible_section(
+            "SPRAY SETTING",
+            "spray_settings",
+            self.spray_settings_content,
+        )
+        self._right_section_buttons["spray_settings"].setMinimumWidth(360)
+        self.spray_settings_section.hide()
+
+        # ----------------------------------------------------
         # RECORDED SPRAY PATH
-        # The ordered spray-group manager and related viewer controls
-        # are hosted here so the 3D viewport retains only Hook and Attitude RPY controls.
         # ----------------------------------------------------
         self.route_controls_content = QWidget()
         route_outer_layout = QVBoxLayout(self.route_controls_content)
@@ -1122,8 +1158,7 @@ class MainWindow(QMainWindow):
             "recorded_spray_path",
             self.route_controls_content,
         )
-        recorded_header = self._right_section_buttons["recorded_spray_path"]
-        recorded_header.setMinimumWidth(360)
+        self._right_section_buttons["recorded_spray_path"].setMinimumWidth(360)
         self.route_controls_section.hide()
         self._recorded_spray_list_updating = False
 
@@ -1246,43 +1281,6 @@ class MainWindow(QMainWindow):
         ].setChecked(False)
 
         layout.addWidget(summary_section)
-
-        # ----------------------------------------------------
-        # EXACT CAD FACE INVENTORY
-        # ----------------------------------------------------
-        cad_face_content = QWidget()
-        cad_face_layout = QVBoxLayout(cad_face_content)
-        cad_face_layout.setContentsMargins(5, 2, 5, 4)
-        cad_face_layout.setSpacing(4)
-
-        self.cad_face_count_label = QLabel("NO STEP B-REP LOADED")
-        self.cad_face_count_label.setObjectName("Muted")
-        cad_face_layout.addWidget(self.cad_face_count_label)
-
-        self.cad_face_table = QTableWidget(0, 9)
-        self.cad_face_table.setHorizontalHeaderLabels(
-            [
-                "FACE", "TYPE", "AREA mm²", "CX mm", "CY mm", "CZ mm",
-                "ADJ.", "TRIS", "PRELIMINARY STATUS",
-            ]
-        )
-        self.cad_face_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.cad_face_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.cad_face_table.setAlternatingRowColors(True)
-        self.cad_face_table.verticalHeader().setVisible(False)
-        self.cad_face_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeToContents
-        )
-        self.cad_face_table.setMinimumHeight(180)
-        self.cad_face_table.setMaximumHeight(280)
-        cad_face_layout.addWidget(self.cad_face_table)
-
-        cad_face_section = self._make_collapsible_section(
-            "CAD FACE DETAILS",
-            "cad_face_details",
-            cad_face_content,
-        )
-        layout.addWidget(cad_face_section)
 
         # ----------------------------------------------------
         # PAINTING PATCHES SECTION
@@ -1443,7 +1441,8 @@ class MainWindow(QMainWindow):
             self.patch_inspection_panel
         )
 
-        # Route controls belong with the other accordion sections.
+        # Stage-specific controls: settings while drawing, recorded paths after generation.
+        layout.addWidget(self.spray_settings_section)
         layout.addWidget(self.route_controls_section)
 
         # ----------------------------------------------------
@@ -2845,7 +2844,7 @@ class MainWindow(QMainWindow):
         previous_stage = self.active_stage
         self.active_stage = stage_index
         self._refresh_workflow_ui()
-        if stage_index in (STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION):
+        if stage_index == STAGE_SPRAY_SIMULATION:
             recorded_path_button = self._right_section_buttons.get("recorded_spray_path")
             if recorded_path_button is not None:
                 recorded_path_button.setChecked(True)
@@ -2882,9 +2881,14 @@ class MainWindow(QMainWindow):
     def _refresh_workflow_ui(self):
         route_generation_page = self.active_stage == STAGE_SPRAY_TRAJECTORY
         simulation_page = self.active_stage == STAGE_SPRAY_SIMULATION
-        self.route_controls_section.setVisible(
-            route_generation_page or simulation_page
-        )
+        self.spray_settings_section.setVisible(route_generation_page)
+        self.route_controls_section.setVisible(simulation_page)
+        spray_settings_button = self._right_section_buttons.get("spray_settings")
+        recorded_path_button = self._right_section_buttons.get("recorded_spray_path")
+        if route_generation_page and spray_settings_button is not None and not spray_settings_button.isChecked():
+            spray_settings_button.setChecked(True)
+        elif simulation_page and recorded_path_button is not None and not recorded_path_button.isChecked():
+            recorded_path_button.setChecked(True)
         self._refresh_recorded_spray_path_panel()
         self.simulation_csv_footer.setVisible(simulation_page)
         self.start_analysis_button.setVisible(
@@ -3063,12 +3067,12 @@ class MainWindow(QMainWindow):
         self.import_route_csv_button.setEnabled(
             route_page and not self._operation_running
         )
-        self.interactive_paint_color_button.setVisible(route_page)
+        self.interactive_paint_color_button.setVisible(simulation_page)
         self.interactive_paint_color_button.setEnabled(
-            route_page and not self._operation_running
+            simulation_page and not self._operation_running
         )
         self.finish_spray_path_button.setMinimumHeight(42)
-        self.finish_spray_path_button.setVisible(can_generate_route)
+        self.finish_spray_path_button.setVisible(route_page)
         self.finish_spray_path_button.setEnabled(
             can_generate_route and not self._operation_running
         )
@@ -3651,7 +3655,6 @@ class MainWindow(QMainWindow):
 
         self._set_coordinate_unit_controls()
         self._update_geometry_metrics()
-        self._populate_cad_face_table()
         self._update_viewer_display_unit()
 
         part_dir = self.result_manager.part_dir(
@@ -3682,94 +3685,6 @@ class MainWindow(QMainWindow):
             f"COORDINATE UNIT: {self.coordinate_unit.upper()}  |  "
             f"DISPLAY UNIT: {self.unit_selector.currentText()}"
         )
-
-    # ========================================================
-    # STEP CAD FACE TABLE
-    # ========================================================
-
-    def _populate_cad_face_table(self):
-        if not hasattr(self, "cad_face_table"):
-            return
-
-        report = self.current_step_report
-        self.cad_face_table.setRowCount(0)
-
-        if not report:
-            self.cad_face_count_label.setText("NO STEP B-REP LOADED")
-            return
-
-        faces = report.get("faces", [])
-        self.cad_face_count_label.setText(
-            f"ORIGINAL CAD FACES: {len(faces):,}  |  "
-            "EXACT B-REP AREA/CENTROID + PRELIMINARY SURFACE REVIEW"
-        )
-
-        analysis = None
-        if self.current_mesh is not None:
-            try:
-                analysis = analyze_step_faces(report, self.current_mesh)
-                self.current_cad_surface_analysis = analysis
-
-                # Keep an independent report beside the other Stage 2
-                # outputs. The original STEP geometry report is untouched.
-                stage_directory = Path(
-                    self.result_manager.stage_dir(
-                        self.current_stl_path,
-                        stage_number=2,
-                    )
-                )
-                stage_directory.mkdir(parents=True, exist_ok=True)
-                analysis_path = stage_directory / "cad_surface_analysis.json"
-                analysis_path.write_text(
-                    json.dumps(
-                        analysis["report"],
-                        indent=2,
-                        ensure_ascii=False,
-                        allow_nan=False,
-                    ),
-                    encoding="utf-8",
-                )
-            except Exception as exc:
-                self.current_cad_surface_analysis = None
-                print("Preliminary STEP CAD surface analysis failed:", exc)
-
-        face_analysis = {}
-        if analysis is not None:
-            face_analysis = {
-                int(item["face_id"]): item
-                for item in analysis["report"].get("faces", [])
-            }
-
-        self.cad_face_table.setRowCount(len(faces))
-        for row, face in enumerate(faces):
-            face_id = int(face.get("face_id", -1))
-            center = face.get("centroid_mm", [0.0, 0.0, 0.0])
-            detail = face_analysis.get(face_id, {})
-            values = [
-                str(face_id),
-                str(face.get("surface_type", "OTHER")),
-                f"{float(face.get('area_mm2', 0.0)):,.3f}",
-                f"{float(center[0]):,.3f}",
-                f"{float(center[1]):,.3f}",
-                f"{float(center[2]):,.3f}",
-                str(detail.get("adjacent_face_count", "--")),
-                str(detail.get("display_triangle_count", "--")),
-                str(detail.get("preliminary_status", "NOT ANALYZED")),
-            ]
-            for column, value in enumerate(values):
-                self.cad_face_table.setItem(
-                    row, column, QTableWidgetItem(value)
-                )
-
-        if analysis is not None:
-            summary = analysis["report"]["summary"]
-            self.cad_face_count_label.setText(
-                f"CAD FACES: {summary['total_cad_faces']:,}  |  "
-                f"CANDIDATE: {summary['paintable_candidate_faces']:,}  |  "
-                f"REVIEW: {summary['review_required_faces']:,}  |  "
-                f"INVALID: {summary['invalid_faces']:,}  |  "
-                "EXTERIOR EXPOSURE NOT YET VERIFIED"
-            )
 
     # ========================================================
     # GEOMETRY DISPLAY
