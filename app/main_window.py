@@ -30,7 +30,10 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QHeaderView,
     QStyle,
-    QColorDialog
+    QColorDialog,
+    QAbstractItemView,
+    QListWidget,
+    QListWidgetItem
 )
 
 from core.step_loader import load_step, convert_step_report_units
@@ -55,6 +58,31 @@ from ui.sprayer_settings import (
     load_sprayer_profiles,
     save_sprayer_profiles,
 )
+
+
+class ReorderableSprayGroupList(QListWidget):
+    """Internal drag-and-drop list that reports completed row reordering."""
+
+    orderChanged = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.InternalMove)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setDragDropOverwriteMode(False)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setAlternatingRowColors(False)
+        self.setSpacing(4)
+        self.setMinimumHeight(90)
+        self.setMaximumHeight(280)
+
+    def dropEvent(self, event):
+        super().dropEvent(event)
+        if event.isAccepted():
+            self.orderChanged.emit()
 
 
 # ============================================================
@@ -1040,7 +1068,7 @@ class MainWindow(QMainWindow):
         self.route_controls_outer_layout = route_outer_layout
 
         self.route_controls_scroll = QScrollArea()
-        self.route_controls_scroll.setObjectName("RouteControlsScroll")
+        self.route_controls_scroll.setObjectName("RecordedSprayPathScroll")
         self.route_controls_scroll.setWidgetResizable(True)
         self.route_controls_scroll.setFrameShape(QFrame.NoFrame)
         self.route_controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -1050,21 +1078,54 @@ class MainWindow(QMainWindow):
         route_controls_body = QWidget()
         self.route_controls_layout = QVBoxLayout(route_controls_body)
         self.route_controls_layout.setContentsMargins(4, 4, 12, 8)
-        self.route_controls_layout.setSpacing(10)
+        self.route_controls_layout.setSpacing(8)
+
+        recorded_title = QLabel("SPRAY GROUPS · DRAG TO REORDER")
+        recorded_title.setObjectName("SectionTitle")
+        self.route_controls_layout.addWidget(recorded_title)
+
+        self.recorded_spray_group_list = ReorderableSprayGroupList()
+        self.recorded_spray_group_list.setToolTip(
+            "Drag a spray group up or down to change the execution order. "
+            "The path shape and direction inside each group remain unchanged."
+        )
+        self.recorded_spray_group_list.orderChanged.connect(
+            self._on_recorded_spray_groups_reordered
+        )
+        self.route_controls_layout.addWidget(self.recorded_spray_group_list)
+
+        self.recorded_spray_path_empty_label = QLabel(
+            "No finalized spray groups yet. Draw independent strokes, then generate the spray route."
+        )
+        self.recorded_spray_path_empty_label.setObjectName("Muted")
+        self.recorded_spray_path_empty_label.setWordWrap(True)
+        self.route_controls_layout.addWidget(self.recorded_spray_path_empty_label)
+
+        self.recorded_spray_path_total_label = QLabel(
+            "TOTAL SPRAY LENGTH: 0.0 mm  |  TOTAL EXECUTION TIME: 00:00"
+        )
+        self.recorded_spray_path_total_label.setObjectName("MetricValue")
+        self.recorded_spray_path_total_label.setWordWrap(True)
+        self.route_controls_layout.addWidget(self.recorded_spray_path_total_label)
+
+        self.recorded_spray_path_note_label = QLabel(
+            "Execution time is spray motion only; MoveIt2 transfer time between groups is not included."
+        )
+        self.recorded_spray_path_note_label.setObjectName("Muted")
+        self.recorded_spray_path_note_label.setWordWrap(True)
+        self.route_controls_layout.addWidget(self.recorded_spray_path_note_label)
+
         self.route_controls_scroll.setWidget(route_controls_body)
         route_outer_layout.addWidget(self.route_controls_scroll)
         self.route_controls_section = self._make_collapsible_section(
-            "ROUTE GENERATION CONTROLS",
-            "route_generation_controls",
+            "RECORDED SPRAY PATH",
+            "recorded_spray_path",
             self.route_controls_content,
         )
-        # Match the ordinary sidebar accordion appearance. Give this
-        # long title the full sidebar width so its text is never clipped.
-        route_header = self._right_section_buttons[
-            "route_generation_controls"
-        ]
-        route_header.setMinimumWidth(360)
+        recorded_header = self._right_section_buttons["recorded_spray_path"]
+        recorded_header.setMinimumWidth(360)
         self.route_controls_section.hide()
+        self._recorded_spray_list_updating = False
 
         # ----------------------------------------------------
         # ACTIVE WORKFLOW SECTION
@@ -2774,9 +2835,9 @@ class MainWindow(QMainWindow):
         self.active_stage = stage_index
         self._refresh_workflow_ui()
         if stage_index in (STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION):
-            route_button = self._right_section_buttons.get("route_generation_controls")
-            if route_button is not None:
-                route_button.setChecked(True)
+            recorded_path_button = self._right_section_buttons.get("recorded_spray_path")
+            if recorded_path_button is not None:
+                recorded_path_button.setChecked(True)
 
         if stage_index == STAGE_SURFACE_IDENTIFICATION:
             self._show_surface_identification_summary()
@@ -2813,17 +2874,8 @@ class MainWindow(QMainWindow):
         self.route_controls_section.setVisible(
             route_generation_page or simulation_page
         )
+        self._refresh_recorded_spray_path_panel()
         self.simulation_csv_footer.setVisible(simulation_page)
-        route_header = self._right_section_buttons.get(
-            "route_generation_controls"
-        )
-        if route_header is not None:
-            route_header.setText(
-                "ROUTE GENERATION CONTROLS"
-                if route_generation_page
-                else "SPRAY SIMULATION CONTROLS"
-            )
-
         self.start_analysis_button.setVisible(
             self.active_stage not in (
                 STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION
@@ -4279,6 +4331,7 @@ class MainWindow(QMainWindow):
 
     def _on_spray_samples_changed(self):
         """Refresh route-generation controls after a completed mouse stroke."""
+        self._refresh_recorded_spray_path_panel()
         self._refresh_workflow_ui()
 
     def _on_manual_route_readiness_changed(self, ready):
@@ -4379,6 +4432,7 @@ class MainWindow(QMainWindow):
         self.route_edit_button.setVisible(True)
         self.route_edit_button.setEnabled(True)
         self._show_interactive_route_summary(result)
+        self._refresh_recorded_spray_path_panel()
         self._refresh_workflow_ui()
 
     def _show_interactive_route_summary(self, result):
