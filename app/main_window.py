@@ -513,6 +513,11 @@ class MainWindow(QMainWindow):
             Qt.DownArrow if initially_expanded else Qt.RightArrow
         )
         header.setObjectName("CollapsibleSectionHeader")
+        # The header itself sits at the right edge, but its label must
+        # remain left-aligned inside the button for consistent reading.
+        header.setStyleSheet(
+            "QToolButton#CollapsibleSectionHeader { text-align: left; }"
+        )
 
         # Keep accordion headers compact and align them to the right edge.
         header.setSizePolicy(
