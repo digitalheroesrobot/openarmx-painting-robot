@@ -1322,6 +1322,18 @@ class MainWindow(QMainWindow):
         self.interactive_spray_path_button.hide()
         layout.addWidget(self.interactive_spray_path_button)
 
+        self.import_route_csv_button = QPushButton("IMPORT ROUTE CSV")
+        self.import_route_csv_button.setObjectName("SecondaryButton")
+        self.import_route_csv_button.setToolTip(
+            "Import an existing product-local spray route CSV, preserve its group order, "
+            "then continue drawing additional spray groups."
+        )
+        self.import_route_csv_button.clicked.connect(
+            self._import_interactive_spray_route_csv
+        )
+        self.import_route_csv_button.hide()
+        layout.addWidget(self.import_route_csv_button)
+
         self.route_generation_progress = QProgressBar()
         self.route_generation_progress.setObjectName("RouteGenerationProgress")
         self.route_generation_progress.setRange(0, 0)
@@ -2899,6 +2911,13 @@ class MainWindow(QMainWindow):
             self.interactive_spray_path_button.setEnabled(
                 route_page and recording and not self._operation_running
             )
+            self.import_route_csv_button.setVisible(
+                route_page and not route_exists
+            )
+            self.import_route_csv_button.setEnabled(
+                route_page and not self._operation_running and not recording
+                or route_page and recording and not self._operation_running
+            )
             self.interactive_paint_color_button.setVisible(route_page)
             self.interactive_paint_color_button.setEnabled(
                 route_page and not self._operation_running
@@ -4176,6 +4195,66 @@ class MainWindow(QMainWindow):
             "PAINT COLOR  " + self.viewer._trajectory_paint_color_hex
         )
         self.viewer._interactive_refresh_recorded_paint_color()
+
+    def _import_interactive_spray_route_csv(self):
+        """Import an existing CSV before drawing, then resume additive route editing."""
+        if (
+            self._operation_running
+            or self.active_stage != STAGE_SPRAY_TRAJECTORY
+            or self.current_mesh is None
+            or not self._stage_available(STAGE_SPRAY_TRAJECTORY)
+        ):
+            return
+
+        if self.interactive_spray_path is not None:
+            QMessageBox.information(
+                self,
+                "Import spray route",
+                "A finalized route already exists. Use ADD TO EXISTING to continue "
+                "that route; import a CSV before drawing a new route.",
+            )
+            return
+
+        has_unfinished_data = bool(
+            getattr(self.viewer, "_interactive_spray_records", [])
+            or getattr(self.viewer, "_interactive_pending_spray_strokes", [])
+            or getattr(self.viewer, "_interactive_spray_stroke_input_poses", [])
+        )
+        if has_unfinished_data:
+            QMessageBox.warning(
+                self,
+                "Import spray route",
+                "Finish or undo the current drawing before importing a CSV. "
+                "The import will not overwrite unfinished strokes.",
+            )
+            return
+
+        # Stage 3 starts an empty recording session automatically. Stop that
+        # empty session so the CSV importer can initialize its route records.
+        if self.viewer._interactive_spray_active:
+            try:
+                self.viewer.finish_interactive_spray_path()
+            except Exception as exc:
+                QMessageBox.critical(
+                    self, "Import spray route", f"Could not prepare route import:\n{exc}"
+                )
+                return
+
+        if not self.viewer._import_interactive_trajectory_csv():
+            # A cancelled or invalid import should leave Stage 3 ready for
+            # ordinary drawing, rather than leaving mouse input disabled.
+            self._start_interactive_spray_path()
+            return
+
+        self.stage_completed[STAGE_SPRAY_TRAJECTORY] = False
+        self.stage_completed[STAGE_SPRAY_SIMULATION] = False
+        self.interactive_spray_path = None
+        self.viewer.set_recorded_path_page("route")
+        self._start_interactive_spray_path(resume_existing=True)
+        self.status_bar.showMessage(
+            "CSV ROUTE LOADED · CONTINUE DRAWING TO ADD MORE SPRAY GROUPS"
+        )
+        self._refresh_workflow_ui()
 
     def _start_interactive_spray_path(self, resume_existing=False):
         """Start or continue mouse-driven spray recording on Stage 3."""
