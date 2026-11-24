@@ -4255,17 +4255,9 @@ class ProductViewer(QWidget):
             "CAMERA VIEW · PRESS SPACE FOR SPRAY MODE"
         )
 
-        self._interactive_hud_actor = self.plotter.add_text(
-            (
-                f"SPRAY CURSOR ACTIVE  |  WORK DIST {self._interactive_spray_standoff * (self._get_source_mm_factor() or 1.0):.1f} mm "
-                f"| CONE {self._interactive_spray_cone_angle_deg:.1f} DEG  |  "
-                "CAMERA VIEW  |  NAVIGATE: MOUSE  |  SPACE: SPRAY MODE"
-            ),
-            position="upper_left",
-            font_size=10,
-            color="#00E5FF",
-            name="interactive_spray_hud",
-        )
+        # Viewport HUD text is intentionally disabled; keep the handle None
+        # so legacy status-update paths remain harmless no-ops.
+        self._interactive_hud_actor = None
         self.plotter.render()
 
     def _interactive_build_excluded_face_overlay(self):
