@@ -4303,7 +4303,7 @@ class MainWindow(QMainWindow):
                 self._show_interactive_route_summary(route)
             self.status_bar.showMessage("INDEPENDENT SPRAY STROKES READY")
         else:
-            self.status_bar.showMessage("DRAW AND FINISH THE SPRAY STROKES")
+            self.status_bar.showMessage("DRAW SPRAY STROKES, THEN GENERATE THE ROUTE")
         self._refresh_workflow_ui()
 
     def _on_route_next_clicked(self):
