@@ -2041,7 +2041,6 @@ class ProductViewer(QWidget):
         segment_ids = np.asarray([item["stroke_id"] for item in records], dtype=np.int64)
         starts = np.r_[0, np.flatnonzero(np.diff(segment_ids) != 0) + 1]
         ends = np.r_[starts[1:], len(records)]
-        stroke_endpoints = []
         arrow_points = []
         arrow_vectors = []
         for start_index, end_index in zip(starts, ends):
@@ -2083,8 +2082,6 @@ class ProductViewer(QWidget):
                             dtype=np.float64,
                         )
                     )
-            stroke_endpoints.append((points[0], points[-1]))
-
         # Keep the trajectory line visually quiet and make the actual
         # spray sample locations the dominant route layer.
         spray_point_data = pv.PolyData(np.asarray([
