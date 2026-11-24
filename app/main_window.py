@@ -2911,8 +2911,13 @@ class MainWindow(QMainWindow):
             self.interactive_spray_path_button.setEnabled(
                 route_page and recording and not self._operation_running
             )
+            route_has_unfinished_samples = bool(
+                getattr(self.viewer, "_interactive_spray_records", [])
+                or getattr(self.viewer, "_interactive_pending_spray_strokes", [])
+                or getattr(self.viewer, "_interactive_spray_stroke_input_poses", [])
+            )
             self.import_route_csv_button.setVisible(
-                route_page and not route_exists
+                route_page and not route_exists and not route_has_unfinished_samples
             )
             self.import_route_csv_button.setEnabled(
                 route_page and not self._operation_running
