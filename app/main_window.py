@@ -514,9 +514,10 @@ class MainWindow(QMainWindow):
         )
         header.setObjectName("CollapsibleSectionHeader")
 
+        # Keep accordion headers compact and align them to the right edge.
         header.setSizePolicy(
-            header.sizePolicy().horizontalPolicy(),
-            header.sizePolicy().verticalPolicy(),
+            QSizePolicy.Maximum,
+            QSizePolicy.Fixed,
         )
 
         content.setObjectName("CollapsibleSectionBody")
@@ -539,7 +540,7 @@ class MainWindow(QMainWindow):
 
         header.toggled.connect(on_toggled)
 
-        container_layout.addWidget(header)
+        container_layout.addWidget(header, 0, Qt.AlignRight)
         container_layout.addWidget(content)
 
         # Register this section.
@@ -1092,10 +1093,6 @@ class MainWindow(QMainWindow):
             "route_generation_controls"
         ]
         route_header.setMinimumWidth(360)
-        route_header.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Fixed,
-        )
         self.route_controls_section.hide()
 
         # ----------------------------------------------------
@@ -1409,10 +1406,33 @@ class MainWindow(QMainWindow):
             self.patch_inspection_panel
         )
 
+        # Route controls belong with the other accordion sections.
+        layout.addWidget(self.route_controls_section)
+
         # ----------------------------------------------------
-        # MAIN ACTION BUTTON
+        # BOTTOM ACTION AREA
         # ----------------------------------------------------
         layout.addStretch()
+
+        self.action_footer = QFrame()
+        self.action_footer.setObjectName("RightPanelActionFooter")
+        self.action_footer.setStyleSheet("""
+            QFrame#RightPanelActionFooter {
+                background: #0D1B26;
+                border: 1px solid #294657;
+                border-radius: 7px;
+            }
+            QFrame#RightPanelActionFooter QLabel {
+                color: #8FA8B8;
+                font-size: 8pt;
+                font-weight: 800;
+                border: none;
+            }
+        """)
+        action_layout = QVBoxLayout(self.action_footer)
+        action_layout.setContentsMargins(9, 8, 9, 9)
+        action_layout.setSpacing(6)
+        action_layout.addWidget(QLabel("SPRAY ACTIONS"))
 
         self.start_analysis_button = QPushButton(
             "LOAD STL PRODUCT"
@@ -1424,9 +1444,7 @@ class MainWindow(QMainWindow):
             self._handle_active_stage_action
         )
 
-        layout.addWidget(
-            self.start_analysis_button
-        )
+        action_layout.addWidget(self.start_analysis_button)
 
         self.interactive_spray_path_button = QPushButton(
             "INTERACTIVE SPRAY PATH"
@@ -1440,7 +1458,7 @@ class MainWindow(QMainWindow):
             self._finish_interactive_spray_path
         )
         self.interactive_spray_path_button.hide()
-        layout.addWidget(self.interactive_spray_path_button)
+        action_layout.addWidget(self.interactive_spray_path_button)
 
         self.import_route_csv_button = QPushButton("IMPORT ROUTE CSV")
         self.import_route_csv_button.setObjectName("SecondaryButton")
@@ -1452,7 +1470,7 @@ class MainWindow(QMainWindow):
             self._import_interactive_spray_route_csv
         )
         self.import_route_csv_button.hide()
-        layout.addWidget(self.import_route_csv_button)
+        action_layout.addWidget(self.import_route_csv_button)
 
         self.route_generation_progress = QProgressBar()
         self.route_generation_progress.setObjectName("RouteGenerationProgress")
@@ -1465,7 +1483,7 @@ class MainWindow(QMainWindow):
             "QProgressBar::chunk { background: #39B8A5; border-radius: 3px; }"
         )
         self.route_generation_progress.hide()
-        layout.addWidget(self.route_generation_progress)
+        action_layout.addWidget(self.route_generation_progress)
 
         self.interactive_paint_color_button = QPushButton("PAINT COLOR")
         self.interactive_paint_color_button.setObjectName("SecondaryButton")
@@ -1476,7 +1494,7 @@ class MainWindow(QMainWindow):
             self._choose_interactive_paint_color
         )
         self.interactive_paint_color_button.hide()
-        layout.addWidget(self.interactive_paint_color_button)
+        action_layout.addWidget(self.interactive_paint_color_button)
 
         self.route_next_button = QPushButton("NEXT: SPRAY SIMULATION")
         self.route_next_button.setObjectName("PrimaryButton")
@@ -1484,7 +1502,7 @@ class MainWindow(QMainWindow):
             lambda: self._select_workflow_stage(STAGE_SPRAY_SIMULATION)
         )
         self.route_next_button.hide()
-        layout.addWidget(self.route_next_button)
+        action_layout.addWidget(self.route_next_button)
 
         self.route_edit_button = QPushButton("ADD TO EXISTING ROUTE")
         self.route_edit_button.setObjectName("SecondaryButton")
@@ -1493,7 +1511,7 @@ class MainWindow(QMainWindow):
         )
         self.route_edit_button.clicked.connect(self._continue_interactive_spray_path)
         self.route_edit_button.hide()
-        layout.addWidget(self.route_edit_button)
+        action_layout.addWidget(self.route_edit_button)
 
         self.simulation_back_button = QPushButton("BACK TO ROUTE GENERATION")
         self.simulation_back_button.setObjectName("SecondaryButton")
@@ -1568,9 +1586,7 @@ class MainWindow(QMainWindow):
             self.results_path_label
         )
 
-        # Keep the route/simulation accordion as the final sidebar item,
-        # after all other collapsible sections and operational controls.
-        layout.addWidget(self.route_controls_section)
+        layout.addWidget(self.action_footer)
 
         return panel
 
