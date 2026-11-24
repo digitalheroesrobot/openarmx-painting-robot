@@ -1535,19 +1535,6 @@ class MainWindow(QMainWindow):
             self.operation_panel
         )
 
-        # ----------------------------------------------------
-        # RESULTS
-        # ----------------------------------------------------
-        self.results_path_label = QLabel(
-            "RESULT DIRECTORY: --"
-        )
-        self.results_path_label.setWordWrap(True)
-        self.results_path_label.setObjectName("Muted")
-
-        layout.addWidget(
-            self.results_path_label
-        )
-
         layout.addWidget(self.action_footer)
 
         return panel
@@ -3597,10 +3584,6 @@ class MainWindow(QMainWindow):
 
         part_dir = self.result_manager.part_dir(
             self.current_stl_path
-        )
-
-        self.results_path_label.setText(
-            f"RESULT DIRECTORY:\n{part_dir}"
         )
 
         self.analysis_summary.setStyleSheet("")
