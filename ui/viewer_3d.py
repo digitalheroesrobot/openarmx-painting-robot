@@ -4827,7 +4827,8 @@ class ProductViewer(QWidget):
         return result / max(float(np.linalg.norm(result)), 1e-12)
 
     def _interactive_stable_planar_normal_local(
-        self, cell_id, point_local, fallback_normal, barycentric=None
+        self, cell_id, point_local, fallback_normal, barycentric=None,
+        seed_normal=None,
     ):
         """Return a stable outward normal for a planar CAD/mesh face.
 
@@ -4850,6 +4851,20 @@ class ProductViewer(QWidget):
         ):
             return fallback_normal
         fallback = fallback / fallback_length
+        seed = np.asarray(
+            fallback if seed_normal is None else seed_normal,
+            dtype=np.float64,
+        )
+        seed_length = float(np.linalg.norm(seed))
+        if (
+            seed.shape != (3,)
+            or not np.all(np.isfinite(seed))
+            or not np.isfinite(seed_length)
+            or seed_length <= 1e-12
+        ):
+            seed = fallback
+        else:
+            seed = seed / seed_length
 
         # Prefer the exact geometric normal for planar STEP faces. All mesh
         # triangles belonging to one B-Rep plane then share the same normal.
@@ -4909,7 +4924,7 @@ class ProductViewer(QWidget):
         diagonal = max(float(self._interactive_mesh_diagonal), 1e-9)
         plane_tolerance = max(diagonal * 2.0e-4, 1.0e-8)
         for entry in self._interactive_planar_normal_cache:
-            alignment = float(np.dot(entry["normal"], fallback))
+            alignment = float(np.dot(entry["normal"], seed))
             plane_distance = abs(float(np.dot(
                 entry["normal"], point_local - entry["point"]
             )))
@@ -4924,7 +4939,7 @@ class ProductViewer(QWidget):
             or cell_id < 0 or cell_id >= len(normals)
         ):
             return fallback
-        alignment = normals @ fallback
+        alignment = normals @ seed
         plane_distance = np.abs((centroids - point_local) @ fallback)
         candidates = (
             (alignment >= angular_cosine)
@@ -4942,7 +4957,7 @@ class ProductViewer(QWidget):
         if not np.isfinite(consensus_length) or consensus_length <= 1e-12:
             return fallback
         consensus /= consensus_length
-        if float(np.dot(consensus, fallback)) < 0.0:
+        if float(np.dot(consensus, seed)) < 0.0:
             consensus *= -1.0
 
         self._interactive_planar_normal_cache.append({
@@ -5008,8 +5023,9 @@ class ProductViewer(QWidget):
         except np.linalg.LinAlgError:
             return None
         normal_local = self._interactive_stable_planar_normal_local(
-            cell_id, hit_local, face_normals[cell_id],
+            cell_id, hit_local, normal_local,
             barycentric=np.asarray(picker.GetPCoords(), dtype=np.float64),
+            seed_normal=face_normals[cell_id],
         )
         normal_length = float(np.linalg.norm(normal_local))
         if not np.isfinite(normal_length) or normal_length <= 1e-12:
