@@ -459,6 +459,13 @@ class ProductViewer(QWidget):
         self._interactive_mesh_faces = None
         self._interactive_mesh_face_normals = None
         self._interactive_mesh_face_areas = None
+        self._interactive_mesh_face_centroids = None
+        self._interactive_mesh_diagonal = 0.0
+        # Stable plane normals are cached only for the active spray session.
+        # STEP planes are keyed by their source B-Rep face; mesh-only planes
+        # are cached by normal and plane offset.
+        self._interactive_planar_normal_cache = []
+        self._interactive_step_planar_normal_cache = {}
         self._interactive_spray_latest_pose = None
         self._interactive_spray_records = []
         # Raw surface-following control poses are collected during a mouse drag.
@@ -4245,6 +4252,12 @@ class ProductViewer(QWidget):
         self._interactive_mesh_faces = np.asarray(self.current_mesh.faces, dtype=np.int64)
         self._interactive_mesh_face_normals = np.asarray(self.current_mesh.face_normals, dtype=np.float64)
         self._interactive_mesh_face_areas = np.asarray(self.current_mesh.area_faces, dtype=np.float64)
+        face_vertices = self._interactive_mesh_vertices[self._interactive_mesh_faces]
+        self._interactive_mesh_face_centroids = np.mean(face_vertices, axis=1)
+        mesh_extent = np.ptp(self._interactive_mesh_vertices, axis=0)
+        self._interactive_mesh_diagonal = float(np.linalg.norm(mesh_extent))
+        self._interactive_planar_normal_cache = []
+        self._interactive_step_planar_normal_cache = {}
         self._interactive_spray_surface = self._to_polydata(self.current_mesh).clean()
         self._interactive_spray_locator = vtkOBBTree()
         self._interactive_spray_locator.SetDataSet(self._interactive_spray_surface)
@@ -4813,6 +4826,132 @@ class ProductViewer(QWidget):
         result = rotate(yawed, yawed_pitch, pitch)
         return result / max(float(np.linalg.norm(result)), 1e-12)
 
+    def _interactive_stable_planar_normal_local(
+        self, cell_id, point_local, fallback_normal, barycentric=None
+    ):
+        """Return a stable outward normal for a planar CAD/mesh face.
+
+        Exact STEP planes use their analytic B-Rep normal. Mesh-only models use
+        an area-weighted consensus of similarly oriented triangles lying on
+        the same plane. Curved/non-planar surfaces retain their original local
+        normal so this correction does not flatten curved geometry.
+        """
+        cell_id = int(cell_id)
+        point_local = np.asarray(point_local, dtype=np.float64)
+        fallback = np.asarray(fallback_normal, dtype=np.float64)
+        fallback_length = float(np.linalg.norm(fallback))
+        if (
+            point_local.shape != (3,)
+            or fallback.shape != (3,)
+            or not np.all(np.isfinite(point_local))
+            or not np.all(np.isfinite(fallback))
+            or not np.isfinite(fallback_length)
+            or fallback_length <= 1e-12
+        ):
+            return fallback_normal
+        fallback = fallback / fallback_length
+
+        # Prefer the exact geometric normal for planar STEP faces. All mesh
+        # triangles belonging to one B-Rep plane then share the same normal.
+        try:
+            from core.step_loader import (
+                evaluate_step_face_surface,
+                get_step_brep_context,
+                get_step_triangle_surface_coordinates,
+            )
+            context = get_step_brep_context(self.current_mesh)
+            if context is not None:
+                face_ids = context["triangle_face_ids"]
+                if 0 <= cell_id < len(face_ids):
+                    face_id = int(face_ids[cell_id])
+                    record = context["face_records"][face_id - 1]
+                    if record.get("surface_type") == "PLANE":
+                        cached = self._interactive_step_planar_normal_cache.get(face_id)
+                        if cached is None:
+                            weights = (
+                                np.asarray(barycentric, dtype=np.float64)
+                                if barycentric is not None
+                                else np.asarray([1.0 / 3.0] * 3, dtype=np.float64)
+                            )
+                            coordinates = get_step_triangle_surface_coordinates(
+                                self.current_mesh, cell_id, weights
+                            )
+                            exact = evaluate_step_face_surface(
+                                self.current_mesh,
+                                face_id,
+                                coordinates["uv"][0],
+                                coordinates["uv"][1],
+                            )
+                            cached = np.asarray(exact["normal"], dtype=np.float64)
+                            cached_length = float(np.linalg.norm(cached))
+                            if (
+                                cached.shape != (3,)
+                                or not np.all(np.isfinite(cached))
+                                or cached_length <= 1e-12
+                            ):
+                                cached = None
+                            else:
+                                cached = cached / cached_length
+                                self._interactive_step_planar_normal_cache[face_id] = cached
+                        if cached is not None:
+                            return cached.copy()
+        except (
+            ImportError, AttributeError, IndexError, KeyError, TypeError,
+            ValueError, RuntimeError,
+        ):
+            # Missing STEP UV data or unavailable Open CASCADE support should
+            # fall through to the mesh-based estimator.
+            pass
+
+        # Reuse a previously identified mesh plane when the new hit has a
+        # matching normal and lies within that plane's geometric tolerance.
+        angular_cosine = math.cos(math.radians(8.0))
+        diagonal = max(float(self._interactive_mesh_diagonal), 1e-9)
+        plane_tolerance = max(diagonal * 2.0e-4, 1.0e-8)
+        for entry in self._interactive_planar_normal_cache:
+            alignment = float(np.dot(entry["normal"], fallback))
+            plane_distance = abs(float(np.dot(
+                entry["normal"], point_local - entry["point"]
+            )))
+            if alignment >= angular_cosine and plane_distance <= entry["tolerance"]:
+                return entry["normal"].copy()
+
+        normals = self._interactive_mesh_face_normals
+        areas = self._interactive_mesh_face_areas
+        centroids = self._interactive_mesh_face_centroids
+        if (
+            normals is None or areas is None or centroids is None
+            or cell_id < 0 or cell_id >= len(normals)
+        ):
+            return fallback
+        alignment = normals @ fallback
+        plane_distance = np.abs((centroids - point_local) @ fallback)
+        candidates = (
+            (alignment >= angular_cosine)
+            & (plane_distance <= plane_tolerance)
+            & np.isfinite(areas)
+            & (areas > 1e-15)
+        )
+        candidate_ids = np.flatnonzero(candidates)
+        if candidate_ids.size < 2:
+            return fallback
+
+        weights = np.asarray(areas[candidate_ids], dtype=np.float64)
+        consensus = np.sum(normals[candidate_ids] * weights[:, None], axis=0)
+        consensus_length = float(np.linalg.norm(consensus))
+        if not np.isfinite(consensus_length) or consensus_length <= 1e-12:
+            return fallback
+        consensus /= consensus_length
+        if float(np.dot(consensus, fallback)) < 0.0:
+            consensus *= -1.0
+
+        self._interactive_planar_normal_cache.append({
+            "normal": consensus.copy(),
+            "point": point_local.copy(),
+            "tolerance": plane_tolerance,
+        })
+        return consensus
+
     def _interactive_pick_surface_pose(self, x, y):
         if self._pose_actor is None or self.current_mesh is None:
             return None
@@ -4857,22 +4996,36 @@ class ProductViewer(QWidget):
                     normal_local = interpolated
         except (AttributeError, IndexError, TypeError, ValueError):
             pass
+        hit_world = np.asarray(picker.GetPickPosition(), dtype=float)
+        if hit_world.shape != (3,) or not np.all(np.isfinite(hit_world)):
+            return None
+        transform = self._actor_matrix_array()
+        try:
+            hit_local = (
+                np.linalg.inv(transform)
+                @ np.append(hit_world, 1.0)
+            )[:3]
+        except np.linalg.LinAlgError:
+            return None
+        normal_local = self._interactive_stable_planar_normal_local(
+            cell_id, hit_local, face_normals[cell_id],
+            barycentric=np.asarray(picker.GetPCoords(), dtype=np.float64),
+        )
         normal_length = float(np.linalg.norm(normal_local))
         if not np.isfinite(normal_length) or normal_length <= 1e-12:
             return None
         normal_local = normal_local / normal_length
 
-        transform = self._actor_matrix_array()
-        rotation = transform[:3, :3]
-        normal_world = rotation @ normal_local
+        # Normals transform by the inverse transpose, including when the
+        # product actor has non-uniform scale.
+        try:
+            normal_world = np.linalg.inv(transform[:3, :3]).T @ normal_local
+        except np.linalg.LinAlgError:
+            return None
         normal_world_length = float(np.linalg.norm(normal_world))
         if normal_world_length <= 1e-12:
             return None
         normal_world /= normal_world_length
-
-        hit_world = np.asarray(picker.GetPickPosition(), dtype=float)
-        if hit_world.shape != (3,) or not np.all(np.isfinite(hit_world)):
-            return None
 
         nozzle_world = hit_world + normal_world * self._interactive_spray_standoff
         spray_direction_world = -normal_world
@@ -4982,7 +5135,7 @@ class ProductViewer(QWidget):
         surface_h = np.append(pose["surface_point_world"], 1.0)
         direction_product = inverse[:3, :3] @ pose["spray_direction_world"]
         direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
-        normal_product = inverse[:3, :3] @ np.asarray(
+        normal_product = self._interactive_spray_transform[:3, :3].T @ np.asarray(
             pose["surface_normal_world"], dtype=np.float64
         )
         normal_product /= max(float(np.linalg.norm(normal_product)), 1e-12)
@@ -6906,9 +7059,14 @@ class ProductViewer(QWidget):
             if self._interactive_mesh_face_normals is not None
             else np.asarray(self.current_mesh.face_normals, dtype=np.float64)
         )
-        normal_local = np.asarray(normal_source[cell_id], dtype=np.float64)
+        normal_local = self._interactive_stable_planar_normal_local(
+            cell_id, closest_local, np.asarray(normal_source[cell_id], dtype=np.float64)
+        )
         transform = self._actor_matrix_array()
-        normal_world = transform[:3, :3] @ normal_local
+        try:
+            normal_world = np.linalg.inv(transform[:3, :3]).T @ normal_local
+        except np.linalg.LinAlgError:
+            return None
         normal_length = float(np.linalg.norm(normal_world))
         if not np.isfinite(normal_length) or normal_length <= 1e-12:
             return None
