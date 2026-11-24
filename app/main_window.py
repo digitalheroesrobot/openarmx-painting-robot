@@ -1381,7 +1381,7 @@ class MainWindow(QMainWindow):
         self.action_footer.setStyleSheet("""
             QFrame#RightPanelActionFooter {
                 background: #0D1B26;
-                border: 1px solid #294657;
+                border: none;
                 border-radius: 7px;
             }
             QFrame#RightPanelActionFooter QLabel {
