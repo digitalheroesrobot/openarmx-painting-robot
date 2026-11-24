@@ -1829,10 +1829,10 @@ class ProductViewer(QWidget):
         )
         QMessageBox.information(
             self, "Import trajectory",
-            f"Loaded {len(records):,} samples for simulation.\n"
-            "Spray-ON rows: XYZ in product-local millimetres, XYZW quaternion, and group_id.\n"
-            "Spray-OFF rows: time, on/off, and the next group's group_id; pose fields must be empty.\n"
-            "For visualization, OFF intervals hold the last valid nozzle pose; MoveIt2 handles transfer planning."
+            f"Loaded {len(records):,} samples for simulation.\\n"
+            "Each new-format row is a SPRAY-ON pose with product-local XYZ, XYZW quaternion, and group_id.\\n"
+            "A group_id change marks an implicit SPRAY-OFF transfer boundary; no connector is interpolated.\\n"
+            "Legacy CSV files with explicit SPRAY-OFF rows are also accepted."
         )
         self.plotter.render()
         return True
