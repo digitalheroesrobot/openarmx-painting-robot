@@ -802,6 +802,11 @@ class MainWindow(QMainWindow):
                 background: #21485D;
                 border-color: #00DDF5;
             }
+            QFrame#SimulationCsvFooter QPushButton:disabled {
+                background: #18232C;
+                color: #586873;
+                border: 1px solid #293943;
+            }
         """)
         csv_layout = QVBoxLayout(csv_footer)
         csv_layout.setContentsMargins(10, 8, 10, 8)
@@ -1389,6 +1394,35 @@ class MainWindow(QMainWindow):
                 font-size: 8pt;
                 font-weight: 800;
                 border: none;
+            }
+            QFrame#RightPanelActionFooter QPushButton#PrimaryButton {
+                background: #087F8C;
+                color: #F3FCFF;
+                border: 1px solid #19B8C7;
+                border-radius: 5px;
+                padding: 8px 10px;
+                font-weight: 800;
+            }
+            QFrame#RightPanelActionFooter QPushButton#PrimaryButton:hover {
+                background: #0A98A8;
+                border-color: #55E4EF;
+            }
+            QFrame#RightPanelActionFooter QPushButton#SecondaryButton {
+                background: #183244;
+                color: #E2EDF4;
+                border: 1px solid #3B687E;
+                border-radius: 5px;
+                padding: 7px 10px;
+                font-weight: 700;
+            }
+            QFrame#RightPanelActionFooter QPushButton#SecondaryButton:hover {
+                background: #21485D;
+                border-color: #65A9C4;
+            }
+            QFrame#RightPanelActionFooter QPushButton:disabled {
+                background: #18232C;
+                color: #586873;
+                border: 1px solid #293943;
             }
         """)
         action_layout = QVBoxLayout(self.action_footer)
@@ -2979,15 +3013,21 @@ class MainWindow(QMainWindow):
                 and self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
             )
             recording = bool(self.viewer._interactive_spray_active)
+            route_has_unfinished_samples = any(
+                values is not None and len(values) > 0
+                for values in (
+                    getattr(self.viewer, "_interactive_spray_records", None),
+                    getattr(self.viewer, "_interactive_pending_spray_strokes", None),
+                    getattr(self.viewer, "_interactive_spray_stroke_input_poses", None),
+                )
+            )
             self.interactive_spray_path_button.setVisible(route_page and recording)
             self.interactive_spray_path_button.setText("FINISH SPRAY PATH")
             self.interactive_spray_path_button.setEnabled(
-                route_page and recording and not self._operation_running
-            )
-            route_has_unfinished_samples = bool(
-                getattr(self.viewer, "_interactive_spray_records", [])
-                or getattr(self.viewer, "_interactive_pending_spray_strokes", [])
-                or getattr(self.viewer, "_interactive_spray_stroke_input_poses", [])
+                route_page
+                and recording
+                and route_has_unfinished_samples
+                and not self._operation_running
             )
             self.import_route_csv_button.setVisible(
                 route_page and not route_exists and not route_has_unfinished_samples
