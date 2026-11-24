@@ -4139,9 +4139,15 @@ class ProductViewer(QWidget):
                     item["timestamp"] = (
                         float(item.get("timestamp", 0.0)) + timestamp_shift
                     )
-            self._interactive_spray_start_timestamp = max(
-                float(item.get("timestamp", 0.0))
+            latest_product_time = max(
+                float(item.get("t_product_s", 0.0))
                 for item in existing_records
+            )
+            # Keep the product-relative time column monotonic when imported
+            # or previously recorded groups are followed by new hand-drawn
+            # groups in this editing session.
+            self._interactive_spray_start_timestamp = (
+                time.monotonic() - latest_product_time
             )
         else:
             self._interactive_spray_stroke_id = -1
