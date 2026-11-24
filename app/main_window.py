@@ -4316,14 +4316,24 @@ class MainWindow(QMainWindow):
 
         result = []
         for group_id, group_records in grouped.items():
-            points = np.asarray(
-                [record["nozzle_point_product"] for record in group_records],
-                dtype=np.float64,
-            ).reshape(-1, 3)
-            distance_mm = (
-                float(np.sum(np.linalg.norm(np.diff(points, axis=0), axis=1)) * mm_factor)
-                if len(points) > 1 else 0.0
-            )
+            # One mouse gesture can contain multiple safe contiguous runs.
+            # Sum only within each run; never count a fictitious connector
+            # between internal collision/excluded-face boundaries.
+            runs = {}
+            for record in group_records:
+                segment_id = int(record.get("stroke_id", group_id - 1))
+                runs.setdefault(segment_id, []).append(record)
+            distance_units = 0.0
+            for run_records in runs.values():
+                points = np.asarray(
+                    [record["nozzle_point_product"] for record in run_records],
+                    dtype=np.float64,
+                ).reshape(-1, 3)
+                if len(points) > 1:
+                    distance_units += float(
+                        np.sum(np.linalg.norm(np.diff(points, axis=0), axis=1))
+                    )
+            distance_mm = distance_units * mm_factor
             result.append({
                 "group_id": group_id,
                 "distance_mm": distance_mm,
