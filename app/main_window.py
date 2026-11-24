@@ -814,6 +814,29 @@ class MainWindow(QMainWindow):
             )
             self.route_controls_layout.addWidget(widget)
 
+        # Keep simulation Start/Stop controls directly visible at the top
+        # of the Recorded Spray Path accordion. They are separated from the
+        # recorded-path information panel so their visibility does not depend
+        # on that panel's content visibility.
+        recorded_panel_layout = self.viewer.interactive_recorded_path_panel.layout()
+        simulation_controls = QFrame()
+        simulation_controls.setObjectName("SpraySimulationControls")
+        simulation_controls_layout = QHBoxLayout(simulation_controls)
+        simulation_controls_layout.setContentsMargins(4, 4, 4, 4)
+        simulation_controls_layout.setSpacing(8)
+        for button in (
+            self.viewer.recorded_path_replay_button,
+            self.viewer.recorded_path_stop_button,
+        ):
+            recorded_panel_layout.removeWidget(button)
+            button.setParent(simulation_controls)
+            button.setMinimumHeight(40)
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            simulation_controls_layout.addWidget(button, 1)
+        self.route_controls_layout.insertWidget(0, simulation_controls)
+        self.simulation_playback_controls = simulation_controls
+        simulation_controls.hide()
+
         # CSV import/export are simulation file actions, not playback
         # controls. Keep them in a fixed footer at the bottom of the
         # entire right sidebar, outside every accordion and scroll area.
@@ -2880,6 +2903,7 @@ class MainWindow(QMainWindow):
         # The same Recorded Spray Path accordion is used on both route
         # generation and simulation pages; keep one authoritative group list.
         self.route_controls_section.setVisible(route_generation_page or simulation_page)
+        self.simulation_playback_controls.setVisible(simulation_page)
 
         spray_settings_button = self._right_section_buttons.get("spray_settings")
         recorded_path_button = self._right_section_buttons.get("recorded_spray_path")
