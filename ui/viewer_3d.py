@@ -1151,10 +1151,6 @@ class ProductViewer(QWidget):
         row = QVBoxLayout(panel)
         row.setContentsMargins(10, 10, 10, 10)
         row.setSpacing(8)
-        heading = QLabel("SPRAY SETTINGS")
-        heading.setStyleSheet("color: #00E5FF; font-weight: 800;")
-        row.addWidget(heading)
-
         self.working_distance_label = QLabel("WORK DIST")
         self.working_distance_spin = QDoubleSpinBox()
         self.working_distance_spin.setRange(
@@ -1180,12 +1176,26 @@ class ProductViewer(QWidget):
         self.working_distance_spin.setMaximumWidth(180)
         row.addWidget(self.working_distance_spin)
 
-        self.interaction_mode_status = QLabel("SPRAY INPUT INACTIVE")
-        self.interaction_mode_status.setStyleSheet(
-            "color: #69C8D5; font-size: 9px; padding-left: 8px;"
-        )
-        self.interaction_mode_status.setWordWrap(True)
-        row.addWidget(self.interaction_mode_status)
+        mode_status_row = QHBoxLayout()
+        mode_status_row.setSpacing(8)
+
+        self.camera_mode_status = QLabel("●  CAMERA MODE")
+        self.paint_mode_status = QLabel("●  PAINT MODE")
+        for status_label in (
+            self.camera_mode_status,
+            self.paint_mode_status,
+        ):
+            status_label.setAlignment(Qt.AlignCenter)
+            status_label.setMinimumHeight(32)
+            status_label.setStyleSheet(
+                "background-color: #182632; color: #718391; "
+                "border: 1px solid #344957; border-radius: 5px; "
+                "padding: 5px 8px; font-size: 9px; font-weight: 800;"
+            )
+            mode_status_row.addWidget(status_label, 1)
+
+        row.addLayout(mode_status_row)
+        self._update_interaction_mode_indicators("camera")
 
         self.return_to_paint_button = QPushButton("PAINT MODE")
         self.return_to_paint_button.setToolTip(
@@ -1222,6 +1232,25 @@ class ProductViewer(QWidget):
         row.addWidget(self.interactive_paint_color_view_button)
         row.addStretch(1)
         return panel
+
+    def _update_interaction_mode_indicators(self, active_mode):
+        """Show camera and paint input modes as mutually exclusive status indicators."""
+        inactive_style = (
+            "background-color: #182632; color: #718391; "
+            "border: 1px solid #344957; border-radius: 5px; "
+            "padding: 5px 8px; font-size: 9px; font-weight: 800;"
+        )
+        active_style = (
+            "background-color: #123D36; color: #65F0C1; "
+            "border: 1px solid #20B88A; border-radius: 5px; "
+            "padding: 5px 8px; font-size: 9px; font-weight: 900;"
+        )
+        self.camera_mode_status.setStyleSheet(
+            active_style if active_mode == "camera" else inactive_style
+        )
+        self.paint_mode_status.setStyleSheet(
+            active_style if active_mode == "paint" else inactive_style
+        )
 
     def _build_interactive_recorded_path_controls(self):
         """Build persistent controls for optimizing and replaying recorded spray paths."""
@@ -4271,9 +4300,7 @@ class ProductViewer(QWidget):
         # Stage entry starts in normal camera navigation. Space explicitly
         # switches the viewport to operator-controlled spray input.
         self._interactive_spray_mode = "camera"
-        self.interaction_mode_status.setText(
-            "CAMERA VIEW · PRESS SPACE FOR SPRAY MODE"
-        )
+        self._update_interaction_mode_indicators("camera")
 
         # Viewport HUD text is intentionally disabled; keep the handle None
         # so legacy status-update paths remain harmless no-ops.
@@ -7241,9 +7268,7 @@ class ProductViewer(QWidget):
         self._interactive_spray_angle_anchor_pose = None
         self._interactive_spray_locked_direction_world = None
 
-        self.interaction_mode_status.setText(
-            "SPRAY MODE · HOLD LEFT TO PAINT"
-        )
+        self._update_interaction_mode_indicators("paint")
         if self._interactive_hud_actor is not None:
             hud_text = (
                 f"SPRAY MODE  |  WORK DIST "
@@ -7477,7 +7502,7 @@ class ProductViewer(QWidget):
         self._interactive_saved_style = None
         self.interaction_mode_panel.hide()
         self.working_distance_spin.setEnabled(False)
-        self.interaction_mode_status.setText("SPRAY INPUT INACTIVE")
+        self._update_interaction_mode_indicators(None)
 
         if self._interactive_hud_actor is not None:
             try:
