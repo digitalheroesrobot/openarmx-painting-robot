@@ -4391,11 +4391,10 @@ class MainWindow(QMainWindow):
             for index, metric in enumerate(metrics, start=1):
                 item = QListWidgetItem()
                 item.setData(Qt.UserRole, int(metric["group_id"]))
-                item.setSizeHint(QSize(340, 58))
+                item.setSizeHint(QSize(420, 58))
                 list_widget.addItem(item)
 
                 row = QWidget()
-                row.setAttribute(Qt.WA_TransparentForMouseEvents, True)
                 row_layout = QHBoxLayout(row)
                 row_layout.setContentsMargins(8, 5, 8, 5)
                 row_layout.setSpacing(8)
@@ -4421,9 +4420,79 @@ class MainWindow(QMainWindow):
                 metrics_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 row_layout.addWidget(metrics_label)
 
+                delete_button = QPushButton("DELETE")
+                delete_button.setFixedWidth(64)
+                delete_button.setFixedHeight(32)
+                delete_button.setToolTip(
+                    f"Delete SPRAY GROUP {index}"
+                )
+
+                group_id = int(metric["group_id"])
+                delete_button.clicked.connect(
+                    lambda checked=False, gid=group_id:
+                        self._delete_recorded_spray_group(gid)
+                )
+                row_layout.addWidget(delete_button)
+
                 list_widget.setItemWidget(item, row)
         finally:
             self._recorded_spray_list_updating = False
+
+    def _delete_recorded_spray_group(self, group_id):
+        """Delete one recorded spray group and rebuild the route."""
+        if self._recorded_spray_list_updating or self._operation_running:
+            return
+
+        try:
+            group_id = int(group_id)
+        except (TypeError, ValueError):
+            return
+
+        records = list(
+            getattr(self.viewer, "_interactive_spray_records", [])
+        )
+        if not records:
+            return
+
+        remaining_records = []
+        for record in records:
+            record_group_id = int(
+                record.get(
+                    "group_id",
+                    int(record.get("stroke_id", 0)) + 1,
+                )
+            )
+            if record_group_id != group_id:
+                remaining_records.append(dict(record))
+
+        if len(remaining_records) == len(records):
+            return
+
+        self.viewer._interactive_spray_records = remaining_records
+
+        if not remaining_records:
+            self.viewer._optimize_interactive_recorded_path()
+            self.viewer._refresh_interactive_recorded_path_actor()
+            self.viewer._interactive_spray_route_optimization = {}
+            self.viewer._interactive_recorded_replay_timing = {}
+            self.viewer._interactive_route_optimization_metrics = {}
+            self.interactive_spray_path = None
+            self.stage_completed[STAGE_SPRAY_TRAJECTORY] = False
+            self.stage_completed[STAGE_SPRAY_SIMULATION] = False
+            self._refresh_recorded_spray_path_panel()
+            self.status_bar.showMessage(
+                f"SPRAY GROUP {group_id} DELETED · NO RECORDED SPRAY GROUPS REMAIN"
+            )
+            return
+
+        # Refresh the visible list first. The existing reorder handler then
+        # renumbers groups, rebuilds route data, optimizes, and refreshes the
+        # 3D recorded-path actor using the same tested code path.
+        self._refresh_recorded_spray_path_panel()
+        self._on_recorded_spray_groups_reordered()
+        self.status_bar.showMessage(
+            f"SPRAY GROUP {group_id} DELETED · REMAINING GROUPS RENUMBERED"
+        )
 
     def _on_recorded_spray_groups_reordered(self):
         """Apply the visible list order to the actual route records and replay."""
