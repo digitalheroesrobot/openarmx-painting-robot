@@ -4545,21 +4545,12 @@ class MainWindow(QMainWindow):
 
         self.viewer._interactive_spray_records = remaining_records
 
-        # Refresh the recorded-path data only. Suppress readiness callbacks
-        # because they may refresh or navigate the wider workflow UI.
+        # Refresh recorded-path data without emitting the readiness signal.
+        # Qt SignalInstance objects cannot be blocked with blockSignals().
         if remaining_records:
-            readiness_signal = getattr(
-                self.viewer, "route_readiness_changed", None
+            self.viewer._optimize_interactive_recorded_path(
+                emit_readiness=False
             )
-            was_blocked = (
-                readiness_signal.blockSignals(True)
-                if readiness_signal is not None else None
-            )
-            try:
-                self.viewer._optimize_interactive_recorded_path()
-            finally:
-                if readiness_signal is not None:
-                    readiness_signal.blockSignals(bool(was_blocked))
         else:
             self.viewer._interactive_spray_route_optimization = {}
             self.viewer._interactive_recorded_replay_timing = {}
