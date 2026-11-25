@@ -4137,6 +4137,11 @@ class ProductViewer(QWidget):
         if self._interactive_spray_active:
             return
 
+        # Entering route recording ends any post-FINISH single-point edit.
+        self._interactive_selected_spray_point_index = None
+        self._interactive_spray_point_drag_state = None
+        self._interactive_remove_selected_point_visuals()
+
         # Route editing is additive. Preserve the optimized route and the
         # accumulated wet-film state so the operator can see what has already
         # been sprayed and add only the missing coverage.
