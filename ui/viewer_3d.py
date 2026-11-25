@@ -1482,15 +1482,22 @@ class ProductViewer(QWidget):
             QMessageBox.warning(self, "Export trajectory", "There is no completed spray route to export.")
             return False
 
+        # Always rebuild the export timeline from the current authoritative
+        # record list. A previously cached SAFE timeline can still contain
+        # references to groups that were subsequently deleted or edited.
+        if not self._optimize_interactive_recorded_path():
+            QMessageBox.warning(
+                self, "Export trajectory",
+                "The remaining spray route could not be finalized."
+            )
+            return False
         timing = getattr(self, "_interactive_recorded_replay_timing", None)
         if not timing or timing.get("safety_status") != "SAFE" or not timing.get("timeline"):
-            if not self._optimize_interactive_recorded_path():
-                QMessageBox.warning(
-                    self, "Export trajectory",
-                    "The spray route could not be finalized."
-                )
-                return False
-            timing = self._interactive_recorded_replay_timing
+            QMessageBox.warning(
+                self, "Export trajectory",
+                "The remaining spray route has no valid export timeline."
+            )
+            return False
 
         mm_factor = self._get_source_mm_factor()
         if mm_factor is None or not np.isfinite(mm_factor) or mm_factor <= 0.0:
