@@ -7264,15 +7264,17 @@ class ProductViewer(QWidget):
         return True
 
     def _interactive_generate_max_hole_circle(self):
-        """Find and display the largest complete circle with zero gun collisions."""
+        """Show a bore-sized circle immediately, then shrink it to a safe radius."""
         if not self._interactive_hole_circle_mode or not self._interactive_spray_active:
             return 0
         anchor = self._interactive_spray_latest_pose
         if anchor is None:
+            print("[HOLE CIRCLE] No current sprayer pose. Move the sprayer over the hole first.")
             return 0
         nozzle = np.asarray(anchor["nozzle_point_world"], dtype=np.float64)
         hole = self._interactive_nearest_hole_candidate(nozzle)
         if hole is None:
+            print("[HOLE CIRCLE] No detected hole candidate near the sprayer.")
             return 0
 
         axis = np.asarray(hole["axis_world"], dtype=np.float64)
@@ -7280,60 +7282,80 @@ class ProductViewer(QWidget):
         opening = np.asarray(hole["center_world"], dtype=np.float64)
         center = opening + float(np.dot(nozzle - opening, axis)) * axis
         u, v = self._interactive_circle_basis(axis)
+        bore_radius = abs(float(hole["item"]["diameter_coordinate_units"])) * 0.5
+        spacing = max(float(self._interactive_spray_sampling_spacing), 1e-6)
+        minimum = max(spacing * 0.5, 0.5)
+        if not np.isfinite(bore_radius) or bore_radius <= minimum:
+            print(
+                "[HOLE CIRCLE] Invalid bore radius:",
+                bore_radius, "minimum:", minimum,
+            )
+            return 0
+
         self._interactive_cancel_hole_circle_gesture()
         self._interactive_hole_circle_center_world = center
         self._interactive_hole_circle_axis_world = axis
         self._interactive_hole_circle_basis_u = u
         self._interactive_hole_circle_basis_v = v
 
-        bore_radius = abs(float(hole["item"]["diameter_coordinate_units"])) * 0.5
-        spacing = max(float(self._interactive_spray_sampling_spacing), 1e-6)
-        lower = max(spacing * 0.5, 0.5)
-        upper = bore_radius
-        if not np.isfinite(upper) or upper <= lower:
-            self._interactive_hole_circle_radius = None
-            self.plotter.render()
-            return 0
-
-        # Verify a feasible starting radius, then binary-search the outermost
-        # feasible radius. Every candidate is checked around the full 360°.
-        if not self._interactive_hole_circle_radius_is_clear(
-            lower, center, axis, u, v
-        ):
-            self._interactive_hole_circle_radius = None
-            self.plotter.render()
-            return 0
-        best = lower
-        lo, hi = lower, upper
-        for _ in range(9):
-            candidate = 0.5 * (lo + hi)
-            if self._interactive_hole_circle_radius_is_clear(
-                candidate, center, axis, u, v
-            ):
-                best = candidate
-                lo = candidate
-            else:
-                hi = candidate
-
-        self._interactive_hole_circle_radius = best
+        # Stage 1: show a complete geometric preview before any collision test.
+        preview_radius = max(minimum, bore_radius * 0.90)
+        self._interactive_hole_circle_radius = preview_radius
         self._interactive_hole_circle_start_angle = 0.0
         self._interactive_hole_circle_last_angle = 2.0 * math.pi
         self._interactive_hole_circle_total_angle = 2.0 * math.pi
         self._interactive_hole_circle_drawing = True
         self._interactive_hole_circle_auto_generated = True
-        count = max(36, int(math.ceil(2.0 * math.pi * best / spacing)))
-        count = min(count, 720)
-        angles = np.linspace(0.0, 2.0 * math.pi, count + 1)
-        self._interactive_hole_circle_preview_points = [
-            center + best * (
-                math.cos(float(a)) * u + math.sin(float(a)) * v
+
+        def show_circle(radius):
+            count = max(36, int(math.ceil(2.0 * math.pi * radius / spacing)))
+            count = min(count, 720)
+            angles = np.linspace(0.0, 2.0 * math.pi, count + 1)
+            self._interactive_hole_circle_preview_points = [
+                center + radius * (
+                    math.cos(float(a)) * u + math.sin(float(a)) * v
+                )
+                for a in angles
+            ]
+            self._interactive_hole_circle_preview_invalid = []
+            self._interactive_update_hole_circle_preview()
+            self.plotter.render()
+
+        show_circle(preview_radius)
+        print(
+            f"[HOLE CIRCLE] Geometric preview displayed. "
+            f"Bore diameter={2.0 * bore_radius:.3f}, "
+            f"preview diameter={2.0 * preview_radius:.3f}"
+        )
+
+        # Stage 2: scan downwards from the largest visible circle. This avoids
+        # the old binary-search assumption that collision feasibility is monotonic.
+        safe_radius = None
+        steps = 18
+        for index in range(steps + 1):
+            candidate = preview_radius - (
+                (preview_radius - minimum) * index / steps
             )
-            for a in angles
-        ]
-        self._interactive_hole_circle_preview_invalid = []
-        self._interactive_update_hole_circle_preview()
-        self.plotter.render()
-        return best
+            if self._interactive_hole_circle_radius_is_clear(
+                candidate, center, axis, u, v, samples=48
+            ):
+                safe_radius = candidate
+                break
+
+        if safe_radius is None:
+            print(
+                "[HOLE CIRCLE] Preview is visible, but no collision-free "
+                "radius was found. Adjust insertion depth or sprayer angle."
+            )
+            return preview_radius
+
+        self._interactive_hole_circle_radius = safe_radius
+        show_circle(safe_radius)
+        print(
+            f"[HOLE CIRCLE] Collision-free circle ready. "
+            f"Radius={safe_radius:.3f}, diameter={2.0 * safe_radius:.3f}"
+        )
+        return safe_radius
 
     def _interactive_start_hole_circle(self, interactor):
         if not self._interactive_hole_circle_mode:
@@ -8107,9 +8129,7 @@ class ProductViewer(QWidget):
             )
             updated_pose["timestamp"] = time.monotonic()
             self._interactive_update_cursor(updated_pose)
-            # Debounce wheel input: once insertion stops, automatically solve
-            # the maximum full-circle radius and show its green preview.
-            self._interactive_hole_circle_auto_timer.start()
+            # Circle generation is explicit (G key), not timer-driven.
             return
         else:
             current_mm = float(self.working_distance_spin.value())
@@ -8794,6 +8814,17 @@ class ProductViewer(QWidget):
                 and not event.isAutoRepeat()
             ):
                 self.set_hole_circle_mode(not self._interactive_hole_circle_mode)
+                return True
+
+            if (
+                event.key() == Qt.Key.Key_G
+                and self._interactive_hole_circle_mode
+                and self._interactive_spray_active
+                and self._interactive_spray_mode == "spray"
+                and not event.isAutoRepeat()
+            ):
+                self._interactive_hole_circle_auto_timer.stop()
+                self._interactive_generate_max_hole_circle()
                 return True
 
         if (
