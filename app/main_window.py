@@ -668,15 +668,6 @@ class MainWindow(QMainWindow):
         root.addLayout(self._build_header())
 
         # ----------------------------------------------------
-        # WORKFLOW NAVIGATION
-        # ----------------------------------------------------
-
-        # Show the workflow navigation through the first spray-trajectory stage.
-        self.workflow_bar = self._build_workflow_bar()
-        root.addWidget(self.workflow_bar)
-        self.workflow_bar.show()
-
-        # ----------------------------------------------------
         # MAIN WORKSPACE
         # ----------------------------------------------------
 
@@ -933,33 +924,6 @@ class MainWindow(QMainWindow):
         header.addWidget(self.system_status)
 
         return header
-
-    # ========================================================
-    # WORKFLOW NAVIGATION
-    # ========================================================
-
-    def _build_workflow_bar(self):
-        panel = self._panel()
-
-        layout = QHBoxLayout(panel)
-        layout.setContentsMargins(10, 6, 10, 6)
-        layout.setSpacing(8)
-
-        self.workflow_buttons = []
-
-        for index, stage in enumerate(WORKFLOW_STAGES):
-            button = QPushButton(stage["name"])
-            button.setCheckable(True)
-
-            button.clicked.connect(
-                lambda checked=False, i=index:
-                self._select_workflow_stage(i)
-            )
-
-            layout.addWidget(button, 1)
-            self.workflow_buttons.append(button)
-
-        return panel
 
     # ========================================================
     # LEFT PANEL
@@ -3002,35 +2966,6 @@ class MainWindow(QMainWindow):
         self.stage_completed[
             STAGE_SURFACE_IDENTIFICATION
         ] = all_patches_inspected
-
-        # ----------------------------------------------------
-        # WORKFLOW NAVIGATION BUTTONS
-        # ----------------------------------------------------
-
-        for index, button in enumerate(self.workflow_buttons):
-
-            available = self._stage_available(index)
-
-            button.setEnabled(
-                available and not self._operation_running
-            )
-
-            button.setChecked(index == self.active_stage)
-
-            if index == self.active_stage:
-                button.setObjectName("StageActive")
-
-            elif self.stage_completed.get(index, False):
-                button.setObjectName("StageComplete")
-
-            elif available:
-                button.setObjectName("StageAvailable")
-
-            else:
-                button.setObjectName("StageDisabled")
-
-            button.style().unpolish(button)
-            button.style().polish(button)
 
         # ----------------------------------------------------
         # COLLAPSE PATCH INSPECTION WHEN ENTERING STAGE 3
