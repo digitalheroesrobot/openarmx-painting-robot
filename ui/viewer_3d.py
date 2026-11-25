@@ -7499,10 +7499,42 @@ class ProductViewer(QWidget):
         # Never keep spraying after the pointer leaves the 3D viewport.
         if not self._interactive_spray_active:
             return
+        was_recording = bool(self._interactive_spray_recording)
         self._interactive_spray_recording = False
         if getattr(self, "_interactive_route_generation_only", False):
+            # Moving the pointer from the 3D viewport to FINISH can trigger a
+            # Leave event before VTK delivers the matching mouse-release event.
+            # Never discard that in-progress stroke: queue it exactly once so
+            # finish_interactive_spray_path() can finalize it like any other
+            # completed press-to-release gesture.
+            raw_stroke = list(
+                getattr(self, "_interactive_spray_stroke_input_poses", [])
+            )
+            if was_recording and raw_stroke:
+                pending = getattr(self, "_interactive_pending_spray_strokes", None)
+                if pending is None:
+                    pending = []
+                    self._interactive_pending_spray_strokes = pending
+                pending.append(raw_stroke)
+                self._interactive_route_undo_stack.append(
+                    copy.deepcopy(raw_stroke)
+                )
+                preview_actor = getattr(
+                    self, "_interactive_spray_stroke_preview_actor", None
+                )
+                if preview_actor is not None:
+                    completed = getattr(
+                        self, "_interactive_completed_stroke_preview_actors", None
+                    )
+                    if completed is None:
+                        completed = []
+                        self._interactive_completed_stroke_preview_actors = completed
+                    completed.append(preview_actor)
+                    self._interactive_spray_stroke_preview_actor = None
+                self.spray_samples_changed.emit()
             self._interactive_spray_stroke_input_poses = []
-            self._interactive_remove_stroke_preview()
+            if not was_recording:
+                self._interactive_remove_stroke_preview()
 
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
