@@ -7328,32 +7328,41 @@ class ProductViewer(QWidget):
             f"preview diameter={2.0 * preview_radius:.3f}"
         )
 
-        # Stage 2: scan downwards from the largest visible circle. This avoids
-        # the old binary-search assumption that collision feasibility is monotonic.
+        # Stage 2: find the largest radius that lets the nozzle centre orbit
+        # while the complete gun body remains clear of the product.
+        # Use a dense angular sweep and a finer radius scan than the old
+        # 19-step search; sparse checks could miss a collision between poses.
         safe_radius = None
-        steps = 18
+        steps = 48
         for index in range(steps + 1):
             candidate = preview_radius - (
                 (preview_radius - minimum) * index / steps
             )
             if self._interactive_hole_circle_radius_is_clear(
-                candidate, center, axis, u, v, samples=48
+                candidate, center, axis, u, v, samples=120
             ):
-                safe_radius = candidate
-                break
+                # Recheck the selected circumference at twice the angular
+                # density before accepting it as the orbit radius.
+                if self._interactive_hole_circle_radius_is_clear(
+                    candidate, center, axis, u, v, samples=240
+                ):
+                    safe_radius = candidate
+                    break
 
         if safe_radius is None:
             print(
                 "[HOLE CIRCLE] Preview is visible, but no collision-free "
-                "radius was found. Adjust insertion depth or sprayer angle."
+                "nozzle-centre orbit was found. Move the nozzle deeper into "
+                "the bore or adjust its angle."
             )
             return preview_radius
 
         self._interactive_hole_circle_radius = safe_radius
         show_circle(safe_radius)
         print(
-            f"[HOLE CIRCLE] Collision-free circle ready. "
-            f"Radius={safe_radius:.3f}, diameter={2.0 * safe_radius:.3f}"
+            f"[HOLE CIRCLE] Collision-free nozzle-centre orbit ready. "
+            f"Radius={safe_radius:.3f}, diameter={2.0 * safe_radius:.3f}; "
+            f"full gun checked around 240 angular positions."
         )
         return safe_radius
 
