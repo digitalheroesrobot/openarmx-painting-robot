@@ -6959,8 +6959,11 @@ class ProductViewer(QWidget):
             print("[HOLE POINT] No detected hole axis at this location.")
             return None
         spray_direction = np.asarray(hole["axis_world"], dtype=np.float64).copy()
-        toward_bore = np.asarray(hole["center_world"], dtype=np.float64) - surface_point
-        if float(np.dot(spray_direction, toward_bore)) < 0.0:
+        # The bore axis may be stored with either sign. The operator/camera
+        # side defines the entrance: spray must point away from the camera,
+        # from the opening toward the far side of the hole.
+        camera_to_entrance = camera_position - surface_point
+        if float(np.dot(spray_direction, camera_to_entrance)) > 0.0:
             spray_direction = -spray_direction
         spray_direction /= max(float(np.linalg.norm(spray_direction)), 1e-12)
         normal_world = -spray_direction
@@ -6994,7 +6997,16 @@ class ProductViewer(QWidget):
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_hole_opening_pose(x, y)
         if pose is not None:
+            self._interactive_hole_entry_point_world = np.asarray(
+                pose["surface_point_world"], dtype=np.float64
+            ).copy()
+            self._interactive_hole_entry_axis_world = np.asarray(
+                pose["spray_direction_world"], dtype=np.float64
+            ).copy()
             self._interactive_update_cursor(pose)
+        else:
+            self._interactive_hole_entry_point_world = None
+            self._interactive_hole_entry_axis_world = None
         return True
 
     def is_hole_circle_mode(self):
@@ -7543,29 +7555,64 @@ class ProductViewer(QWidget):
             return 0
 
         nozzle = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
-        direction = np.asarray(pose["spray_direction_world"], dtype=np.float64)
+        direction = np.asarray(
+            getattr(self, "_interactive_hole_entry_axis_world", None)
+            if getattr(self, "_interactive_hole_entry_axis_world", None) is not None
+            else pose["spray_direction_world"],
+            dtype=np.float64,
+        )
         direction_length = float(np.linalg.norm(direction))
         if direction_length <= 1e-12:
             print("[HOLE POINT] Invalid spray direction.")
             return 0
         direction /= direction_length
 
-        # Check the complete sprayer envelope at the exact inserted position.
-        _, gun_polydata = self._interactive_build_gun_visual(
-            nozzle, direction, render=False
-        )
-        if self._interactive_check_gun_collision(gun_polydata):
-            print(
-                "[HOLE POINT] Sprayer collides with the product. "
-                "Adjust insertion depth with the wheel and double-click again."
-            )
+        entry = getattr(self, "_interactive_hole_entry_point_world", None)
+        if entry is None:
+            print("[HOLE POINT] Hole entrance is not set. Press H over the hole opening.")
+            return 0
+        entry = np.asarray(entry, dtype=np.float64)
+        segment = nozzle - entry
+        segment_length = float(np.linalg.norm(segment))
+        if segment_length <= 1e-8:
+            print("[HOLE POINT] Insert the nozzle into the hole before pressing G.")
+            return 0
+        # The recorded trajectory is a straight centreline from the entrance
+        # to the exact G-key position. Every sample keeps the same inward bore
+        # direction, so its orientation is visibly consistent along the line.
+        if float(np.dot(segment, direction)) < 0.0:
+            print("[HOLE POINT] Current nozzle position is not inside the hole.")
             return 0
 
-        committed_pose = {
-            key: (value.copy() if isinstance(value, np.ndarray) else value)
-            for key, value in pose.items()
-        }
-        committed_pose["timestamp"] = time.monotonic()
+        spacing = max(float(self._interactive_spray_sampling_spacing), 1e-6)
+        count = max(2, int(math.ceil(segment_length / spacing)) + 1)
+        standoff = float(np.linalg.norm(
+            np.asarray(pose["surface_point_world"], dtype=np.float64) - nozzle
+        ))
+        poses = []
+        for index in range(count):
+            fraction = float(index) / float(count - 1)
+            sample_nozzle = entry + segment * fraction
+            sample_pose = {
+                "nozzle_point_world": sample_nozzle.copy(),
+                "surface_point_world": sample_nozzle + direction * standoff,
+                "surface_normal_world": -direction.copy(),
+                "spray_direction_world": direction.copy(),
+                "cell_id": int(pose.get("cell_id", -1)),
+                "paintable": True,
+                "timestamp": time.monotonic(),
+            }
+            _, gun_polydata = self._interactive_build_gun_visual(
+                sample_nozzle, direction, render=False
+            )
+            if self._interactive_check_gun_collision(gun_polydata):
+                print(
+                    f"[HOLE POINT] Straight path blocked at sample {index + 1}/{count}. "
+                    "Move the insertion point or choose another hole."
+                )
+                return 0
+            poses.append(sample_pose)
+
         group_id = max(
             [int(item.get("group_id", 0)) for item in self._interactive_spray_records],
             default=0,
@@ -7576,14 +7623,17 @@ class ProductViewer(QWidget):
         ) + 1
         self._interactive_spray_stroke_id = stroke_id
         self._interactive_spray_start_timestamp = None
-        local_pose = self._interactive_pose_to_product_frame(committed_pose)
-        self._interactive_store_record_sample(
-            {**committed_pose, "group_id": group_id}, local_pose
-        )
+        for sample_pose in poses:
+            local_pose = self._interactive_pose_to_product_frame(sample_pose)
+            self._interactive_store_record_sample(
+                {**sample_pose, "group_id": group_id}, local_pose
+            )
 
         self._interactive_cancel_hole_circle_gesture()
         if not keep_h_mode:
             self._interactive_hole_circle_mode = False
+            self._interactive_hole_entry_point_world = None
+            self._interactive_hole_entry_axis_world = None
         self._interactive_recorded_replay_timing = None
         self._refresh_interactive_recorded_path_actor()
         self._optimize_interactive_recorded_path()
@@ -8900,6 +8950,8 @@ class ProductViewer(QWidget):
                 # Double-click exits H mode; G is the only point-registration key.
                 self._interactive_cancel_hole_circle_gesture()
                 self._interactive_hole_circle_mode = False
+                self._interactive_hole_entry_point_world = None
+                self._interactive_hole_entry_axis_world = None
                 self._update_interaction_mode_indicators("paint")
                 self.plotter.render()
                 return True
