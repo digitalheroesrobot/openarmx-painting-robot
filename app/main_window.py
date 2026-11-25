@@ -1504,6 +1504,10 @@ class MainWindow(QMainWindow):
         self.start_analysis_button.setObjectName(
             "PrimaryButton"
         )
+        # Space normally activates a focused QPushButton. This workflow
+        # action must not steal the 3D viewer's Space-bar spray-mode command.
+        # Mouse activation remains available.
+        self.start_analysis_button.setFocusPolicy(Qt.NoFocus)
         self.start_analysis_button.clicked.connect(
             self._handle_active_stage_action
         )
