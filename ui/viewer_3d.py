@@ -6962,6 +6962,14 @@ class ProductViewer(QWidget):
             print("[HOLE POINT] No detected hole axis at this location.")
             return None
         spray_direction = np.asarray(hole["axis_world"], dtype=np.float64).copy()
+        # Project the detected bore-axis centre onto the selected entrance
+        # plane. This gives the geometric centre of the opening, independent
+        # of where the mouse pointer happened to hit that plane.
+        hole_center = np.asarray(hole["center_world"], dtype=np.float64)
+        opening_offset = float(np.dot(
+            surface_point - hole_center, spray_direction
+        ))
+        opening_center = hole_center + spray_direction * opening_offset
         # The bore axis may be stored with either sign. The operator/camera
         # side defines the entrance: spray must point away from the camera,
         # from the opening toward the far side of the hole.
@@ -6972,6 +6980,7 @@ class ProductViewer(QWidget):
         normal_world = -spray_direction
         return {
             "surface_point_world": surface_point.copy(),
+            "opening_center_world": opening_center.copy(),
             "surface_normal_world": normal_world.copy(),
             "nozzle_point_world": (
                 surface_point - spray_direction * self._interactive_spray_standoff
@@ -7001,7 +7010,7 @@ class ProductViewer(QWidget):
         pose = self._interactive_pick_hole_opening_pose(x, y)
         if pose is not None:
             self._interactive_hole_entry_point_world = np.asarray(
-                pose["surface_point_world"], dtype=np.float64
+                pose["opening_center_world"], dtype=np.float64
             ).copy()
             self._interactive_hole_entry_axis_world = np.asarray(
                 pose["spray_direction_world"], dtype=np.float64
