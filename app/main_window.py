@@ -4608,7 +4608,7 @@ class MainWindow(QMainWindow):
         self._show_interactive_route_summary(route)
         self._refresh_recorded_spray_path_panel()
         self.status_bar.showMessage(
-            f"SPRAY GROUP {group_id} DELETED · REMAINING GROUPS RENumbered"
+            f"SPRAY GROUP {group_id} DELETED · REMAINING GROUPS RENUMBERED"
         )
 
     def _on_recorded_spray_groups_reordered(self):
