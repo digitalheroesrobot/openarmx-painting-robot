@@ -8012,15 +8012,21 @@ class ProductViewer(QWidget):
     
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y)
-        if pose is None:
-            # In H-key hole-insertion mode, the pointer is expected to move
-            # over empty mesh space as the nozzle enters the bore. A failed
-            # surface pick is therefore not a request to hide the sprayer:
-            # keep the last valid face-normal pose and its live actors so the
-            # wheel can continue advancing/retracting the nozzle.
-            if self._interactive_hole_circle_mode:
-                self.plotter.render()
+        if pose is None and self._interactive_hole_circle_mode:
+            # Over an empty bore there is no mesh triangle to pick. Intersect
+            # the pointer ray with the product bounding box instead, then use
+            # that box-face normal as the nozzle axis. The resulting nozzle
+            # centreline necessarily meets the box face perpendicularly, so
+            # the sprayer remains visible while it is moved into the opening.
+            pose = self._interactive_pick_hole_opening_pose(x, y)
+            if pose is not None:
+                self._interactive_update_cursor(pose)
                 return
+            # If the pointer ray cannot reach the box, retain the last valid
+            # pose and live actors rather than making the sprayer disappear.
+            self.plotter.render()
+            return
+        if pose is None:
             self._interactive_remove_live_actors()
             self._interactive_spray_latest_pose = None
             self._interactive_update_surface_angle_indicator(None)
