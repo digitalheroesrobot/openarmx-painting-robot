@@ -493,6 +493,9 @@ class ProductViewer(QWidget):
         self._interactive_spray_edit_gun_actors = []
         self._interactive_spray_edit_marker_actor = None
         self._interactive_spray_point_drag_state = None
+        self._interactive_point_edit_saved_style = None
+        self._interactive_point_edit_saved_style_enabled = False
+        self._interactive_point_edit_input_style = None
         self._interactive_recorded_replay_timer = QTimer(self)
         self._interactive_recorded_replay_timer.setInterval(40)
         self._interactive_recorded_replay_timer.timeout.connect(
@@ -4141,6 +4144,7 @@ class ProductViewer(QWidget):
         self._interactive_selected_spray_point_index = None
         self._interactive_spray_point_drag_state = None
         self._interactive_remove_selected_point_visuals()
+        self._interactive_end_point_edit_mode()
 
         # Route editing is additive. Preserve the optimized route and the
         # accumulated wet-film state so the operator can see what has already
@@ -6847,6 +6851,29 @@ class ProductViewer(QWidget):
             "paintable": True,
         }
 
+    def _interactive_begin_point_edit_mode(self):
+        if self._interactive_point_edit_saved_style is not None:
+            return
+        interactor = self.plotter.iren.interactor
+        current_style = interactor.GetInteractorStyle()
+        self._interactive_point_edit_saved_style = current_style
+        self._interactive_point_edit_saved_style_enabled = bool(
+            current_style.GetEnabled()
+        ) if current_style is not None else False
+        self._interactive_point_edit_input_style = vtkInteractorStyleUser()
+        interactor.SetInteractorStyle(self._interactive_point_edit_input_style)
+        self._interactive_point_edit_input_style.SetEnabled(1)
+
+    def _interactive_end_point_edit_mode(self):
+        saved_style = self._interactive_point_edit_saved_style
+        if saved_style is None:
+            return
+        interactor = self.plotter.iren.interactor
+        interactor.SetInteractorStyle(saved_style)
+        saved_style.SetEnabled(1 if self._interactive_point_edit_saved_style_enabled else 0)
+        self._interactive_point_edit_saved_style = None
+        self._interactive_point_edit_input_style = None
+
     def _interactive_remove_selected_point_visuals(self):
         for actor in getattr(self, "_interactive_spray_edit_gun_actors", []):
             try:
@@ -6970,13 +6997,22 @@ class ProductViewer(QWidget):
         picker.AddPickList(actor)
         picker.PickFromListOn()
         if not picker.Pick(int(x), int(y), 0, self.plotter.renderer):
+            self._interactive_selected_spray_point_index = None
+            self._interactive_spray_point_drag_state = None
+            self._interactive_remove_selected_point_visuals()
+            self._interactive_end_point_edit_mode()
             return
         if picker.GetActor() != actor:
+            self._interactive_selected_spray_point_index = None
+            self._interactive_spray_point_drag_state = None
+            self._interactive_remove_selected_point_visuals()
+            self._interactive_end_point_edit_mode()
             return
         point_index = int(picker.GetPointId())
         if point_index < 0 or point_index >= len(self._interactive_spray_records):
             return
         self._interactive_selected_spray_point_index = point_index
+        self._interactive_begin_point_edit_mode()
         record = self._interactive_spray_records[point_index]
         pose = self._interactive_record_pose_for_edit(record)
         direction = pose["spray_direction_world"]
@@ -7053,6 +7089,7 @@ class ProductViewer(QWidget):
             self._interactive_spray_angle_y_deg = 0.0
             pose["angle_pivot_world"] = pose["surface_point_world"].copy()
             self._interactive_spray_angle_anchor_pose = pose
+            self._interactive_begin_point_edit_mode()
             self._interactive_spray_angle_dragging = True
             self._interactive_spray_angle_last_position = tuple(
                 int(value) for value in interactor.GetEventPosition()
