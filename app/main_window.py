@@ -1540,8 +1540,9 @@ class MainWindow(QMainWindow):
         self.hole_circle_button = QPushButton("DRAW HOLE CIRCLE")
         self.hole_circle_button.setObjectName("SecondaryButton")
         self.hole_circle_button.setToolTip(
-            "After inserting the sprayer into a detected hole with the mouse wheel, "
-            "draw a circular interior spray path with the left mouse button."
+            "Press H to show the sprayer perpendicular to the face under the cursor. "
+            "Use the mouse wheel to insert/retract it, then left-drag to draw the "
+            "hole's circular perimeter. Double-click to exit hole-circle mode."
         )
         self.hole_circle_button.clicked.connect(self._toggle_hole_circle_mode)
         self.hole_circle_button.hide()
