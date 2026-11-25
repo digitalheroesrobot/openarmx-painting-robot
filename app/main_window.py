@@ -4410,7 +4410,22 @@ class MainWindow(QMainWindow):
         total_text = (
             f"TOTAL SPRAY LENGTH: {total_distance:.1f} mm\n"
             f"TOTAL EXECUTION TIME: {self.viewer._format_route_time(total_duration)}"
-                 item.setSizeHint(QSize(350, 62))
+        )
+
+        self._recorded_spray_list_updating = True
+        try:
+            list_widget = self.recorded_spray_group_list
+            empty_label = self.recorded_spray_path_empty_label
+            total_label = self.recorded_spray_path_total_label
+            list_widget.clear()
+            empty_label.setVisible(not metrics)
+            list_widget.setVisible(bool(metrics))
+            total_label.setText(total_text)
+
+            for index, metric in enumerate(metrics, start=1):
+                item = QListWidgetItem()
+                item.setData(Qt.UserRole, int(metric["group_id"]))
+                item.setSizeHint(QSize(350, 62))
                 list_widget.addItem(item)
 
                 row = QWidget()
@@ -4468,7 +4483,7 @@ class MainWindow(QMainWindow):
                 metrics_label.setObjectName("SprayGroupMetrics")
                 metrics_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 metrics_label.setToolTip(
-                    f"Spray length: {metric['distance_mm']:.1f} mm\\n"
+                    f"Spray length: {metric['distance_mm']:.1f} mm\n"
                     f"Spray time: {self.viewer._format_route_time(metric['duration_s'])}"
                 )
                 row_layout.addWidget(metrics_label)
@@ -4496,22 +4511,6 @@ class MainWindow(QMainWindow):
                     "}"
                     "QPushButton:pressed {"
                     " background-color: #352027;"
-                    "}"
-                )
-e_button.setStyleSheet(
-                    "QPushButton {"
-                    " background-color: #5A1E24;"
-                    " color: #FFE8EA;"
-                    " border: 1px solid #FF5252;"
-                    " border-radius: 4px;"
-                    " font-weight: bold;"
-                    " padding: 3px 6px;"
-                    "}"
-                    "QPushButton:hover {"
-                    " background-color: #7A2931;"
-                    "}"
-                    "QPushButton:pressed {"
-                    " background-color: #40151A;"
                     "}"
                 )
                 delete_button.setToolTip(
