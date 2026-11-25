@@ -3143,7 +3143,7 @@ class MainWindow(QMainWindow):
         )
         self.route_next_button.setEnabled(
             route_page and route_exists and not recording
-            and not self._operation_running
+            and not self._operation_running and not self._simulation_loading
         )
         if route_page and route_exists and not recording:
             self.route_next_button.show()
