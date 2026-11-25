@@ -2265,8 +2265,8 @@ class ProductViewer(QWidget):
                 )
                 actor = self.plotter.add_mesh(
                     arrow_actor,
-                    color="#D9E7C3",
-                    opacity=0.32,
+                    color="#00E5FF",
+                    opacity=0.92,
                     lighting=False,
                     pickable=False,
                 )
@@ -7639,8 +7639,8 @@ class ProductViewer(QWidget):
         self._optimize_interactive_recorded_path()
         self.spray_samples_changed.emit()
         print(
-            f"[HOLE POINT] One spray point recorded. "
-            f"Group={group_id}, nozzle={nozzle.tolist()}"
+            f"[HOLE POINT] Straight entrance-to-depth path recorded. "
+            f"Samples={len(poses)}, Group={group_id}, end={nozzle.tolist()}"
         )
         return 1
 
