@@ -7040,6 +7040,9 @@ class ProductViewer(QWidget):
         point = np.asarray(point_world, dtype=np.float64)
         best = None
         best_distance = float("inf")
+        nearest = None
+        nearest_score = float("inf")
+        tolerance = max(float(self._interactive_mesh_diagonal) * 1e-4, 1e-3)
         for item in candidates:
             try:
                 center_local = np.asarray(
@@ -7058,27 +7061,36 @@ class ProductViewer(QWidget):
                 axial = float(np.dot(delta, axis_world))
                 radial = delta - axial * axis_world
                 distance = float(np.linalg.norm(radial))
-                try:
-                    hole_length = abs(float(item["hole_length_coordinate_units"]))
-                    hole_radius = abs(float(item["diameter_coordinate_units"])) * 0.5
-                except (KeyError, TypeError, ValueError):
-                    continue
-                tolerance = max(float(self._interactive_mesh_diagonal) * 1e-4, 1e-3)
-                if abs(axial) > hole_length + tolerance:
-                    continue
-                if distance > hole_radius + tolerance:
-                    continue
-                if distance < best_distance:
-                    best_distance = distance
-                    best = {
-                        "item": item,
-                        "center_world": center_world,
-                        "axis_world": axis_world,
-                        "radial_distance": distance,
-                    }
+                hole_length = abs(float(item["hole_length_coordinate_units"]))
+                hole_radius = abs(float(item["diameter_coordinate_units"])) * 0.5
+
+                candidate = {
+                    "item": item,
+                    "center_world": center_world,
+                    "axis_world": axis_world,
+                    "radial_distance": distance,
+                }
+                # Prefer a bore that actually contains the nozzle. If the
+                # nozzle is just beyond the detected bore's measured bounds,
+                # retain the nearest finite-bore candidate instead of
+                # rejecting the mouse gesture without any visual feedback.
+                if (
+                    abs(axial) <= hole_length + tolerance
+                    and distance <= hole_radius + tolerance
+                ):
+                    if distance < best_distance:
+                        best_distance = distance
+                        best = candidate
+
+                radial_gap = max(0.0, distance - hole_radius)
+                axial_gap = max(0.0, abs(axial) - hole_length)
+                score = math.hypot(radial_gap, axial_gap)
+                if score < nearest_score:
+                    nearest_score = score
+                    nearest = candidate
             except (KeyError, TypeError, ValueError):
                 continue
-        return best
+        return best if best is not None else nearest
 
     @staticmethod
     def _interactive_circle_basis(axis_world):
@@ -7312,6 +7324,20 @@ class ProductViewer(QWidget):
             self._interactive_hole_circle_last_angle = angle
             self._interactive_hole_circle_total_angle = 0.0
             self._interactive_hole_circle_raw_angles = [angle]
+            # Show immediate green feedback as soon as the radius is known.
+            # Previously the preview was not built until a later angular
+            # movement, so a valid press-and-drag could look completely inert.
+            preview_angles = np.linspace(angle, angle + math.radians(8.0), 8)
+            self._interactive_hole_circle_preview_points = [
+                center + length * (
+                    math.cos(float(sample_angle)) * u
+                    + math.sin(float(sample_angle)) * v
+                )
+                for sample_angle in preview_angles
+            ]
+            self._interactive_hole_circle_preview_invalid = []
+            self._interactive_update_hole_circle_preview()
+            self.plotter.render()
             return
 
         angle = math.atan2(float(np.dot(radial, v)), float(np.dot(radial, u)))
