@@ -72,9 +72,29 @@ class ReorderableSprayGroupList(QListWidget):
         self.setDragDropOverwriteMode(False)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setAlternatingRowColors(False)
-        self.setSpacing(4)
+        self.setSpacing(7)
         self.setMinimumHeight(90)
-        self.setMaximumHeight(280)
+        self.setMaximumHeight(320)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setContentsMargins(2, 2, 2, 2)
+        self.setStyleSheet(
+            "QListWidget {"
+            " background: transparent;"
+            " border: none;"
+            " outline: none;"
+            "}"
+            "QListWidget::item {"
+            " background: transparent;"
+            " border: none;"
+            " padding: 0px;"
+            "}"
+            "QListWidget::item:selected {"
+            " background: transparent;"
+            "}"
+            "QListWidget::item:focus {"
+            " outline: none;"
+            "}"
+        )
 
     def dropEvent(self, event):
         super().dropEvent(event)
@@ -4390,58 +4410,95 @@ class MainWindow(QMainWindow):
         total_text = (
             f"TOTAL SPRAY LENGTH: {total_distance:.1f} mm\n"
             f"TOTAL EXECUTION TIME: {self.viewer._format_route_time(total_duration)}"
-        )
-
-        self._recorded_spray_list_updating = True
-        try:
-            list_widget = self.recorded_spray_group_list
-            empty_label = self.recorded_spray_path_empty_label
-            total_label = self.recorded_spray_path_total_label
-            list_widget.clear()
-            empty_label.setVisible(not metrics)
-            list_widget.setVisible(bool(metrics))
-            total_label.setText(total_text)
-
-            for index, metric in enumerate(metrics, start=1):
-                item = QListWidgetItem()
-                item.setData(Qt.UserRole, int(metric["group_id"]))
-                item.setSizeHint(QSize(350, 72))
+                 item.setSizeHint(QSize(350, 62))
                 list_widget.addItem(item)
 
                 row = QWidget()
+                row.setObjectName("SprayGroupRow")
+                row.setAttribute(Qt.WA_StyledBackground, True)
+                row.setStyleSheet(
+                    "QWidget#SprayGroupRow {"
+                    " background-color: #202A35;"
+                    " border: 1px solid #354454;"
+                    " border-radius: 8px;"
+                    "}"
+                    "QLabel#SprayGroupOrder {"
+                    " color: #AFC8E2;"
+                    " background-color: #30465C;"
+                    " border: 1px solid #48647F;"
+                    " border-radius: 5px;"
+                    " font-size: 11px;"
+                    " font-weight: 700;"
+                    "}"
+                    "QLabel#SprayGroupName {"
+                    " color: #F0F4F8;"
+                    " font-size: 12px;"
+                    " font-weight: 700;"
+                    "}"
+                    "QLabel#SprayGroupMetrics {"
+                    " color: #B8C6D4;"
+                    " font-size: 11px;"
+                    "}"
+                )
                 row_layout = QHBoxLayout(row)
-                row_layout.setContentsMargins(8, 5, 8, 5)
-                row_layout.setSpacing(8)
+                row_layout.setContentsMargins(10, 6, 9, 6)
+                row_layout.setSpacing(9)
 
-                drag_handle = QLabel("⋮⋮")
+                drag_handle = QLabel("⠿")
                 drag_handle.setObjectName("Muted")
+                drag_handle.setFixedWidth(13)
+                drag_handle.setAlignment(Qt.AlignCenter)
+                drag_handle.setToolTip("Drag to reorder this spray group")
                 row_layout.addWidget(drag_handle)
 
                 order_label = QLabel(f"{index:02d}")
-                order_label.setObjectName("MetricValue")
-                order_label.setFixedWidth(22)
+                order_label.setObjectName("SprayGroupOrder")
+                order_label.setAlignment(Qt.AlignCenter)
+                order_label.setFixedSize(28, 28)
                 row_layout.addWidget(order_label)
 
                 group_label = QLabel(f"SPRAY GROUP {index}")
-                group_label.setObjectName("SectionTitle")
+                group_label.setObjectName("SprayGroupName")
                 row_layout.addWidget(group_label, 1)
 
                 metrics_label = QLabel(
-                    f"LENGTH  {metric['distance_mm']:.1f} mm\n"
-                    f"TIME  {self.viewer._format_route_time(metric['duration_s'])}"
+                    f"{metric['distance_mm']:.1f} mm"
+                    f"   ·   {self.viewer._format_route_time(metric['duration_s'])}"
                 )
-                metrics_label.setObjectName("MetricValue")
+                metrics_label.setObjectName("SprayGroupMetrics")
                 metrics_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                metrics_label.setToolTip(
+                    f"Spray length: {metric['distance_mm']:.1f} mm\\n"
+                    f"Spray time: {self.viewer._format_route_time(metric['duration_s'])}"
+                )
                 row_layout.addWidget(metrics_label)
 
                 delete_button = QPushButton("DELETE")
-                delete_button.setFixedWidth(72)
-                delete_button.setFixedHeight(34)
+                delete_button.setFixedSize(62, 30)
                 delete_button.setSizePolicy(
                     QSizePolicy.Fixed,
                     QSizePolicy.Fixed,
                 )
                 delete_button.setStyleSheet(
+                    "QPushButton {"
+                    " background-color: #442A30;"
+                    " color: #F2B8C0;"
+                    " border: 1px solid #76505A;"
+                    " border-radius: 6px;"
+                    " font-size: 10px;"
+                    " font-weight: 700;"
+                    " padding: 2px 5px;"
+                    "}"
+                    "QPushButton:hover {"
+                    " background-color: #69343E;"
+                    " color: #FFFFFF;"
+                    " border: 1px solid #C47783;"
+                    "}"
+                    "QPushButton:pressed {"
+                    " background-color: #352027;"
+                    "}"
+                )
+e_button.setStyleSheet(
                     "QPushButton {"
                     " background-color: #5A1E24;"
                     " color: #FFE8EA;"
