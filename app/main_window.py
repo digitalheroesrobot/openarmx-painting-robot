@@ -3174,9 +3174,12 @@ class MainWindow(QMainWindow):
         # Keep an entry point available after every recorded group has
         # been deleted. In that state this action starts a fresh route rather
         # than trying to resume a route that no longer exists.
-        has_recorded_groups = bool(getattr(
-            self.viewer, "_interactive_spray_records", []
-        ))
+        has_recorded_groups = any(
+            isinstance(record, dict) and not record.get("_stroke_break")
+            for record in (
+                getattr(self.viewer, "_interactive_spray_records", []) or []
+            )
+        )
         self.route_edit_button.setText(
             "ADD TO EXISTING ROUTE"
             if route_exists or has_recorded_groups
