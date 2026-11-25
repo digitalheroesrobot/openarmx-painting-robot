@@ -4553,21 +4553,37 @@ class MainWindow(QMainWindow):
         self.viewer.set_recorded_path_page("route")
         self._refresh_recorded_spray_path_panel()
 
-        # IMPORTANT: start the new recording session BEFORE refreshing the
-        # workflow UI for the final time. This guarantees the viewport is
-        # actually in an active interactive session, and start directly in
-        # SPRAY MODE rather than waiting for SPACE.
+        # Re-enter the route-generation viewport according to what remains:
+        #
+        # 1. Remaining groups exist:
+        #    Keep the current spray-mode editing state active so the operator
+        #    can immediately draw the replacement group. Do not change the
+        #    viewing mode again.
+        #
+        # 2. No groups remain:
+        #    There is no recorded spray path to preserve. Start a fresh
+        #    interactive session in CAMERA mode so the operator gets the
+        #    normal route-generation view automatically.
+        start_in_spray_mode = bool(remaining_records)
+
         self._start_interactive_spray_path(
             resume_existing=bool(remaining_records),
-            start_in_spray_mode=True,
+            start_in_spray_mode=start_in_spray_mode,
         )
 
         self._refresh_recorded_spray_path_panel()
         self._refresh_workflow_ui()
-        self.status_bar.showMessage(
-            f"SPRAY GROUP {group_id} DELETED · SPRAY MODE ACTIVE · "
-            "DRAW THE REPLACEMENT GROUP"
-        )
+
+        if remaining_records:
+            self.status_bar.showMessage(
+                f"SPRAY GROUP {group_id} DELETED · SPRAY MODE ACTIVE · "
+                "DRAW THE REPLACEMENT GROUP"
+            )
+        else:
+            self.status_bar.showMessage(
+                f"SPRAY GROUP {group_id} DELETED · NO SPRAY GROUPS REMAIN · "
+                "CAMERA VIEW ACTIVE"
+            )
 
     def _on_recorded_spray_groups_reordered(self):
         """Apply the visible list order to the actual route records and replay."""
