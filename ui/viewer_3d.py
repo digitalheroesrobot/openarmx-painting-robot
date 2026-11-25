@@ -7679,7 +7679,9 @@ class ProductViewer(QWidget):
             return
 
         # End any in-progress paint gesture before handing input back to the
-        # normal camera interactor style.
+        # normal camera interactor style. Do not discard its route control poses.
+        if getattr(self, "_interactive_route_generation_only", False):
+            self._interactive_queue_route_stroke_input()
         self._interactive_spray_recording = False
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
@@ -7699,6 +7701,39 @@ class ProductViewer(QWidget):
         self._interactive_spray_latest_pose = None
         self._interactive_update_surface_angle_indicator(None)
         self.plotter.render()
+
+    def _interactive_queue_route_stroke_input(self):
+        """Preserve the current raw route stroke before input is interrupted."""
+        raw_stroke = list(
+            getattr(self, "_interactive_spray_stroke_input_poses", [])
+        )
+        if raw_stroke:
+            pending = getattr(self, "_interactive_pending_spray_strokes", None)
+            if pending is None:
+                pending = []
+                self._interactive_pending_spray_strokes = pending
+            pending.append(raw_stroke)
+            self._interactive_route_undo_stack.append(copy.deepcopy(raw_stroke))
+
+        self._interactive_spray_stroke_input_poses = []
+        self.spray_samples_changed.emit()
+
+        # Keep the preview visible as a completed stroke until FINISH builds
+        # the exact fixed-spacing route samples.
+        preview_actor = getattr(
+            self, "_interactive_spray_stroke_preview_actor", None
+        )
+        if preview_actor is not None:
+            completed = getattr(
+                self, "_interactive_completed_stroke_preview_actors", None
+            )
+            if completed is None:
+                completed = []
+                self._interactive_completed_stroke_preview_actors = completed
+            completed.append(preview_actor)
+            self._interactive_spray_stroke_preview_actor = None
+
+        return len(raw_stroke)
 
     def _on_interactive_spray_left_release(self, interactor, event):
         if (
@@ -7736,33 +7771,7 @@ class ProductViewer(QWidget):
 
         self._interactive_spray_recording = False
         if route_only:
-            raw_stroke = list(
-                getattr(self, "_interactive_spray_stroke_input_poses", [])
-            )
-            if raw_stroke:
-                pending = getattr(self, "_interactive_pending_spray_strokes", None)
-                if pending is None:
-                    pending = []
-                    self._interactive_pending_spray_strokes = pending
-                pending.append(raw_stroke)
-                self._interactive_route_undo_stack.append(copy.deepcopy(raw_stroke))
-            self._interactive_spray_stroke_input_poses = []
-            self.spray_samples_changed.emit()
-
-            # Promote the current live preview to a completed preview. It stays
-            # visible while the operator draws subsequent independent strokes.
-            preview_actor = getattr(
-                self, "_interactive_spray_stroke_preview_actor", None
-            )
-            if preview_actor is not None:
-                completed = getattr(
-                    self, "_interactive_completed_stroke_preview_actors", None
-                )
-                if completed is None:
-                    completed = []
-                    self._interactive_completed_stroke_preview_actors = completed
-                completed.append(preview_actor)
-                self._interactive_spray_stroke_preview_actor = None
+            self._interactive_queue_route_stroke_input()
 
         self._interactive_spray_last_deposition_timestamp = None
         self._interactive_spray_previous_nozzle_world = None
@@ -7790,10 +7799,14 @@ class ProductViewer(QWidget):
         # Never keep spraying after the pointer leaves the 3D viewport.
         if not self._interactive_spray_active:
             return
-        self._interactive_spray_recording = False
         if getattr(self, "_interactive_route_generation_only", False):
-            self._interactive_spray_stroke_input_poses = []
+            # VTK may deliver Leave before the matching mouse-release event
+            # when the operator finishes a drag at the viewport boundary.
+            # Queue the captured stroke instead of silently throwing it away.
+            if self._interactive_spray_recording:
+                self._interactive_queue_route_stroke_input()
             self._interactive_remove_stroke_preview()
+        self._interactive_spray_recording = False
 
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
