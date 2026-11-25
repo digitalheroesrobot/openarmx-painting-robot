@@ -6917,6 +6917,16 @@ class ProductViewer(QWidget):
                 axial = float(np.dot(delta, axis_world))
                 radial = delta - axial * axis_world
                 distance = float(np.linalg.norm(radial))
+                try:
+                    hole_length = abs(float(item["hole_length_coordinate_units"]))
+                    hole_radius = abs(float(item["diameter_coordinate_units"])) * 0.5
+                except (KeyError, TypeError, ValueError):
+                    continue
+                tolerance = max(float(self._interactive_mesh_diagonal) * 1e-4, 1e-3)
+                if abs(axial) > hole_length + tolerance:
+                    continue
+                if distance > hole_radius + tolerance:
+                    continue
                 if distance < best_distance:
                     best_distance = distance
                     best = {
@@ -7145,11 +7155,15 @@ class ProductViewer(QWidget):
         self._interactive_hole_circle_raw_angles.append(angle)
 
         total = self._interactive_hole_circle_total_angle
-        sample_count = max(
-            int(abs(total) * max(self._interactive_hole_circle_radius, 1.0)
-                / max(float(self._interactive_spray_sampling_spacing), 1e-6)),
+        # Preview is deliberately sparse so the cursor never freezes while
+        # the operator is drawing. FINISH performs the complete collision
+        # check at the configured fixed spatial spacing.
+        sample_count = int(np.clip(
+            abs(total) * max(self._interactive_hole_circle_radius, 1.0)
+            / max(float(self._interactive_spray_sampling_spacing), 1e-6),
             8,
-        )
+            24,
+        ))
         preview_angles = np.linspace(
             self._interactive_hole_circle_start_angle,
             self._interactive_hole_circle_start_angle + total,
