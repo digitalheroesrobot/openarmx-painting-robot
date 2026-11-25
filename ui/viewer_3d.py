@@ -7026,9 +7026,12 @@ class ProductViewer(QWidget):
 
     def _on_interactive_spray_middle_press(self, interactor, event):
         """Begin a middle-button drag to tilt the spray axis."""
-        if self._interactive_is_postfinish_point_editing():
+        if (
+            self._interactive_is_postfinish_point_editing()
+            and self._interactive_selected_spray_point_index is not None
+        ):
             index = self._interactive_selected_spray_point_index
-            if index is None or index < 0 or index >= len(self._interactive_spray_records):
+            if index < 0 or index >= len(self._interactive_spray_records):
                 return
             pose = self._interactive_record_pose_for_edit(self._interactive_spray_records[index])
             distance_source = float(np.linalg.norm(
@@ -7232,7 +7235,11 @@ class ProductViewer(QWidget):
         maximum limits. The current cursor pose is recomputed immediately,
         so the nozzle moves even when the mouse cursor itself is stationary.
         """
-        editing_selected_point = self._interactive_is_postfinish_point_editing()
+        editing_selected_point = bool(
+            self._interactive_is_postfinish_point_editing()
+            and self._interactive_selected_spray_point_index is not None
+            and 0 <= self._interactive_selected_spray_point_index < len(self._interactive_spray_records)
+        )
         if not editing_selected_point and (
             not self._interactive_spray_active
             or self._interactive_spray_mode != "spray"
