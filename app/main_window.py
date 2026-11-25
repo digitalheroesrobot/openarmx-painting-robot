@@ -4391,7 +4391,7 @@ class MainWindow(QMainWindow):
             for index, metric in enumerate(metrics, start=1):
                 item = QListWidgetItem()
                 item.setData(Qt.UserRole, int(metric["group_id"]))
-                item.setSizeHint(QSize(420, 58))
+                item.setSizeHint(QSize(350, 72))
                 list_widget.addItem(item)
 
                 row = QWidget()
@@ -4421,8 +4421,28 @@ class MainWindow(QMainWindow):
                 row_layout.addWidget(metrics_label)
 
                 delete_button = QPushButton("DELETE")
-                delete_button.setFixedWidth(64)
-                delete_button.setFixedHeight(32)
+                delete_button.setFixedWidth(72)
+                delete_button.setFixedHeight(34)
+                delete_button.setSizePolicy(
+                    QSizePolicy.Fixed,
+                    QSizePolicy.Fixed,
+                )
+                delete_button.setStyleSheet(
+                    "QPushButton {"
+                    " background-color: #5A1E24;"
+                    " color: #FFE8EA;"
+                    " border: 1px solid #FF5252;"
+                    " border-radius: 4px;"
+                    " font-weight: bold;"
+                    " padding: 3px 6px;"
+                    "}"
+                    "QPushButton:hover {"
+                    " background-color: #7A2931;"
+                    "}"
+                    "QPushButton:pressed {"
+                    " background-color: #40151A;"
+                    "}"
+                )
                 delete_button.setToolTip(
                     f"Delete SPRAY GROUP {index}"
                 )
@@ -4430,16 +4450,49 @@ class MainWindow(QMainWindow):
                 group_id = int(metric["group_id"])
                 delete_button.clicked.connect(
                     lambda checked=False, gid=group_id:
-                        self._delete_recorded_spray_group(gid)
+                        self._confirm_delete_recorded_spray_group(gid)
                 )
-                row_layout.addWidget(delete_button)
+                row_layout.addWidget(
+                    delete_button,
+                    0,
+                    Qt.AlignRight | Qt.AlignVCenter,
+                )
 
                 list_widget.setItemWidget(item, row)
         finally:
             self._recorded_spray_list_updating = False
 
+    def _confirm_delete_recorded_spray_group(self, group_id):
+        """Ask for confirmation before removing one recorded spray group."""
+        if self._recorded_spray_list_updating or self._operation_running:
+            return
+
+        try:
+            group_id = int(group_id)
+        except (TypeError, ValueError):
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "DELETE SPRAY GROUP",
+            (
+                f"Delete SPRAY GROUP {group_id}?\n\n"
+                "The selected spray group will be removed. "
+                "The remaining groups will be renumbered.\n\n"
+                "The current generated spray route will be invalidated "
+                "and the application will return to SPRAY MODE so you can "
+                "draw the replacement stroke."
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        self._delete_recorded_spray_group(group_id)
+
     def _delete_recorded_spray_group(self, group_id):
-        """Delete one recorded spray group and rebuild the route."""
+        """Delete one recorded spray group and return to paint-mode recording."""
         if self._recorded_spray_list_updating or self._operation_running:
             return
 
@@ -4470,28 +4523,32 @@ class MainWindow(QMainWindow):
 
         self.viewer._interactive_spray_records = remaining_records
 
-        if not remaining_records:
+        # The generated route is no longer authoritative after a group is
+        # deleted. Rebuild the remaining route data first, then invalidate
+        # the finalized route and re-enter interactive SPRAY MODE. Existing
+        # groups are preserved so the operator only needs to draw the
+        # replacement stroke.
+        if remaining_records:
+            self._refresh_recorded_spray_path_panel()
+            self._on_recorded_spray_groups_reordered()
+        else:
             self.viewer._optimize_interactive_recorded_path()
             self.viewer._refresh_interactive_recorded_path_actor()
-            self.viewer._interactive_spray_route_optimization = {}
-            self.viewer._interactive_recorded_replay_timing = {}
-            self.viewer._interactive_route_optimization_metrics = {}
-            self.interactive_spray_path = None
-            self.stage_completed[STAGE_SPRAY_TRAJECTORY] = False
-            self.stage_completed[STAGE_SPRAY_SIMULATION] = False
-            self._refresh_recorded_spray_path_panel()
-            self.status_bar.showMessage(
-                f"SPRAY GROUP {group_id} DELETED · NO RECORDED SPRAY GROUPS REMAIN"
-            )
-            return
 
-        # Refresh the visible list first. The existing reorder handler then
-        # renumbers groups, rebuilds route data, optimizes, and refreshes the
-        # 3D recorded-path actor using the same tested code path.
+        self.interactive_spray_path = None
+        self.stage_completed[STAGE_SPRAY_TRAJECTORY] = False
+        self.stage_completed[STAGE_SPRAY_SIMULATION] = False
+        self.viewer.set_recorded_path_page("route")
         self._refresh_recorded_spray_path_panel()
-        self._on_recorded_spray_groups_reordered()
+        self._refresh_workflow_ui()
+
+        # Re-enter the actual interactive recording mode. With
+        # resume_existing=True, surviving groups and their coating state stay
+        # visible while the operator draws the replacement group.
+        self._start_interactive_spray_path(resume_existing=True)
+
         self.status_bar.showMessage(
-            f"SPRAY GROUP {group_id} DELETED · REMAINING GROUPS RENUMBERED"
+            f"SPRAY GROUP {group_id} DELETED · DRAW THE REPLACEMENT SPRAY GROUP"
         )
 
     def _on_recorded_spray_groups_reordered(self):
