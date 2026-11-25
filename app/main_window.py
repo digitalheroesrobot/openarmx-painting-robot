@@ -2971,9 +2971,14 @@ class MainWindow(QMainWindow):
                 recorded_path_button.setChecked(True)
         self._refresh_recorded_spray_path_panel()
         self.simulation_csv_footer.setVisible(simulation_page)
+        # Product setup loads the default model automatically when the
+        # application starts, so the redundant LOAD STL PRODUCT action is
+        # not shown. Keep this shared action button for later workflow stages.
         self.start_analysis_button.setVisible(
             self.active_stage not in (
-                STAGE_SPRAY_TRAJECTORY, STAGE_SPRAY_SIMULATION
+                STAGE_PRODUCT_SETUP,
+                STAGE_SPRAY_TRAJECTORY,
+                STAGE_SPRAY_SIMULATION,
             )
         )
 
