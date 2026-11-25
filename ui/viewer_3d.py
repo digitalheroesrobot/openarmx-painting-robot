@@ -6241,14 +6241,18 @@ class ProductViewer(QWidget):
         route_only = bool(
             getattr(self, "_interactive_route_generation_only", False)
         )
-        # Evaluate the complete sprayer envelope before allowing this mouse
-        # sample to record or deposit paint.
+        # An excluded center hit is already a definitive spray block. Do
+        # not run the expensive VTK collision filter or footprint ray casting
+        # for that sample: doing both synchronously on every mouse-move event
+        # made the cursor appear to freeze while crossing keep-out regions.
+        surface_excluded = not bool(pose.get("paintable", True))
         gun_actors, gun_polydata = self._interactive_build_gun_visual(
             nozzle, direction
         )
         self._interactive_spray_gun_actors = gun_actors
-        collision = self._interactive_check_gun_collision(gun_polydata)
-        surface_excluded = not bool(pose.get("paintable", True))
+        collision = False
+        if self._interactive_spray_recording and not surface_excluded:
+            collision = self._interactive_check_gun_collision(gun_polydata)
         self._interactive_spray_gun_collision = collision
         self._interactive_spray_surface_excluded = surface_excluded
         spray_blocked = collision or surface_excluded
@@ -6261,16 +6265,18 @@ class ProductViewer(QWidget):
             self._interactive_spray_sampling_distance_accumulator = 0.0
     
         local_pose = self._interactive_pose_to_product_frame(pose)
-        footprints = _build_spray_footprint_overlay(
-            self.current_mesh,
-            local_pose["nozzle_point"].reshape(1, 3),
-            local_pose["spray_direction"].reshape(1, 3),
-            self._interactive_spray_paint_footprint_angle_deg,
-            rays_per_ring=16,
-            radial_rings=(0.25, 0.50, 0.75, 1.0),
-            surface=self._interactive_spray_surface,
-            locator=self._interactive_spray_locator,
-        )
+        footprints = []
+        if not surface_excluded:
+            footprints = _build_spray_footprint_overlay(
+                self.current_mesh,
+                local_pose["nozzle_point"].reshape(1, 3),
+                local_pose["spray_direction"].reshape(1, 3),
+                self._interactive_spray_paint_footprint_angle_deg,
+                rays_per_ring=16,
+                radial_rings=(0.25, 0.50, 0.75, 1.0),
+                surface=self._interactive_spray_surface,
+                locator=self._interactive_spray_locator,
+            )
 
         # Block the complete spray footprint when even one cone ray touches an
         # explicitly excluded source face. The picked center point alone is
