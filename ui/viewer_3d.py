@@ -7000,12 +7000,22 @@ class ProductViewer(QWidget):
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_hole_opening_pose(x, y)
         if pose is not None:
-            self._interactive_hole_entry_point_world = np.asarray(
-                pose["surface_point_world"], dtype=np.float64
-            ).copy()
-            self._interactive_hole_entry_axis_world = np.asarray(
-                pose["spray_direction_world"], dtype=np.float64
-            ).copy()
+            # The recorded hole trajectory must always originate at the
+            # detected opening centre, never at the operator's mouse hit.
+            hole = self._interactive_nearest_hole_candidate(
+                pose["surface_point_world"]
+            )
+            if hole is None:
+                self._interactive_hole_entry_point_world = None
+                self._interactive_hole_entry_axis_world = None
+                print("[HOLE POINT] Could not resolve the detected hole opening centre.")
+            else:
+                self._interactive_hole_entry_point_world = np.asarray(
+                    hole["center_world"], dtype=np.float64
+                ).copy()
+                self._interactive_hole_entry_axis_world = np.asarray(
+                    pose["spray_direction_world"], dtype=np.float64
+                ).copy()
             self._interactive_update_cursor(pose)
         else:
             self._interactive_hole_entry_point_world = None
