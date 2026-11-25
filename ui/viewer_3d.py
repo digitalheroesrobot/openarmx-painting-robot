@@ -6952,16 +6952,23 @@ class ProductViewer(QWidget):
         if float(np.dot(camera_position - surface_point, normal_world)) < 0.0:
             normal_world = -normal_world
 
-        spray_direction = self._interactive_rotate_spray_direction(
-            -normal_world,
-            self._interactive_spray_angle_y_deg,
-            self._interactive_spray_angle_x_deg,
-        )
+        # H mode is constrained to the detected bore axis. Do not use the
+        # bounding-box face normal or freehand spray-angle offsets here.
+        hole = self._interactive_nearest_hole_candidate(surface_point)
+        if hole is None:
+            print("[HOLE POINT] No detected hole axis at this location.")
+            return None
+        spray_direction = np.asarray(hole["axis_world"], dtype=np.float64).copy()
+        toward_bore = np.asarray(hole["center_world"], dtype=np.float64) - surface_point
+        if float(np.dot(spray_direction, toward_bore)) < 0.0:
+            spray_direction = -spray_direction
+        spray_direction /= max(float(np.linalg.norm(spray_direction)), 1e-12)
+        normal_world = -spray_direction
         return {
             "surface_point_world": surface_point.copy(),
             "surface_normal_world": normal_world.copy(),
             "nozzle_point_world": (
-                surface_point + normal_world * self._interactive_spray_standoff
+                surface_point - spray_direction * self._interactive_spray_standoff
             ),
             "spray_direction_world": spray_direction,
             "cell_id": -1,
@@ -7528,7 +7535,7 @@ class ProductViewer(QWidget):
                 )
         self.plotter.render()
 
-    def _interactive_finalize_hole_spray_point(self):
+    def _interactive_finalize_hole_spray_point(self, keep_h_mode=False):
         """Commit the current nozzle pose as exactly one spray route point."""
         pose = getattr(self, "_interactive_spray_latest_pose", None)
         if pose is None:
@@ -7578,7 +7585,8 @@ class ProductViewer(QWidget):
         )
 
         self._interactive_cancel_hole_circle_gesture()
-        self._interactive_hole_circle_mode = False
+        if not keep_h_mode:
+            self._interactive_hole_circle_mode = False
         self._interactive_recorded_replay_timing = None
         self._refresh_interactive_recorded_path_actor()
         self._optimize_interactive_recorded_path()
@@ -8875,6 +8883,17 @@ class ProductViewer(QWidget):
             ):
                 self.set_hole_circle_mode(not self._interactive_hole_circle_mode)
                 return True
+            if (
+                event.key() == Qt.Key.Key_G
+                and self._interactive_hole_circle_mode
+                and self._interactive_spray_active
+                and self._interactive_spray_mode == "spray"
+                and not event.isAutoRepeat()
+            ):
+                self._interactive_finalize_hole_spray_point(keep_h_mode=True)
+                self._update_interaction_mode_indicators("paint")
+                self.plotter.render()
+                return True
 
         if (
             watched is interactor_widget
@@ -8884,7 +8903,9 @@ class ProductViewer(QWidget):
             and self._interactive_spray_mode == "spray"
         ):
             if self._interactive_hole_circle_mode:
-                self._interactive_finalize_hole_spray_point()
+                # Double-click exits H mode; G is the only point-registration key.
+                self._interactive_cancel_hole_circle_gesture()
+                self._interactive_hole_circle_mode = False
                 self._update_interaction_mode_indicators("paint")
                 self.plotter.render()
                 return True
