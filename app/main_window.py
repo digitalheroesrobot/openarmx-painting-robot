@@ -2932,7 +2932,30 @@ class MainWindow(QMainWindow):
             self.interactive_spray_path is not None
             and self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
         )
-        if route_generation_page and not route_is_finalized:
+        current_records = getattr(
+            self.viewer, "_interactive_spray_records", []
+        ) or []
+        recorded_group_ids = {
+            int(record.get(
+                "group_id",
+                int(record.get("stroke_id", 0)) + 1,
+            ))
+            for record in current_records
+            if isinstance(record, dict)
+            and not record.get("_stroke_break")
+        }
+        has_recorded_groups = bool(recorded_group_ids)
+
+        # If any recorded groups remain (including after deleting one group),
+        # keep the Recorded Spray Path accordion open. Do not force the user
+        # back to Spray Settings merely because the finalized trajectory was
+        # invalidated by a deletion.
+        if route_generation_page and has_recorded_groups:
+            if spray_settings_button is not None and spray_settings_button.isChecked():
+                spray_settings_button.setChecked(False)
+            if recorded_path_button is not None and not recorded_path_button.isChecked():
+                recorded_path_button.setChecked(True)
+        elif route_generation_page and not route_is_finalized:
             if spray_settings_button is not None and not spray_settings_button.isChecked():
                 spray_settings_button.setChecked(True)
             if recorded_path_button is not None and recorded_path_button.isChecked():
@@ -3151,13 +3174,18 @@ class MainWindow(QMainWindow):
         # Keep an entry point available after every recorded group has
         # been deleted. In that state this action starts a fresh route rather
         # than trying to resume a route that no longer exists.
+        has_recorded_groups = bool(getattr(
+            self.viewer, "_interactive_spray_records", []
+        ))
         self.route_edit_button.setText(
-            "ADD TO EXISTING ROUTE" if route_exists else "START NEW ROUTE"
+            "ADD TO EXISTING ROUTE"
+            if route_exists or has_recorded_groups
+            else "START NEW ROUTE"
         )
         self.route_edit_button.setToolTip(
-            "Continue the existing route and preserve its coating state."
-            if route_exists
-            else "No route remains. Start a new spray-route recording session."
+            "Continue the remaining recorded spray groups."
+            if route_exists or has_recorded_groups
+            else "No recorded spray groups remain. Start a new spray-route recording session."
         )
         self.route_edit_button.setVisible(route_page and not recording)
         self.route_edit_button.setEnabled(
@@ -4857,15 +4885,15 @@ class MainWindow(QMainWindow):
         ):
             return
 
-        route_exists = (
-            self.interactive_spray_path is not None
-            and self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
-        )
+        existing_records = getattr(
+            self.viewer, "_interactive_spray_records", []
+        ) or []
+        route_exists = bool(existing_records)
         if self.viewer._interactive_spray_active:
             return
 
-        # A route with no finalized trajectory is a new recording, not an
-        # additive edit. This is the expected state after deleting every group.
+        # Resume the surviving strokes when any recorded samples remain.
+        # Only an empty record set (after deleting every group) starts fresh.
         self.stage_completed[STAGE_SPRAY_SIMULATION] = False
         if not route_exists:
             self.interactive_spray_path = None
