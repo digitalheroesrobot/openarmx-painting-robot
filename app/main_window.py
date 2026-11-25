@@ -8,6 +8,7 @@ import numpy as np
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtCore import QThread, Signal, Qt, QSize
 from PySide6.QtWidgets import (
+    QApplication,
     QMainWindow,
     QDialog,
     QWidget,
@@ -416,6 +417,7 @@ class MainWindow(QMainWindow):
 
         self._worker = None
         self._operation_running = False
+        self._simulation_loading = False
 
         self.patch_inspection = {}
         self.patch_row_widgets = {}
@@ -1555,11 +1557,24 @@ class MainWindow(QMainWindow):
         self.interactive_paint_color_button.hide()
         action_layout.addWidget(self.interactive_paint_color_button)
 
-        self.route_next_button = QPushButton("NEXT: SPRAY SIMULATION")
+        self.route_next_button = QPushButton("SPRAY SIMULATION")
         self.route_next_button.setObjectName("PrimaryButton")
         self.route_next_button.clicked.connect(self._on_route_next_clicked)
         self.route_next_button.hide()
         action_layout.addWidget(self.route_next_button)
+
+        self.simulation_loading_progress = QProgressBar()
+        self.simulation_loading_progress.setObjectName("RouteGenerationProgress")
+        self.simulation_loading_progress.setRange(0, 0)
+        self.simulation_loading_progress.setTextVisible(False)
+        self.simulation_loading_progress.setFixedHeight(7)
+        self.simulation_loading_progress.setStyleSheet(
+            "QProgressBar { background: #172B38; border: 1px solid #36566A; "
+            "border-radius: 3px; } "
+            "QProgressBar::chunk { background: #39B8A5; border-radius: 3px; }"
+        )
+        self.simulation_loading_progress.hide()
+        action_layout.addWidget(self.simulation_loading_progress)
 
         self.route_edit_button = QPushButton("ADD TO EXISTING ROUTE")
         self.route_edit_button.setObjectName("SecondaryButton")
@@ -3114,13 +3129,21 @@ class MainWindow(QMainWindow):
             can_generate_route and not self._operation_running
         )
         self.route_next_button.setMinimumHeight(42)
-        self.route_next_button.setText("NEXT: SPRAY SIMULATION  →")
+        self.route_next_button.setText(
+            "LOADING SPRAY SIMULATION..." if self._simulation_loading
+            else "SPRAY SIMULATION"
+        )
+        self.route_next_button.setEnabled(
+            route_page and route_exists and not recording
+            and not self._operation_running and not self._simulation_loading
+        )
+        self.simulation_loading_progress.setVisible(self._simulation_loading)
         self.route_next_button.setVisible(
             route_page and route_exists and not recording
         )
         self.route_next_button.setEnabled(
             route_page and route_exists and not recording
-            and not self._operation_running
+            and not self._operation_running and not self._simulation_loading
         )
         if route_page and route_exists and not recording:
             self.route_next_button.show()
@@ -4696,12 +4719,36 @@ class MainWindow(QMainWindow):
         )
 
     def _on_route_next_clicked(self):
-        """Generate the recorded spray route, or continue to simulation when ready."""
+        """Open spray simulation and show a loading state during initialization."""
         if (
-            self.interactive_spray_path is not None
-            and self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
+            self._simulation_loading
+            or self._operation_running
+            or self.interactive_spray_path is None
+            or not self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
         ):
+            return
+
+        self._simulation_loading = True
+        self.route_next_button.setEnabled(False)
+        self.route_next_button.setText("LOADING SPRAY SIMULATION...")
+        self.simulation_loading_progress.show()
+        self.status_bar.showMessage("LOADING SPRAY SIMULATION...")
+        QApplication.processEvents()
+
+        try:
             self._select_workflow_stage(STAGE_SPRAY_SIMULATION)
+        except Exception as exc:
+            traceback.print_exc()
+            self.status_bar.showMessage(
+                f"SPRAY SIMULATION COULD NOT BE OPENED: {exc}"
+            )
+            QMessageBox.critical(
+                self, "Spray Simulation", str(exc)
+            )
+        finally:
+            self._simulation_loading = False
+            self.simulation_loading_progress.hide()
+            self._refresh_workflow_ui()
 
     def _finish_interactive_spray_path(self):
         """Stop interactive input, optimize the recorded stroke route and report it."""
