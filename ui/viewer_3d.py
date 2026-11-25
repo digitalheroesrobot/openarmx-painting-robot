@@ -6871,14 +6871,23 @@ class ProductViewer(QWidget):
 
 
     def _interactive_pick_hole_opening_pose(self, x, y):
-        """Build a sprayer pose when the pointer ray passes through a bore opening.
+        """Use the product bounding-box face as a stable reference over a hole.
 
-        A normal surface picker cannot hit the empty center of a through-hole.
-        Intersect the pointer ray with detected bore-opening planes, then sample
-        nearby pixels to obtain the actual rim face normal.
+        The product mesh has no triangles at the empty centre of a bore, so
+        mesh picking cannot place the sprayer there. The product's six-face
+        dimension box encloses the complete part; intersect the pointer ray
+        with that transformed box and use the first visible box face as the
+        reference plane. This keeps the sprayer visible without requiring a
+        nearby mesh triangle or a detected STEP bore candidate.
         """
-        candidates = self._filtered_hole_candidates()
-        if not candidates:
+        if self._pose_actor is None or self.current_mesh is None:
+            return None
+
+        bounds = np.asarray(self.current_mesh.bounds, dtype=np.float64)
+        if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
+            return None
+        minimum, maximum = bounds
+        if np.any(maximum <= minimum):
             return None
 
         matrix = self._actor_matrix_array()
@@ -6887,103 +6896,78 @@ class ProductViewer(QWidget):
         except np.linalg.LinAlgError:
             return None
 
-        best = None
-        for item in candidates:
-            try:
-                center_local = np.asarray(
-                    item["opening_center_coordinate_units"], dtype=np.float64
-                )
-                axis_local = np.asarray(item["axis_direction"], dtype=np.float64)
-                radius = abs(float(item["diameter_coordinate_units"])) * 0.5
-                center_world = matrix[:3, :3] @ center_local + matrix[:3, 3]
-                axis_world = normal_matrix @ axis_local
-                axis_length = float(np.linalg.norm(axis_world))
-                if axis_length <= 1e-12 or radius <= 0.0:
-                    continue
-                axis_world /= axis_length
-                ray_hit = self._interactive_display_ray_plane_hit(
-                    int(x), int(y), center_world, axis_world
-                )
-                if ray_hit is None:
-                    continue
-                delta = ray_hit - center_world
-                radial = delta - axis_world * float(np.dot(delta, axis_world))
-                radial_distance = float(np.linalg.norm(radial))
-                if radial_distance > radius:
-                    continue
-                if best is None or radial_distance < best["radial_distance"]:
-                    best = {
-                        "center": center_world,
-                        "axis": axis_world,
-                        "radius": radius,
-                        "radial_distance": radial_distance,
-                    }
-            except (KeyError, TypeError, ValueError):
-                continue
-
-        if best is None:
-            return None
-
-        # The center of the hole has no triangles. Search outward in screen
-        # space until a point on its opening rim supplies a real mesh normal.
-        directions = (
-            (-1, 0), (1, 0), (0, -1), (0, 1),
-            (-1, -1), (1, -1), (-1, 1), (1, 1),
+        camera_position = np.asarray(
+            self.plotter.camera.position, dtype=np.float64
         )
-        rim_pose = None
-        for pixel_radius in (2, 4, 6, 9, 13, 18, 24, 32, 40):
-            for dx, dy in directions:
-                candidate_pose = self._interactive_pick_surface_pose(
-                    int(x + dx * pixel_radius),
-                    int(y + dy * pixel_radius),
-                    estimate_planar=True,
-                )
-                if candidate_pose is None:
-                    continue
-                point = np.asarray(
-                    candidate_pose["surface_point_world"], dtype=np.float64
-                )
-                delta = point - best["center"]
-                axial = abs(float(np.dot(delta, best["axis"])))
-                radial = delta - float(np.dot(delta, best["axis"])) * best["axis"]
-                # Accept only the nearby opening face, not a surface deeper
-                # inside the bore or an unrelated face behind the product.
-                if axial > max(best["radius"] * 0.2, self._interactive_mesh_diagonal * 1e-4):
-                    continue
-                if float(np.linalg.norm(radial)) > best["radius"] * 1.35:
-                    continue
-                rim_pose = candidate_pose
-                break
-            if rim_pose is not None:
-                break
+        best_hit = None
+        best_distance = float("inf")
 
-        if rim_pose is None:
+        # Test all six faces of the product bounding box. The nearest valid
+        # intersection is the entry face seen by the operator.
+        for axis_index in range(3):
+            other_axes = [index for index in range(3) if index != axis_index]
+            for side, coordinate in (
+                (-1.0, minimum[axis_index]),
+                (1.0, maximum[axis_index]),
+            ):
+                point_local = np.zeros(3, dtype=np.float64)
+                point_local[axis_index] = coordinate
+                normal_local = np.zeros(3, dtype=np.float64)
+                normal_local[axis_index] = side
+                point_world = matrix[:3, :3] @ point_local + matrix[:3, 3]
+                normal_world = normal_matrix @ normal_local
+                normal_length = float(np.linalg.norm(normal_world))
+                if normal_length <= 1e-12:
+                    continue
+                normal_world /= normal_length
+
+                hit_world = self._interactive_display_ray_plane_hit(
+                    int(x), int(y), point_world, normal_world
+                )
+                if hit_world is None:
+                    continue
+
+                hit_local_h = np.linalg.inv(matrix) @ np.append(hit_world, 1.0)
+                if abs(float(hit_local_h[3])) <= 1e-12:
+                    continue
+                hit_local = hit_local_h[:3] / hit_local_h[3]
+                tolerance = max(float(np.linalg.norm(maximum - minimum)) * 1e-7, 1e-8)
+                if any(
+                    hit_local[index] < minimum[index] - tolerance
+                    or hit_local[index] > maximum[index] + tolerance
+                    for index in other_axes
+                ):
+                    continue
+
+                distance = float(np.linalg.norm(hit_world - camera_position))
+                if distance < best_distance:
+                    best_distance = distance
+                    best_hit = (hit_world, normal_world)
+
+        if best_hit is None:
             return None
 
-        normal_world = np.asarray(
-            rim_pose["surface_normal_world"], dtype=np.float64
-        )
-        normal_length = float(np.linalg.norm(normal_world))
-        if normal_length <= 1e-12:
-            return None
-        normal_world /= normal_length
-        spray_direction = -normal_world
+        surface_point, normal_world = best_hit
+        # Keep the nozzle on the operator side of the selected box face.
+        if float(np.dot(camera_position - surface_point, normal_world)) < 0.0:
+            normal_world = -normal_world
+
         spray_direction = self._interactive_rotate_spray_direction(
-            spray_direction,
+            -normal_world,
             self._interactive_spray_angle_y_deg,
             self._interactive_spray_angle_x_deg,
         )
-        center = best["center"]
         return {
-            "surface_point_world": center.copy(),
-            "surface_normal_world": normal_world,
+            "surface_point_world": surface_point.copy(),
+            "surface_normal_world": normal_world.copy(),
             "nozzle_point_world": (
-                center + normal_world * self._interactive_spray_standoff
+                surface_point + normal_world * self._interactive_spray_standoff
             ),
             "spray_direction_world": spray_direction,
-            "cell_id": rim_pose.get("cell_id", -1),
-            "paintable": bool(rim_pose.get("paintable", True)),
+            "cell_id": -1,
+            "paintable": True,
             "timestamp": time.monotonic(),
+            "reference_surface": "product_bounding_box",
         }
 
     def set_hole_circle_mode(self, enabled=True):
