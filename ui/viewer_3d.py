@@ -493,11 +493,17 @@ class ProductViewer(QWidget):
         self._interactive_spray_edit_gun_actors = []
         self._interactive_spray_edit_marker_actor = None
         self._interactive_spray_point_drag_state = None
-        # Manual hole-interior circle drawing. The operator first inserts the
-        # sprayer with the existing working-distance wheel, then enables this
-        # mode and draws a circular perimeter with the left mouse button.
+        # H mode automatically computes the largest collision-free full circle
+        # after wheel insertion stops; double-click commits it as one route group.
+        self._interactive_hole_circle_auto_timer = QTimer(self)
+        self._interactive_hole_circle_auto_timer.setSingleShot(True)
+        self._interactive_hole_circle_auto_timer.setInterval(350)
+        self._interactive_hole_circle_auto_timer.timeout.connect(
+            self._interactive_generate_max_hole_circle
+        )
         self._interactive_hole_circle_mode = False
         self._interactive_hole_circle_drawing = False
+        self._interactive_hole_circle_auto_generated = False
         self._interactive_hole_circle_center_world = None
         self._interactive_hole_circle_axis_world = None
         self._interactive_hole_circle_basis_u = None
@@ -6978,6 +6984,9 @@ class ProductViewer(QWidget):
             and self._interactive_spray_mode == "spray"
         )
         if not self._interactive_hole_circle_mode:
+            timer = getattr(self, "_interactive_hole_circle_auto_timer", None)
+            if timer is not None:
+                timer.stop()
             self._interactive_cancel_hole_circle_gesture()
             return False
 
@@ -7011,6 +7020,7 @@ class ProductViewer(QWidget):
 
     def _interactive_cancel_hole_circle_gesture(self):
         self._interactive_hole_circle_drawing = False
+        self._interactive_hole_circle_auto_generated = False
         self._interactive_hole_circle_center_world = None
         self._interactive_hole_circle_axis_world = None
         self._interactive_hole_circle_basis_u = None
@@ -7231,6 +7241,100 @@ class ProductViewer(QWidget):
                 pickable=False,
             )
 
+    def _interactive_hole_circle_radius_is_clear(self, radius, center, axis, u, v, samples=36):
+        """Test an entire candidate circle against the configured gun envelope."""
+        for angle in np.linspace(0.0, 2.0 * math.pi, samples, endpoint=False):
+            nozzle = center + float(radius) * (
+                math.cos(float(angle)) * u + math.sin(float(angle)) * v
+            )
+            pose = self._interactive_hole_circle_pose(nozzle, axis)
+            if pose is None:
+                return False
+            gun_actors, gun_polydata = self._interactive_build_gun_visual(
+                nozzle, pose["spray_direction_world"], render=False
+            )
+            collision = self._interactive_check_gun_collision(gun_polydata)
+            for actor in gun_actors:
+                try:
+                    self.plotter.remove_actor(actor, render=False)
+                except Exception:
+                    pass
+            if collision:
+                return False
+        return True
+
+    def _interactive_generate_max_hole_circle(self):
+        """Find and display the largest complete circle with zero gun collisions."""
+        if not self._interactive_hole_circle_mode or not self._interactive_spray_active:
+            return 0
+        anchor = self._interactive_spray_latest_pose
+        if anchor is None:
+            return 0
+        nozzle = np.asarray(anchor["nozzle_point_world"], dtype=np.float64)
+        hole = self._interactive_nearest_hole_candidate(nozzle)
+        if hole is None:
+            return 0
+
+        axis = np.asarray(hole["axis_world"], dtype=np.float64)
+        axis /= max(float(np.linalg.norm(axis)), 1e-12)
+        opening = np.asarray(hole["center_world"], dtype=np.float64)
+        center = opening + float(np.dot(nozzle - opening, axis)) * axis
+        u, v = self._interactive_circle_basis(axis)
+        self._interactive_cancel_hole_circle_gesture()
+        self._interactive_hole_circle_center_world = center
+        self._interactive_hole_circle_axis_world = axis
+        self._interactive_hole_circle_basis_u = u
+        self._interactive_hole_circle_basis_v = v
+
+        bore_radius = abs(float(hole["item"]["diameter_coordinate_units"])) * 0.5
+        spacing = max(float(self._interactive_spray_sampling_spacing), 1e-6)
+        lower = max(spacing * 0.5, 0.5)
+        upper = bore_radius
+        if not np.isfinite(upper) or upper <= lower:
+            self._interactive_hole_circle_radius = None
+            self.plotter.render()
+            return 0
+
+        # Verify a feasible starting radius, then binary-search the outermost
+        # feasible radius. Every candidate is checked around the full 360°.
+        if not self._interactive_hole_circle_radius_is_clear(
+            lower, center, axis, u, v
+        ):
+            self._interactive_hole_circle_radius = None
+            self.plotter.render()
+            return 0
+        best = lower
+        lo, hi = lower, upper
+        for _ in range(9):
+            candidate = 0.5 * (lo + hi)
+            if self._interactive_hole_circle_radius_is_clear(
+                candidate, center, axis, u, v
+            ):
+                best = candidate
+                lo = candidate
+            else:
+                hi = candidate
+
+        self._interactive_hole_circle_radius = best
+        self._interactive_hole_circle_start_angle = 0.0
+        self._interactive_hole_circle_last_angle = 2.0 * math.pi
+        self._interactive_hole_circle_total_angle = 2.0 * math.pi
+        self._interactive_hole_circle_drawing = True
+        self._interactive_hole_circle_auto_generated = True
+        count = max(36, int(math.ceil(2.0 * math.pi * best / spacing)))
+        count = min(count, 720)
+        angles = np.linspace(0.0, 2.0 * math.pi, count + 1)
+        self._interactive_hole_circle_preview_points = [
+            center + best * (
+                math.cos(float(a)) * u + math.sin(float(a)) * v
+            )
+            for a in angles
+        ]
+        self._interactive_hole_circle_preview_invalid = []
+        self._interactive_update_hole_circle_preview()
+        self.plotter.render()
+        return best
+
     def _interactive_start_hole_circle(self, interactor):
         if not self._interactive_hole_circle_mode:
             return False
@@ -7403,6 +7507,7 @@ class ProductViewer(QWidget):
         self.plotter.render()
 
     def _interactive_finalize_hole_circle(self):
+        """Commit the complete prevalidated 360-degree hole circle as one group."""
         if not self._interactive_hole_circle_drawing:
             return 0
         center = self._interactive_hole_circle_center_world
@@ -7410,41 +7515,30 @@ class ProductViewer(QWidget):
         u = self._interactive_hole_circle_basis_u
         v = self._interactive_hole_circle_basis_v
         radius = float(self._interactive_hole_circle_radius or 0.0)
-        total = float(self._interactive_hole_circle_total_angle)
         spacing = max(float(self._interactive_spray_sampling_spacing), 1e-6)
-
-        if radius <= 0.0 or abs(total) < math.radians(15.0):
+        if radius <= 0.0:
             self._interactive_cancel_hole_circle_gesture()
+            self._interactive_hole_circle_mode = False
             return 0
 
-        circumference_length = abs(total) * radius
-        count = max(2, int(math.floor(circumference_length / spacing)) + 1)
-        angles = np.linspace(
-            self._interactive_hole_circle_start_angle,
-            self._interactive_hole_circle_start_angle + total,
-            count,
-        )
-        existing_group_ids = [
-            int(item.get("group_id", 0))
-            for item in self._interactive_spray_records
-        ]
-        group_id = max(existing_group_ids, default=0) + 1
-        stroke_id = max(
-            [int(item.get("stroke_id", -1)) for item in self._interactive_spray_records],
-            default=-1,
-        ) + 1
+        count = max(36, int(math.ceil(2.0 * math.pi * radius / spacing)))
+        count = min(count, 720)
+        angles = np.linspace(0.0, 2.0 * math.pi, count, endpoint=False)
 
-        stored = 0
-        invalid_points = []
+        # Validate every route sample before writing any records. A single
+        # collision or missing wall hit rejects the entire circle; partial arcs
+        # must never be registered as if they were a complete safe route.
+        poses = []
         for angle in angles:
             nozzle = center + radius * (
-                math.cos(float(angle)) * u
-                + math.sin(float(angle)) * v
+                math.cos(float(angle)) * u + math.sin(float(angle)) * v
             )
             pose = self._interactive_hole_circle_pose(nozzle, axis)
             if pose is None:
-                invalid_points.append(nozzle)
-                continue
+                self._interactive_cancel_hole_circle_gesture()
+                self._interactive_hole_circle_mode = False
+                self.plotter.render()
+                return 0
             gun_actors, gun_polydata = self._interactive_build_gun_visual(
                 nozzle, pose["spray_direction_world"], render=False
             )
@@ -7455,29 +7549,36 @@ class ProductViewer(QWidget):
                 except Exception:
                     pass
             if collision:
-                invalid_points.append(nozzle)
-                continue
+                self._interactive_cancel_hole_circle_gesture()
+                self._interactive_hole_circle_mode = False
+                self.plotter.render()
+                return 0
+            poses.append(pose)
 
+        group_id = max(
+            [int(item.get("group_id", 0)) for item in self._interactive_spray_records],
+            default=0,
+        ) + 1
+        stroke_id = max(
+            [int(item.get("stroke_id", -1)) for item in self._interactive_spray_records],
+            default=-1,
+        ) + 1
+        self._interactive_spray_stroke_id = stroke_id
+        for pose in poses:
             local = self._interactive_pose_to_product_frame(pose)
-            self._interactive_spray_stroke_id = stroke_id
             self._interactive_store_record_sample(
-                {
-                    **pose,
-                    "group_id": group_id,
-                },
-                local,
+                {**pose, "group_id": group_id}, local
             )
-            stored += 1
 
-        self._interactive_hole_circle_preview_invalid = invalid_points
         self._interactive_cancel_hole_circle_gesture()
         self._interactive_hole_circle_mode = False
-        if stored:
+        if poses:
             self._interactive_recorded_replay_timing = None
             self._refresh_interactive_recorded_path_actor()
             self._optimize_interactive_recorded_path()
             self.spray_samples_changed.emit()
-        return stored
+        self.plotter.render()
+        return len(poses)
 
     def _interactive_is_postfinish_point_editing(self):
         return bool(
@@ -8006,6 +8107,9 @@ class ProductViewer(QWidget):
             )
             updated_pose["timestamp"] = time.monotonic()
             self._interactive_update_cursor(updated_pose)
+            # Debounce wheel input: once insertion stops, automatically solve
+            # the maximum full-circle radius and show its green preview.
+            self._interactive_hole_circle_auto_timer.start()
             return
         else:
             current_mm = float(self.working_distance_spin.value())
@@ -8057,6 +8161,7 @@ class ProductViewer(QWidget):
         if (
             self._interactive_hole_circle_mode
             and self._interactive_hole_circle_drawing
+            and not self._interactive_hole_circle_auto_generated
             and self._interactive_spray_active
             and self._interactive_spray_mode == "spray"
         ):
@@ -8699,7 +8804,11 @@ class ProductViewer(QWidget):
             and self._interactive_spray_mode == "spray"
         ):
             if self._interactive_hole_circle_mode:
-                self.set_hole_circle_mode(False)
+                self._interactive_hole_circle_auto_timer.stop()
+                if self._interactive_hole_circle_radius is not None:
+                    self._interactive_finalize_hole_circle()
+                else:
+                    self.set_hole_circle_mode(False)
                 self._update_interaction_mode_indicators("paint")
                 self.plotter.render()
                 return True
@@ -8717,7 +8826,8 @@ class ProductViewer(QWidget):
             and self._interactive_spray_active
             and self._interactive_spray_mode == "spray"
         ):
-            self._interactive_start_hole_circle(interactor)
+            # H mode is fully automatic; left-click no longer starts a manual
+            # mouse-drawn circle or a normal paint stroke.
             return
         if (
             not self._interactive_spray_active
@@ -8856,6 +8966,7 @@ class ProductViewer(QWidget):
         if (
             self._interactive_hole_circle_mode
             and self._interactive_hole_circle_drawing
+            and not self._interactive_hole_circle_auto_generated
             and self._interactive_spray_active
             and self._interactive_spray_mode == "spray"
         ):
