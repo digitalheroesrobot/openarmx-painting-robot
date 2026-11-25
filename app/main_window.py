@@ -1142,6 +1142,9 @@ class MainWindow(QMainWindow):
             "Drag a spray group up or down to change the execution order. "
             "The path shape and direction inside each group remain unchanged."
         )
+        self.recorded_spray_group_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff
+        )
         self.recorded_spray_group_list.orderChanged.connect(
             self._on_recorded_spray_groups_reordered
         )
