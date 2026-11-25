@@ -2041,7 +2041,8 @@ class ProductViewer(QWidget):
                     self.recorded_path_status_label.setText("ROUTE BLOCKED · NON-CONTIGUOUS STROKE DATA")
                     self.recorded_path_replay_button.setEnabled(False)
                     self.recorded_path_export_button.setEnabled(False)
-                    self.route_readiness_changed.emit(False)
+                    if emit_readiness:
+                        self.route_readiness_changed.emit(False)
                     return False
                 seen.add(sid)
                 previous = sid
