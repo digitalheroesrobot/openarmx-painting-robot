@@ -493,14 +493,8 @@ class ProductViewer(QWidget):
         self._interactive_spray_edit_gun_actors = []
         self._interactive_spray_edit_marker_actor = None
         self._interactive_spray_point_drag_state = None
-        # H mode automatically computes the largest collision-free full circle
-        # after wheel insertion stops; double-click commits it as one route group.
-        self._interactive_hole_circle_auto_timer = QTimer(self)
-        self._interactive_hole_circle_auto_timer.setSingleShot(True)
-        self._interactive_hole_circle_auto_timer.setInterval(350)
-        self._interactive_hole_circle_auto_timer.timeout.connect(
-            self._interactive_generate_max_hole_circle
-        )
+        # H mode places one spray point inside a bore; wheel adjusts insertion
+        # depth and a double-click commits the current nozzle pose.
         self._interactive_hole_circle_mode = False
         self._interactive_hole_circle_drawing = False
         self._interactive_hole_circle_auto_generated = False
@@ -6977,16 +6971,13 @@ class ProductViewer(QWidget):
         }
 
     def set_hole_circle_mode(self, enabled=True):
-        """Enable hole insertion/circle mode and show a face-normal sprayer."""
+        """Enable single spray-point placement mode inside a detected hole."""
         self._interactive_hole_circle_mode = bool(
             enabled
             and self._interactive_spray_active
             and self._interactive_spray_mode == "spray"
         )
         if not self._interactive_hole_circle_mode:
-            timer = getattr(self, "_interactive_hole_circle_auto_timer", None)
-            if timer is not None:
-                timer.stop()
             self._interactive_cancel_hole_circle_gesture()
             return False
 
@@ -7536,6 +7527,67 @@ class ProductViewer(QWidget):
                     render=False,
                 )
         self.plotter.render()
+
+    def _interactive_finalize_hole_spray_point(self):
+        """Commit the current nozzle pose as exactly one spray route point."""
+        pose = getattr(self, "_interactive_spray_latest_pose", None)
+        if pose is None:
+            print("[HOLE POINT] No sprayer pose. Move the cursor over the hole first.")
+            return 0
+        if not bool(pose.get("paintable", True)):
+            print("[HOLE POINT] The selected point is not paintable.")
+            return 0
+
+        nozzle = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
+        direction = np.asarray(pose["spray_direction_world"], dtype=np.float64)
+        direction_length = float(np.linalg.norm(direction))
+        if direction_length <= 1e-12:
+            print("[HOLE POINT] Invalid spray direction.")
+            return 0
+        direction /= direction_length
+
+        # Check the complete sprayer envelope at the exact inserted position.
+        _, gun_polydata = self._interactive_build_gun_visual(
+            nozzle, direction, render=False
+        )
+        if self._interactive_check_gun_collision(gun_polydata):
+            print(
+                "[HOLE POINT] Sprayer collides with the product. "
+                "Adjust insertion depth with the wheel and double-click again."
+            )
+            return 0
+
+        committed_pose = {
+            key: (value.copy() if isinstance(value, np.ndarray) else value)
+            for key, value in pose.items()
+        }
+        committed_pose["timestamp"] = time.monotonic()
+        group_id = max(
+            [int(item.get("group_id", 0)) for item in self._interactive_spray_records],
+            default=0,
+        ) + 1
+        stroke_id = max(
+            [int(item.get("stroke_id", -1)) for item in self._interactive_spray_records],
+            default=-1,
+        ) + 1
+        self._interactive_spray_stroke_id = stroke_id
+        self._interactive_spray_start_timestamp = None
+        local_pose = self._interactive_pose_to_product_frame(committed_pose)
+        self._interactive_store_record_sample(
+            {**committed_pose, "group_id": group_id}, local_pose
+        )
+
+        self._interactive_cancel_hole_circle_gesture()
+        self._interactive_hole_circle_mode = False
+        self._interactive_recorded_replay_timing = None
+        self._refresh_interactive_recorded_path_actor()
+        self._optimize_interactive_recorded_path()
+        self.spray_samples_changed.emit()
+        print(
+            f"[HOLE POINT] One spray point recorded. "
+            f"Group={group_id}, nozzle={nozzle.tolist()}"
+        )
+        return 1
 
     def _interactive_finalize_hole_circle(self):
         """Commit the complete prevalidated 360-degree hole circle as one group."""
@@ -8093,10 +8145,9 @@ class ProductViewer(QWidget):
                 selected_pose["surface_point_world"] - selected_pose["nozzle_point_world"]
             ) * float(self._get_source_mm_factor() or 1.0))
         elif self._interactive_hole_circle_mode:
-            # In H mode the wheel inserts/retracts the complete sprayer pose
-            # along the detected bore axis. Translate both the nozzle and its
-            # target point equally so the working distance and spray footprint
-            # remain exactly unchanged. Wheel-down advances into the bore.
+            # In H mode the wheel inserts/retracts the single spray point
+            # along the detected bore axis. Translate the nozzle and target
+            # equally so the spray working distance remains unchanged. Wheel-down advances into the bore.
             pose = self._interactive_spray_latest_pose
             if pose is None:
                 self.plotter.render()
@@ -8813,7 +8864,7 @@ class ProductViewer(QWidget):
         self._interactive_remove_stroke_preview()
 
     def eventFilter(self, watched, event):
-        """Handle H activation and double-click exit for hole-circle mode."""
+        """Handle H-mode single-point placement and double-click confirmation."""
         interactor_widget = getattr(getattr(self, "plotter", None), "interactor", None)
         if watched is interactor_widget and event.type() == QEvent.Type.KeyPress:
             if (
@@ -8825,17 +8876,6 @@ class ProductViewer(QWidget):
                 self.set_hole_circle_mode(not self._interactive_hole_circle_mode)
                 return True
 
-            if (
-                event.key() == Qt.Key.Key_G
-                and self._interactive_hole_circle_mode
-                and self._interactive_spray_active
-                and self._interactive_spray_mode == "spray"
-                and not event.isAutoRepeat()
-            ):
-                self._interactive_hole_circle_auto_timer.stop()
-                self._interactive_generate_max_hole_circle()
-                return True
-
         if (
             watched is interactor_widget
             and event.type() == QEvent.Type.MouseButtonDblClick
@@ -8844,11 +8884,7 @@ class ProductViewer(QWidget):
             and self._interactive_spray_mode == "spray"
         ):
             if self._interactive_hole_circle_mode:
-                self._interactive_hole_circle_auto_timer.stop()
-                if self._interactive_hole_circle_radius is not None:
-                    self._interactive_finalize_hole_circle()
-                else:
-                    self.set_hole_circle_mode(False)
+                self._interactive_finalize_hole_spray_point()
                 self._update_interaction_mode_indicators("paint")
                 self.plotter.render()
                 return True
@@ -8866,8 +8902,7 @@ class ProductViewer(QWidget):
             and self._interactive_spray_active
             and self._interactive_spray_mode == "spray"
         ):
-            # H mode is fully automatic; left-click no longer starts a manual
-            # mouse-drawn circle or a normal paint stroke.
+            # H mode places one point only; mouse clicks do not start a stroke.
             return
         if (
             not self._interactive_spray_active
