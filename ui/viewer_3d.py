@@ -2245,9 +2245,12 @@ class ProductViewer(QWidget):
                     ),
                     axis=0,
                 )
-                # Larger, softly colored arrows make spray orientation easy
-                # to read without visually overpowering the recorded route.
-                arrow_length = max(float(np.max(path_extent)) * 0.050, 1.0)
+                # Make direction obvious even for short, narrow-hole paths.
+                arrow_length = max(
+                    float(np.max(path_extent)) * 0.16,
+                    float(self._interactive_spray_sampling_spacing) * 1.5,
+                    1.0,
+                )
                 arrow_data = pv.PolyData(arrow_points_array)
                 arrow_data["spray_direction"] = arrow_vectors_array
                 arrow_actor = arrow_data.glyph(
