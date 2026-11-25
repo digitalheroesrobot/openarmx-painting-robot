@@ -4485,11 +4485,9 @@ class MainWindow(QMainWindow):
             "DELETE SPRAY GROUP",
             (
                 f"Delete SPRAY GROUP {group_id}?\n\n"
-                "The selected spray group will be removed and the "
-                "remaining groups will be renumbered.\n\n"
-                "If other groups remain, the current page and interaction "
-                "mode will stay unchanged. If this was the last group, "
-                "a fresh route-generation session will open in CAMERA VIEW."
+                "Only the selected spray group will be deleted. "
+                "The current page and view will not change.\n\n"
+                "Use the BACK button whenever you want to return to another page."
             ),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
@@ -4500,7 +4498,7 @@ class MainWindow(QMainWindow):
         self._delete_recorded_spray_group(group_id)
 
     def _delete_recorded_spray_group(self, group_id):
-        """Delete one group without navigating when other groups remain."""
+        """Delete the selected group only; navigation is handled by BACK."""
         if self._recorded_spray_list_updating or self._operation_running:
             return
 
@@ -4524,36 +4522,32 @@ class MainWindow(QMainWindow):
         if len(remaining_records) == len(records):
             return
 
+        # Remove only the requested group and compact the displayed group IDs.
+        old_group_ids = []
+        for record in remaining_records:
+            old_id = int(record.get(
+                "group_id",
+                int(record.get("stroke_id", 0)) + 1,
+            ))
+            if old_id not in old_group_ids:
+                old_group_ids.append(old_id)
+
+        group_id_map = {
+            old_id: new_id
+            for new_id, old_id in enumerate(old_group_ids, start=1)
+        }
+        for record in remaining_records:
+            old_id = int(record.get(
+                "group_id",
+                int(record.get("stroke_id", 0)) + 1,
+            ))
+            record["group_id"] = group_id_map[old_id]
+
         self.viewer._interactive_spray_records = remaining_records
 
+        # Refresh the recorded-path data only. Suppress readiness callbacks
+        # because they may refresh or navigate the wider workflow UI.
         if remaining_records:
-            # Renumber group IDs directly. Keep each record's stroke_id
-            # untouched so internal safe-run boundaries remain intact.
-            old_group_ids = []
-            for record in remaining_records:
-                old_id = int(record.get(
-                    "group_id",
-                    int(record.get("stroke_id", 0)) + 1,
-                ))
-                if old_id not in old_group_ids:
-                    old_group_ids.append(old_id)
-
-            group_id_map = {
-                old_id: new_id
-                for new_id, old_id in enumerate(old_group_ids, start=1)
-            }
-            for record in remaining_records:
-                old_id = int(record.get(
-                    "group_id",
-                    int(record.get("stroke_id", 0)) + 1,
-                ))
-                record["group_id"] = group_id_map[old_id]
-
-            self.viewer._interactive_spray_records = remaining_records
-
-            # Recompute route metrics/actor without invoking the drag/drop
-            # handler or its route-readiness callback. Those callbacks can
-            # trigger broad workflow UI changes during a simple deletion.
             readiness_signal = getattr(
                 self.viewer, "route_readiness_changed", None
             )
@@ -4566,40 +4560,25 @@ class MainWindow(QMainWindow):
             finally:
                 if readiness_signal is not None:
                     readiness_signal.blockSignals(bool(was_blocked))
+        else:
+            self.viewer._interactive_spray_route_optimization = {}
+            self.viewer._interactive_recorded_replay_timing = {}
+            self.viewer._interactive_route_optimization_metrics = {}
 
-            self.viewer._refresh_interactive_recorded_path_actor()
-
-            # Invalidate any previously generated trajectory, but do not
-            # change active_stage, recorded-path page, view mode, camera,
-            # interactive session, or workflow visibility.
-            self.interactive_spray_path = None
-            self.stage_completed[STAGE_SPRAY_TRAJECTORY] = False
-            self.stage_completed[STAGE_SPRAY_SIMULATION] = False
-            self._refresh_recorded_spray_path_panel()
-            self.status_bar.showMessage(
-                f"SPRAY GROUP {group_id} DELETED · "
-                f"{len(old_group_ids)} GROUP(S) REMAIN · CURRENT PAGE UNCHANGED"
-            )
-            return
-
-        # Only deleting the final group starts a fresh session in CAMERA view.
-        self.viewer._interactive_spray_route_optimization = {}
-        self.viewer._interactive_recorded_replay_timing = {}
-        self.viewer._interactive_route_optimization_metrics = {}
         self.viewer._refresh_interactive_recorded_path_actor()
+
+        # A changed path invalidates any generated trajectory, but deletion
+        # never changes the current page, camera/view mode, or active session.
         self.interactive_spray_path = None
         self.stage_completed[STAGE_SPRAY_TRAJECTORY] = False
         self.stage_completed[STAGE_SPRAY_SIMULATION] = False
-        self.viewer.set_recorded_path_page("route")
-        self._start_interactive_spray_path(
-            resume_existing=False,
-            start_in_spray_mode=False,
-        )
         self._refresh_recorded_spray_path_panel()
-        self._refresh_workflow_ui()
+
+        remaining_group_count = len(old_group_ids)
         self.status_bar.showMessage(
-            f"SPRAY GROUP {group_id} DELETED · NO SPRAY GROUPS REMAIN · "
-            "CAMERA VIEW ACTIVE"
+            f"SPRAY GROUP {group_id} DELETED · "
+            f"{remaining_group_count} GROUP(S) REMAIN · "
+            "CURRENT PAGE AND VIEW UNCHANGED"
         )
 
     def _on_recorded_spray_groups_reordered(self):
