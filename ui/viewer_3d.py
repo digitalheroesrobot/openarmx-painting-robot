@@ -52,7 +52,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 from pyvistaqt import QtInteractor
-from vtkmodules.vtkRenderingCore import vtkCellPicker
+from vtkmodules.vtkRenderingCore import vtkCellPicker, vtkPointPicker
 from vtkmodules.vtkInteractionStyle import vtkInteractorStyleUser
 
 
@@ -486,6 +486,16 @@ class ProductViewer(QWidget):
         self._robot_motion_settings = {"painting_speed_mm_s": 150.0, "control_frequency_hz": 100.0}
         self._interactive_spray_path_actor = None
         self._interactive_spray_route_actors = []
+        self._interactive_spray_points_actor = None
+        self._interactive_spray_point_picker = vtkPointPicker()
+        self._interactive_spray_point_picker.SetTolerance(0.02)
+        self._interactive_selected_spray_point_index = None
+        self._interactive_spray_edit_gun_actors = []
+        self._interactive_spray_edit_marker_actor = None
+        self._interactive_spray_point_drag_state = None
+        self._interactive_point_edit_saved_style = None
+        self._interactive_point_edit_saved_style_enabled = False
+        self._interactive_point_edit_input_style = None
         self._interactive_recorded_replay_timer = QTimer(self)
         self._interactive_recorded_replay_timer.setInterval(40)
         self._interactive_recorded_replay_timer.timeout.connect(
@@ -603,6 +613,14 @@ class ProductViewer(QWidget):
         )
         self._interactive_spray_middle_release_observer_id = interactor.AddObserver(
             "MiddleButtonReleaseEvent", self._on_interactive_spray_middle_release, 3.0
+        )
+        # After FINISH, individual generated spray samples can be selected
+        # without entering the route-recording interaction again.
+        self._interactive_spray_edit_press_observer_id = interactor.AddObserver(
+            "LeftButtonPressEvent", self._on_interactive_spray_edit_left_press, 4.5
+        )
+        self._interactive_spray_edit_release_observer_id = interactor.AddObserver(
+            "LeftButtonReleaseEvent", self._on_interactive_spray_edit_left_release, 4.5
         )
         self._interactive_spray_wheel_forward_observer_id = interactor.AddObserver(
             "MouseWheelForwardEvent", self._on_interactive_spray_wheel, 3.0
@@ -2123,6 +2141,7 @@ class ProductViewer(QWidget):
                 pass
         self._interactive_spray_route_actors = []
         self._interactive_spray_path_actor = None
+        self._interactive_spray_points_actor = None
         records = self._interactive_spray_records
         if not records:
             return
@@ -2187,8 +2206,9 @@ class ProductViewer(QWidget):
             render_points_as_spheres=True,
             opacity=1.0,
             lighting=False,
-            pickable=False,
+            pickable=True,
         )
+        self._interactive_spray_points_actor = spray_point_actor
         self._interactive_spray_route_actors.append(spray_point_actor)
 
         if arrow_points:
@@ -2433,6 +2453,10 @@ class ProductViewer(QWidget):
         return True
 
     def _start_interactive_recorded_replay(self):
+        self._interactive_selected_spray_point_index = None
+        self._interactive_spray_point_drag_state = None
+        self._interactive_remove_selected_point_visuals()
+        self._interactive_end_point_edit_mode()
         records = self._interactive_spray_records
         if len(records) < 2:
             self.recorded_path_status_label.setText("No replayable recorded path")
@@ -4119,6 +4143,12 @@ class ProductViewer(QWidget):
         sampling_spacing = float(sampling_spacing)
         if self._interactive_spray_active:
             return
+
+        # Entering route recording ends any post-FINISH single-point edit.
+        self._interactive_selected_spray_point_index = None
+        self._interactive_spray_point_drag_state = None
+        self._interactive_remove_selected_point_visuals()
+        self._interactive_end_point_edit_mode()
 
         # Route editing is additive. Preserve the optimized route and the
         # accumulated wet-film state so the operator can see what has already
@@ -6798,8 +6828,277 @@ class ProductViewer(QWidget):
         self._interactive_spray_sampling_previous_pose = current
         return emitted
 
+
+    def _interactive_is_postfinish_point_editing(self):
+        return bool(
+            not self._interactive_spray_active
+            and self._interactive_spray_records
+            and not self._interactive_recorded_replay_timer.isActive()
+        )
+
+    def _interactive_record_pose_for_edit(self, record):
+        return {
+            "nozzle_point_world": np.asarray(
+                record["nozzle_point_world"], dtype=np.float64
+            ).copy(),
+            "surface_point_world": np.asarray(
+                record["surface_point_world"], dtype=np.float64
+            ).copy(),
+            "surface_normal_world": np.asarray(
+                record["surface_normal_world"], dtype=np.float64
+            ).copy(),
+            "spray_direction_world": np.asarray(
+                record["spray_direction_world"], dtype=np.float64
+            ).copy(),
+            "timestamp": float(record.get("timestamp", time.monotonic())),
+            "cell_id": int(record.get("face_index", -1)),
+            "paintable": True,
+        }
+
+    def _interactive_begin_point_edit_mode(self):
+        if self._interactive_point_edit_saved_style is not None:
+            return
+        interactor = self.plotter.iren.interactor
+        current_style = interactor.GetInteractorStyle()
+        self._interactive_point_edit_saved_style = current_style
+        self._interactive_point_edit_saved_style_enabled = bool(
+            current_style.GetEnabled()
+        ) if current_style is not None else False
+        self._interactive_point_edit_input_style = vtkInteractorStyleUser()
+        interactor.SetInteractorStyle(self._interactive_point_edit_input_style)
+        self._interactive_point_edit_input_style.SetEnabled(1)
+
+    def _interactive_end_point_edit_mode(self):
+        saved_style = self._interactive_point_edit_saved_style
+        if saved_style is None:
+            return
+        interactor = self.plotter.iren.interactor
+        interactor.SetInteractorStyle(saved_style)
+        saved_style.SetEnabled(1 if self._interactive_point_edit_saved_style_enabled else 0)
+        self._interactive_point_edit_saved_style = None
+        self._interactive_point_edit_input_style = None
+
+    def _interactive_remove_selected_point_visuals(self):
+        for actor in getattr(self, "_interactive_spray_edit_gun_actors", []):
+            try:
+                self.plotter.remove_actor(actor, render=False)
+            except Exception:
+                pass
+        self._interactive_spray_edit_gun_actors = []
+        marker = getattr(self, "_interactive_spray_edit_marker_actor", None)
+        if marker is not None:
+            try:
+                self.plotter.remove_actor(marker, render=False)
+            except Exception:
+                pass
+        self._interactive_spray_edit_marker_actor = None
+
+    def _interactive_show_selected_point(self):
+        self._interactive_remove_selected_point_visuals()
+        index = self._interactive_selected_spray_point_index
+        records = self._interactive_spray_records
+        if index is None or index < 0 or index >= len(records):
+            self.plotter.render()
+            return
+        record = records[index]
+        nozzle = np.asarray(record["nozzle_point_world"], dtype=np.float64)
+        direction = np.asarray(record["spray_direction_world"], dtype=np.float64)
+        self._interactive_spray_edit_gun_actors, _ = (
+            self._interactive_build_gun_visual(nozzle, direction, render=True)
+        )
+        diagonal = max(float(getattr(self, "_interactive_mesh_diagonal", 0.0)), 1.0)
+        marker_radius = max(diagonal * 0.006, 0.5)
+        marker = pv.Sphere(radius=marker_radius, center=nozzle, theta_resolution=20, phi_resolution=16)
+        self._interactive_spray_edit_marker_actor = self.plotter.add_mesh(
+            marker,
+            color="#00E5A8",
+            opacity=1.0,
+            smooth_shading=True,
+            lighting=True,
+            pickable=False,
+        )
+        self.plotter.render()
+
+    def _interactive_update_selected_record(self, pose):
+        index = self._interactive_selected_spray_point_index
+        if index is None or index < 0 or index >= len(self._interactive_spray_records):
+            return False
+        direction = np.asarray(pose["spray_direction_world"], dtype=np.float64)
+        direction_length = float(np.linalg.norm(direction))
+        if not np.isfinite(direction_length) or direction_length <= 1e-12:
+            return False
+        direction = direction / direction_length
+        nozzle = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
+        surface = np.asarray(pose["surface_point_world"], dtype=np.float64)
+        normal = np.asarray(pose["surface_normal_world"], dtype=np.float64)
+        normal_length = float(np.linalg.norm(normal))
+        if (
+            nozzle.shape != (3,) or surface.shape != (3,) or normal.shape != (3,)
+            or not np.all(np.isfinite(nozzle))
+            or not np.all(np.isfinite(surface))
+            or not np.all(np.isfinite(normal))
+            or normal_length <= 1e-12
+        ):
+            return False
+        normal /= normal_length
+        updated_pose = {
+            "nozzle_point_world": nozzle.copy(),
+            "surface_point_world": surface.copy(),
+            "surface_normal_world": normal.copy(),
+            "spray_direction_world": direction.copy(),
+        }
+        local = self._interactive_pose_to_product_frame(updated_pose)
+        record = self._interactive_spray_records[index]
+        record["nozzle_point_world"] = nozzle.copy()
+        record["surface_point_world"] = surface.copy()
+        record["surface_normal_world"] = normal.copy()
+        record["spray_direction_world"] = direction.copy()
+        record["nozzle_point_product"] = local["nozzle_point"].copy()
+        record["surface_point_product"] = local["surface_point"].copy()
+        record["surface_normal_product"] = local["surface_normal"].copy()
+        record["spray_direction_product"] = local["spray_direction"].copy()
+        record["quaternion_product_xyzw"] = local["quaternion_xyzw"].copy()
+        self._interactive_spray_latest_pose = self._interactive_record_pose_for_edit(record)
+        self._interactive_spray_standoff = float(np.linalg.norm(surface - nozzle))
+        mm_factor = float(self._get_source_mm_factor() or 1.0)
+        self.working_distance_spin.blockSignals(True)
+        self.working_distance_spin.setValue(self._interactive_spray_standoff * mm_factor)
+        self.working_distance_spin.blockSignals(False)
+        self._refresh_interactive_recorded_path_actor()
+        self._interactive_show_selected_point()
+        return True
+
+    def _interactive_display_ray_plane_hit(self, x, y, plane_point, plane_normal):
+        renderer = self.plotter.renderer
+        world_points = []
+        for depth in (0.0, 1.0):
+            renderer.SetDisplayPoint(float(x), float(y), depth)
+            renderer.DisplayToWorld()
+            homogeneous = np.asarray(renderer.GetWorldPoint(), dtype=np.float64)
+            if homogeneous.shape != (4,) or abs(float(homogeneous[3])) <= 1e-12:
+                return None
+            world_points.append(homogeneous[:3] / homogeneous[3])
+        near, far = world_points
+        ray = far - near
+        denominator = float(np.dot(ray, plane_normal))
+        if abs(denominator) <= 1e-10:
+            return None
+        fraction = float(np.dot(plane_point - near, plane_normal) / denominator)
+        if not np.isfinite(fraction):
+            return None
+        hit = near + ray * fraction
+        return hit if np.all(np.isfinite(hit)) else None
+
+    def _on_interactive_spray_edit_left_press(self, interactor, event):
+        if not self._interactive_is_postfinish_point_editing():
+            return
+        actor = self._interactive_spray_points_actor
+        if actor is None:
+            return
+        x, y = interactor.GetEventPosition()
+        picker = self._interactive_spray_point_picker
+        picker.InitializePickList()
+        picker.AddPickList(actor)
+        picker.PickFromListOn()
+        if not picker.Pick(int(x), int(y), 0, self.plotter.renderer):
+            self._interactive_selected_spray_point_index = None
+            self._interactive_spray_point_drag_state = None
+            self._interactive_remove_selected_point_visuals()
+            self._interactive_end_point_edit_mode()
+            return
+        if picker.GetActor() != actor:
+            self._interactive_selected_spray_point_index = None
+            self._interactive_spray_point_drag_state = None
+            self._interactive_remove_selected_point_visuals()
+            self._interactive_end_point_edit_mode()
+            return
+        point_index = int(picker.GetPointId())
+        if point_index < 0 or point_index >= len(self._interactive_spray_records):
+            return
+        self._interactive_selected_spray_point_index = point_index
+        self._interactive_begin_point_edit_mode()
+        record = self._interactive_spray_records[point_index]
+        pose = self._interactive_record_pose_for_edit(record)
+        direction = pose["spray_direction_world"]
+        direction /= max(float(np.linalg.norm(direction)), 1e-12)
+        plane_point = pose["nozzle_point_world"].copy()
+        pointer_hit = self._interactive_display_ray_plane_hit(
+            x, y, plane_point, direction
+        )
+        self._interactive_spray_point_drag_state = None
+        if pointer_hit is not None:
+            self._interactive_spray_point_drag_state = {
+                "plane_point": plane_point,
+                "plane_normal": direction.copy(),
+                "pointer_start": pointer_hit.copy(),
+                "nozzle_start": pose["nozzle_point_world"].copy(),
+                "surface_start": pose["surface_point_world"].copy(),
+                "normal_start": pose["surface_normal_world"].copy(),
+                "direction_start": direction.copy(),
+            }
+        self._interactive_spray_standoff = float(np.linalg.norm(
+            pose["surface_point_world"] - pose["nozzle_point_world"]
+        ))
+        self._interactive_show_selected_point()
+        return 1
+
+    def _on_interactive_spray_edit_left_release(self, interactor, event):
+        if self._interactive_spray_point_drag_state is None:
+            return
+        self._interactive_spray_point_drag_state = None
+        self._optimize_interactive_recorded_path()
+        self._interactive_show_selected_point()
+        return 1
+
+    def _interactive_update_selected_point_drag(self, interactor):
+        state = self._interactive_spray_point_drag_state
+        if state is None:
+            return
+        x, y = interactor.GetEventPosition()
+        pointer_now = self._interactive_display_ray_plane_hit(
+            x, y, state["plane_point"], state["plane_normal"]
+        )
+        if pointer_now is None:
+            return
+        delta = pointer_now - state["pointer_start"]
+        pose = {
+            "nozzle_point_world": state["nozzle_start"] + delta,
+            "surface_point_world": state["surface_start"] + delta,
+            "surface_normal_world": state["normal_start"].copy(),
+            "spray_direction_world": state["direction_start"].copy(),
+        }
+        self._interactive_update_selected_record(pose)
+
     def _on_interactive_spray_middle_press(self, interactor, event):
         """Begin a middle-button drag to tilt the spray axis."""
+        if (
+            self._interactive_is_postfinish_point_editing()
+            and self._interactive_selected_spray_point_index is not None
+        ):
+            index = self._interactive_selected_spray_point_index
+            if index < 0 or index >= len(self._interactive_spray_records):
+                return
+            pose = self._interactive_record_pose_for_edit(self._interactive_spray_records[index])
+            distance_source = float(np.linalg.norm(
+                pose["surface_point_world"] - pose["nozzle_point_world"]
+            ))
+            if distance_source <= 1e-12:
+                return
+            self._interactive_spray_standoff = distance_source
+            mm_factor = float(self._get_source_mm_factor() or 1.0)
+            self.working_distance_spin.blockSignals(True)
+            self.working_distance_spin.setValue(distance_source * mm_factor)
+            self.working_distance_spin.blockSignals(False)
+            self._interactive_spray_angle_x_deg = 0.0
+            self._interactive_spray_angle_y_deg = 0.0
+            pose["angle_pivot_world"] = pose["surface_point_world"].copy()
+            self._interactive_spray_angle_anchor_pose = pose
+            self._interactive_begin_point_edit_mode()
+            self._interactive_spray_angle_dragging = True
+            self._interactive_spray_angle_last_position = tuple(
+                int(value) for value in interactor.GetEventPosition()
+            )
+            return 1
         if (
             not self._interactive_spray_active
             or self._interactive_spray_mode != "spray"
@@ -6853,6 +7152,13 @@ class ProductViewer(QWidget):
         self._interactive_spray_previous_nozzle_world = None
 
     def _on_interactive_spray_middle_release(self, interactor, event):
+        if self._interactive_is_postfinish_point_editing() and self._interactive_spray_angle_dragging:
+            self._interactive_spray_angle_dragging = False
+            self._interactive_spray_angle_last_position = None
+            self._interactive_spray_angle_anchor_pose = None
+            self._optimize_interactive_recorded_path()
+            self._interactive_show_selected_point()
+            return 1
         self._interactive_spray_angle_dragging = False
         self._interactive_spray_angle_last_position = None
         self._interactive_spray_angle_anchor_pose = None
@@ -6962,7 +7268,10 @@ class ProductViewer(QWidget):
         pose["spray_direction_world"] = rotated_direction
         pose["nozzle_point_world"] = pivot - rotated_direction * distance_source
         pose["timestamp"] = time.monotonic()
-        self._interactive_update_cursor(pose)
+        if self._interactive_is_postfinish_point_editing():
+            self._interactive_update_selected_record(pose)
+        else:
+            self._interactive_update_cursor(pose)
 
     def _on_interactive_spray_wheel(self, interactor, event):
         """Adjust spray working distance instead of zooming during SPRAY mode.
@@ -6972,7 +7281,12 @@ class ProductViewer(QWidget):
         maximum limits. The current cursor pose is recomputed immediately,
         so the nozzle moves even when the mouse cursor itself is stationary.
         """
-        if (
+        editing_selected_point = bool(
+            self._interactive_is_postfinish_point_editing()
+            and self._interactive_selected_spray_point_index is not None
+            and 0 <= self._interactive_selected_spray_point_index < len(self._interactive_spray_records)
+        )
+        if not editing_selected_point and (
             not self._interactive_spray_active
             or self._interactive_spray_mode != "spray"
         ):
@@ -6986,7 +7300,18 @@ class ProductViewer(QWidget):
         else:
             return
 
-        current_mm = float(self.working_distance_spin.value())
+        if editing_selected_point:
+            index = self._interactive_selected_spray_point_index
+            if index is None or index < 0 or index >= len(self._interactive_spray_records):
+                return
+            selected_pose = self._interactive_record_pose_for_edit(
+                self._interactive_spray_records[index]
+            )
+            current_mm = float(np.linalg.norm(
+                selected_pose["surface_point_world"] - selected_pose["nozzle_point_world"]
+            ) * float(self._get_source_mm_factor() or 1.0))
+        else:
+            current_mm = float(self.working_distance_spin.value())
         target_mm = float(np.clip(
             current_mm + delta_mm,
             INTERACTIVE_SPRAY_MIN_STANDOFF_MM,
@@ -6997,6 +7322,14 @@ class ProductViewer(QWidget):
             return
 
         self.working_distance_spin.setValue(target_mm)
+        if editing_selected_point:
+            distance_source = target_mm / max(float(self._get_source_mm_factor() or 1.0), 1e-12)
+            selected_pose["nozzle_point_world"] = (
+                selected_pose["surface_point_world"]
+                - selected_pose["spray_direction_world"] * distance_source
+            )
+            self._interactive_update_selected_record(selected_pose)
+            return 1
 
         # A distance change is a deliberate discontinuity in nozzle position.
         # Do not integrate the interval before/after the wheel movement as one
@@ -7012,6 +7345,23 @@ class ProductViewer(QWidget):
             self.plotter.render()
 
     def _on_interactive_spray_mouse_move(self, interactor, event):
+        if self._interactive_is_postfinish_point_editing():
+            if self._interactive_spray_angle_dragging:
+                if bool(QApplication.mouseButtons() & Qt.MouseButton.MiddleButton):
+                    self._rotate_spray_axis_from_middle_drag(interactor)
+                else:
+                    self._interactive_spray_angle_dragging = False
+                    self._interactive_spray_angle_last_position = None
+                    self._interactive_spray_angle_anchor_pose = None
+                    self._optimize_interactive_recorded_path()
+                return
+            if self._interactive_spray_point_drag_state is not None:
+                if bool(QApplication.mouseButtons() & Qt.MouseButton.LeftButton):
+                    self._interactive_update_selected_point_drag(interactor)
+                else:
+                    self._interactive_spray_point_drag_state = None
+                    self._optimize_interactive_recorded_path()
+                return
         if (
             not self._interactive_spray_active
             or self._interactive_spray_mode != "spray"
