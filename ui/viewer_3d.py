@@ -7908,6 +7908,53 @@ class ProductViewer(QWidget):
             current_mm = float(np.linalg.norm(
                 selected_pose["surface_point_world"] - selected_pose["nozzle_point_world"]
             ) * float(self._get_source_mm_factor() or 1.0))
+        elif self._interactive_hole_circle_mode:
+            # In H mode the wheel inserts/retracts the complete sprayer pose
+            # along the detected bore axis. Translate both the nozzle and its
+            # target point equally so the working distance and spray footprint
+            # remain exactly unchanged. Wheel-down advances into the bore.
+            pose = self._interactive_spray_latest_pose
+            if pose is None:
+                self.plotter.render()
+                return
+            updated_pose = {
+                key: (value.copy() if isinstance(value, np.ndarray) else value)
+                for key, value in pose.items()
+            }
+            nozzle = np.asarray(
+                updated_pose["nozzle_point_world"], dtype=np.float64
+            )
+            direction = np.asarray(
+                updated_pose["spray_direction_world"], dtype=np.float64
+            )
+            direction_length = float(np.linalg.norm(direction))
+            if direction_length <= 1e-12:
+                return
+            direction /= direction_length
+            hole = self._interactive_nearest_hole_candidate(nozzle)
+            travel_axis = (
+                np.asarray(hole["axis_world"], dtype=np.float64)
+                if hole is not None else direction.copy()
+            )
+            travel_axis /= max(float(np.linalg.norm(travel_axis)), 1e-12)
+            if float(np.dot(travel_axis, direction)) < 0.0:
+                travel_axis *= -1.0
+            mm_factor = max(float(self._get_source_mm_factor() or 1.0), 1e-12)
+            # Forward wheel = retract; backward wheel = advance into the hole.
+            travel_source = (
+                -INTERACTIVE_SPRAY_WHEEL_STEP_MM / mm_factor
+                if "Forward" in event_name
+                else INTERACTIVE_SPRAY_WHEEL_STEP_MM / mm_factor
+            )
+            translation = travel_axis * travel_source
+            updated_pose["nozzle_point_world"] = nozzle + translation
+            updated_pose["surface_point_world"] = (
+                np.asarray(updated_pose["surface_point_world"], dtype=np.float64)
+                + translation
+            )
+            updated_pose["timestamp"] = time.monotonic()
+            self._interactive_update_cursor(updated_pose)
+            return
         else:
             current_mm = float(self.working_distance_spin.value())
         target_mm = float(np.clip(
