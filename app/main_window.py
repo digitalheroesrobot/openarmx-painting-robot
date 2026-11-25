@@ -4212,7 +4212,7 @@ class MainWindow(QMainWindow):
         )
         self._refresh_workflow_ui()
 
-    def _start_interactive_spray_path(self, resume_existing=False, start_in_spray_mode=False):
+    def _start_interactive_spray_path(self, resume_existing=False):
         """Start or continue mouse-driven spray recording on Stage 3."""
         if (
             self._operation_running
@@ -4260,11 +4260,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Interactive Spray Path Error", str(exc))
             return
         self._refresh_workflow_ui()
-        if start_in_spray_mode:
-            # Deletion/replacement editing must return directly to paint input.
-            # Normal Stage 3 entry remains camera-first and uses SPACE.
-            self.viewer._return_to_interactive_spray_mode()
-            self._refresh_workflow_ui()
         stage2_labels = np.asarray(
             self.current_stage2_result.get("face_status_labels", [])
             if isinstance(self.current_stage2_result, dict)
@@ -4305,8 +4300,6 @@ class MainWindow(QMainWindow):
 
     def _on_manual_route_readiness_changed(self, ready):
         """Enable the next stage when independent spray strokes are finalized."""
-        if getattr(self, "_suppress_route_readiness_callback", False):
-            return
         ready = bool(ready)
         self.stage_completed[STAGE_SPRAY_TRAJECTORY] = ready
         if ready:
@@ -4487,9 +4480,11 @@ class MainWindow(QMainWindow):
             "DELETE SPRAY GROUP",
             (
                 f"Delete SPRAY GROUP {group_id}?\n\n"
-                "Only the selected spray group will be deleted. "
-                "The current page and view will not change.\n\n"
-                "Use the BACK button whenever you want to return to another page."
+                "The selected spray group will be removed. "
+                "The remaining groups will be renumbered.\n\n"
+                "The current generated spray route will be invalidated "
+                "and the application will return to SPRAY MODE so you can "
+                "draw the replacement stroke."
             ),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
@@ -4500,7 +4495,7 @@ class MainWindow(QMainWindow):
         self._delete_recorded_spray_group(group_id)
 
     def _delete_recorded_spray_group(self, group_id):
-        """Delete the selected group only; navigation is handled by BACK."""
+        """Delete one recorded spray group and return to paint-mode recording."""
         if self._recorded_spray_list_updating or self._operation_running:
             return
 
@@ -4509,75 +4504,54 @@ class MainWindow(QMainWindow):
         except (TypeError, ValueError):
             return
 
-        records = list(getattr(self.viewer, "_interactive_spray_records", []))
+        records = list(
+            getattr(self.viewer, "_interactive_spray_records", [])
+        )
         if not records:
             return
 
-        remaining_records = [
-            dict(record)
-            for record in records
-            if int(record.get(
-                "group_id",
-                int(record.get("stroke_id", 0)) + 1,
-            )) != group_id
-        ]
+        remaining_records = []
+        for record in records:
+            record_group_id = int(
+                record.get(
+                    "group_id",
+                    int(record.get("stroke_id", 0)) + 1,
+                )
+            )
+            if record_group_id != group_id:
+                remaining_records.append(dict(record))
+
         if len(remaining_records) == len(records):
             return
 
-        # Remove only the requested group and compact the displayed group IDs.
-        old_group_ids = []
-        for record in remaining_records:
-            old_id = int(record.get(
-                "group_id",
-                int(record.get("stroke_id", 0)) + 1,
-            ))
-            if old_id not in old_group_ids:
-                old_group_ids.append(old_id)
-
-        group_id_map = {
-            old_id: new_id
-            for new_id, old_id in enumerate(old_group_ids, start=1)
-        }
-        for record in remaining_records:
-            old_id = int(record.get(
-                "group_id",
-                int(record.get("stroke_id", 0)) + 1,
-            ))
-            record["group_id"] = group_id_map[old_id]
-
         self.viewer._interactive_spray_records = remaining_records
 
-        # Recompute the recorded path while suppressing only this window's
-        # workflow-readiness callback. The viewer's normal optimizer and
-        # spray-drawing behavior remain unchanged.
+        # The generated route is no longer authoritative after a group is
+        # deleted. Rebuild the remaining route data first, then invalidate
+        # the finalized route and re-enter interactive SPRAY MODE. Existing
+        # groups are preserved so the operator only needs to draw the
+        # replacement stroke.
         if remaining_records:
-            was_suppressed = getattr(
-                self, "_suppress_route_readiness_callback", False
-            )
-            self._suppress_route_readiness_callback = True
-            try:
-                self.viewer._optimize_interactive_recorded_path()
-            finally:
-                self._suppress_route_readiness_callback = was_suppressed
+            self._refresh_recorded_spray_path_panel()
+            self._on_recorded_spray_groups_reordered()
         else:
-            self.viewer._interactive_spray_route_optimization = {}
-            self.viewer._interactive_recorded_replay_timing = {}
-            self.viewer._interactive_route_optimization_metrics = {}
+            self.viewer._optimize_interactive_recorded_path()
+            self.viewer._refresh_interactive_recorded_path_actor()
 
-        self.viewer._refresh_interactive_recorded_path_actor()
-
-        # A changed path invalidates any generated trajectory, but deletion
-        # never changes the current page, camera/view mode, or active session.
         self.interactive_spray_path = None
         self.stage_completed[STAGE_SPRAY_TRAJECTORY] = False
         self.stage_completed[STAGE_SPRAY_SIMULATION] = False
+        self.viewer.set_recorded_path_page("route")
         self._refresh_recorded_spray_path_panel()
+        self._refresh_workflow_ui()
 
-        remaining_group_count = len(old_group_ids)
+        # Re-enter the actual interactive recording mode. With
+        # resume_existing=True, surviving groups and their coating state stay
+        # visible while the operator draws the replacement group.
+        self._start_interactive_spray_path(resume_existing=True)
+
         self.status_bar.showMessage(
-            f"SPRAY GROUP {group_id} DELETED · "
-            f"{remaining_group_count} GROUP(S) REMAIN · "
-            "CURRENT PAGE AND VIEW UNCHANGED"
+            f"SPRAY GROUP {group_id} DELETED · DRAW THE REPLACEMENT SPRAY GROUP"
         )
 
     def _on_recorded_spray_groups_reordered(self):
