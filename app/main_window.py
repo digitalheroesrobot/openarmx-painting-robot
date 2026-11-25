@@ -4519,8 +4519,12 @@ class MainWindow(QMainWindow):
         if not records:
             return
 
+        # Remove only records belonging to the selected user gesture.
+        # Keep every surviving group_id and stroke_id unchanged: these IDs
+        # are also used by the route actor and playback segmentation, and
+        # compacting group IDs here can make unrelated strokes collide.
         remaining_records = [
-            dict(record)
+            record
             for record in records
             if int(record.get(
                 "group_id",
@@ -4530,26 +4534,14 @@ class MainWindow(QMainWindow):
         if len(remaining_records) == len(records):
             return
 
-        # Compact the visible group IDs while preserving the remaining records.
-        old_group_ids = []
+        remaining_group_ids = []
         for record in remaining_records:
-            old_id = int(record.get(
+            remaining_id = int(record.get(
                 "group_id",
                 int(record.get("stroke_id", 0)) + 1,
             ))
-            if old_id not in old_group_ids:
-                old_group_ids.append(old_id)
-
-        group_id_map = {
-            old_id: new_id
-            for new_id, old_id in enumerate(old_group_ids, start=1)
-        }
-        for record in remaining_records:
-            old_id = int(record.get(
-                "group_id",
-                int(record.get("stroke_id", 0)) + 1,
-            ))
-            record["group_id"] = group_id_map[old_id]
+            if remaining_id not in remaining_group_ids:
+                remaining_group_ids.append(remaining_id)
 
         self.viewer._interactive_spray_records = remaining_records
 
@@ -4581,7 +4573,7 @@ class MainWindow(QMainWindow):
         self._refresh_workflow_ui()
         self.status_bar.showMessage(
             f"SPRAY GROUP {group_id} DELETED · "
-            f"{len(old_group_ids)} GROUP(S) REMAIN · "
+            f"{len(remaining_group_ids)} GROUP(S) REMAIN · "
             "CURRENT PAGE AND VIEW UNCHANGED"
         )
 
