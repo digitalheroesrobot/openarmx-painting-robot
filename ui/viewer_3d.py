@@ -7247,28 +7247,36 @@ class ProductViewer(QWidget):
         self._interactive_hole_circle_basis_u = u
         self._interactive_hole_circle_basis_v = v
 
+        # Begin the gesture even when the operator presses at the bore
+        # centre. The first drag away from the centre establishes the radius;
+        # subsequent drag movement sweeps the circle circumference.
         x, y = interactor.GetEventPosition()
         hit = self._interactive_circle_plane_hit(x, y)
-        if hit is None:
-            return False
-        radial = hit - center
-        radial -= axis * float(np.dot(radial, axis))
-        radius = float(np.linalg.norm(radial))
-        if radius < max(float(self._interactive_spray_sampling_spacing) * 0.5, 1.0):
-            return False
-
-        start_angle = math.atan2(
-            float(np.dot(radial, v)),
-            float(np.dot(radial, u)),
-        )
-        self._interactive_hole_circle_radius = radius
-        self._interactive_hole_circle_start_angle = start_angle
-        self._interactive_hole_circle_last_angle = start_angle
+        self._interactive_hole_circle_radius = None
+        self._interactive_hole_circle_start_angle = None
+        self._interactive_hole_circle_last_angle = None
         self._interactive_hole_circle_total_angle = 0.0
-        self._interactive_hole_circle_raw_angles = [start_angle]
+        self._interactive_hole_circle_raw_angles = []
         self._interactive_hole_circle_drawing = True
         self._interactive_hole_circle_preview_points = []
         self._interactive_hole_circle_preview_invalid = []
+
+        if hit is not None:
+            radial = hit - center
+            radial -= axis * float(np.dot(radial, axis))
+            radius = float(np.linalg.norm(radial))
+            minimum_radius = max(
+                float(self._interactive_spray_sampling_spacing) * 0.5, 1.0
+            )
+            if radius >= minimum_radius:
+                start_angle = math.atan2(
+                    float(np.dot(radial, v)),
+                    float(np.dot(radial, u)),
+                )
+                self._interactive_hole_circle_radius = radius
+                self._interactive_hole_circle_start_angle = start_angle
+                self._interactive_hole_circle_last_angle = start_angle
+                self._interactive_hole_circle_raw_angles = [start_angle]
         return True
 
     def _interactive_update_hole_circle_from_mouse(self, interactor):
@@ -7288,6 +7296,24 @@ class ProductViewer(QWidget):
         length = float(np.linalg.norm(radial))
         if length <= 1e-8:
             return
+
+        # A press at the exact bore centre has no usable radius. Wait until
+        # the pointer is dragged far enough away, then lock the radius and
+        # angle from that first meaningful displacement.
+        if self._interactive_hole_circle_radius is None:
+            minimum_radius = max(
+                float(self._interactive_spray_sampling_spacing) * 0.5, 1.0
+            )
+            if length < minimum_radius:
+                return
+            angle = math.atan2(float(np.dot(radial, v)), float(np.dot(radial, u)))
+            self._interactive_hole_circle_radius = length
+            self._interactive_hole_circle_start_angle = angle
+            self._interactive_hole_circle_last_angle = angle
+            self._interactive_hole_circle_total_angle = 0.0
+            self._interactive_hole_circle_raw_angles = [angle]
+            return
+
         angle = math.atan2(float(np.dot(radial, v)), float(np.dot(radial, u)))
         previous = float(self._interactive_hole_circle_last_angle)
         delta = math.atan2(math.sin(angle - previous), math.cos(angle - previous))
