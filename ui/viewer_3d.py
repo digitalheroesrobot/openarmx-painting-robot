@@ -6870,6 +6870,122 @@ class ProductViewer(QWidget):
         return emitted
 
 
+    def _interactive_pick_hole_opening_pose(self, x, y):
+        """Build a sprayer pose when the pointer ray passes through a bore opening.
+
+        A normal surface picker cannot hit the empty center of a through-hole.
+        Intersect the pointer ray with detected bore-opening planes, then sample
+        nearby pixels to obtain the actual rim face normal.
+        """
+        candidates = self._filtered_hole_candidates()
+        if not candidates:
+            return None
+
+        matrix = self._actor_matrix_array()
+        try:
+            normal_matrix = np.linalg.inv(matrix[:3, :3]).T
+        except np.linalg.LinAlgError:
+            return None
+
+        best = None
+        for item in candidates:
+            try:
+                center_local = np.asarray(
+                    item["opening_center_coordinate_units"], dtype=np.float64
+                )
+                axis_local = np.asarray(item["axis_direction"], dtype=np.float64)
+                radius = abs(float(item["diameter_coordinate_units"])) * 0.5
+                center_world = matrix[:3, :3] @ center_local + matrix[:3, 3]
+                axis_world = normal_matrix @ axis_local
+                axis_length = float(np.linalg.norm(axis_world))
+                if axis_length <= 1e-12 or radius <= 0.0:
+                    continue
+                axis_world /= axis_length
+                ray_hit = self._interactive_display_ray_plane_hit(
+                    int(x), int(y), center_world, axis_world
+                )
+                if ray_hit is None:
+                    continue
+                delta = ray_hit - center_world
+                radial = delta - axis_world * float(np.dot(delta, axis_world))
+                radial_distance = float(np.linalg.norm(radial))
+                if radial_distance > radius:
+                    continue
+                if best is None or radial_distance < best["radial_distance"]:
+                    best = {
+                        "center": center_world,
+                        "axis": axis_world,
+                        "radius": radius,
+                        "radial_distance": radial_distance,
+                    }
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        if best is None:
+            return None
+
+        # The center of the hole has no triangles. Search outward in screen
+        # space until a point on its opening rim supplies a real mesh normal.
+        directions = (
+            (-1, 0), (1, 0), (0, -1), (0, 1),
+            (-1, -1), (1, -1), (-1, 1), (1, 1),
+        )
+        rim_pose = None
+        for pixel_radius in (2, 4, 6, 9, 13, 18, 24, 32, 40):
+            for dx, dy in directions:
+                candidate_pose = self._interactive_pick_surface_pose(
+                    int(x + dx * pixel_radius),
+                    int(y + dy * pixel_radius),
+                    estimate_planar=True,
+                )
+                if candidate_pose is None:
+                    continue
+                point = np.asarray(
+                    candidate_pose["surface_point_world"], dtype=np.float64
+                )
+                delta = point - best["center"]
+                axial = abs(float(np.dot(delta, best["axis"])))
+                radial = delta - float(np.dot(delta, best["axis"])) * best["axis"]
+                # Accept only the nearby opening face, not a surface deeper
+                # inside the bore or an unrelated face behind the product.
+                if axial > max(best["radius"] * 0.2, self._interactive_mesh_diagonal * 1e-4):
+                    continue
+                if float(np.linalg.norm(radial)) > best["radius"] * 1.35:
+                    continue
+                rim_pose = candidate_pose
+                break
+            if rim_pose is not None:
+                break
+
+        if rim_pose is None:
+            return None
+
+        normal_world = np.asarray(
+            rim_pose["surface_normal_world"], dtype=np.float64
+        )
+        normal_length = float(np.linalg.norm(normal_world))
+        if normal_length <= 1e-12:
+            return None
+        normal_world /= normal_length
+        spray_direction = -normal_world
+        spray_direction = self._interactive_rotate_spray_direction(
+            spray_direction,
+            self._interactive_spray_angle_y_deg,
+            self._interactive_spray_angle_x_deg,
+        )
+        center = best["center"]
+        return {
+            "surface_point_world": center.copy(),
+            "surface_normal_world": normal_world,
+            "nozzle_point_world": (
+                center + normal_world * self._interactive_spray_standoff
+            ),
+            "spray_direction_world": spray_direction,
+            "cell_id": rim_pose.get("cell_id", -1),
+            "paintable": bool(rim_pose.get("paintable", True)),
+            "timestamp": time.monotonic(),
+        }
+
     def set_hole_circle_mode(self, enabled=True):
         """Enable hole insertion/circle mode and show a face-normal sprayer."""
         self._interactive_hole_circle_mode = bool(
@@ -6881,12 +6997,14 @@ class ProductViewer(QWidget):
             self._interactive_cancel_hole_circle_gesture()
             return False
 
-        # H first places the nozzle at the configured stand-off from the
-        # surface under the pointer. The nozzle axis is perpendicular to that
-        # picked face and points into the product, ready for wheel insertion.
+        # First try the ordinary surface hit. If the pointer is over the empty
+        # opening, resolve the bore from its detected axis and sample the rim
+        # for a face normal instead of silently leaving the sprayer invisible.
         interactor = self.plotter.iren.interactor
         x, y = interactor.GetEventPosition()
         pose = self._interactive_pick_surface_pose(x, y, estimate_planar=True)
+        if pose is None:
+            pose = self._interactive_pick_hole_opening_pose(x, y)
         if pose is not None:
             self._interactive_update_cursor(pose)
         return True
