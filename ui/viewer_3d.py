@@ -6983,6 +6983,9 @@ class ProductViewer(QWidget):
             and self._interactive_spray_mode == "spray"
         )
         if not self._interactive_hole_circle_mode:
+            timer = getattr(self, "_interactive_hole_circle_auto_timer", None)
+            if timer is not None:
+                timer.stop()
             self._interactive_cancel_hole_circle_gesture()
             return False
 
@@ -7501,6 +7504,7 @@ class ProductViewer(QWidget):
         self.plotter.render()
 
     def _interactive_finalize_hole_circle(self):
+        """Commit the complete prevalidated 360-degree hole circle as one group."""
         if not self._interactive_hole_circle_drawing:
             return 0
         center = self._interactive_hole_circle_center_world
@@ -7508,41 +7512,30 @@ class ProductViewer(QWidget):
         u = self._interactive_hole_circle_basis_u
         v = self._interactive_hole_circle_basis_v
         radius = float(self._interactive_hole_circle_radius or 0.0)
-        total = float(self._interactive_hole_circle_total_angle)
         spacing = max(float(self._interactive_spray_sampling_spacing), 1e-6)
-
-        if radius <= 0.0 or abs(total) < math.radians(15.0):
+        if radius <= 0.0:
             self._interactive_cancel_hole_circle_gesture()
+            self._interactive_hole_circle_mode = False
             return 0
 
-        circumference_length = abs(total) * radius
-        count = max(2, int(math.floor(circumference_length / spacing)) + 1)
-        angles = np.linspace(
-            self._interactive_hole_circle_start_angle,
-            self._interactive_hole_circle_start_angle + total,
-            count,
-        )
-        existing_group_ids = [
-            int(item.get("group_id", 0))
-            for item in self._interactive_spray_records
-        ]
-        group_id = max(existing_group_ids, default=0) + 1
-        stroke_id = max(
-            [int(item.get("stroke_id", -1)) for item in self._interactive_spray_records],
-            default=-1,
-        ) + 1
+        count = max(36, int(math.ceil(2.0 * math.pi * radius / spacing)))
+        count = min(count, 720)
+        angles = np.linspace(0.0, 2.0 * math.pi, count, endpoint=False)
 
-        stored = 0
-        invalid_points = []
+        # Validate every route sample before writing any records. A single
+        # collision or missing wall hit rejects the entire circle; partial arcs
+        # must never be registered as if they were a complete safe route.
+        poses = []
         for angle in angles:
             nozzle = center + radius * (
-                math.cos(float(angle)) * u
-                + math.sin(float(angle)) * v
+                math.cos(float(angle)) * u + math.sin(float(angle)) * v
             )
             pose = self._interactive_hole_circle_pose(nozzle, axis)
             if pose is None:
-                invalid_points.append(nozzle)
-                continue
+                self._interactive_cancel_hole_circle_gesture()
+                self._interactive_hole_circle_mode = False
+                self.plotter.render()
+                return 0
             gun_actors, gun_polydata = self._interactive_build_gun_visual(
                 nozzle, pose["spray_direction_world"], render=False
             )
@@ -7553,29 +7546,36 @@ class ProductViewer(QWidget):
                 except Exception:
                     pass
             if collision:
-                invalid_points.append(nozzle)
-                continue
+                self._interactive_cancel_hole_circle_gesture()
+                self._interactive_hole_circle_mode = False
+                self.plotter.render()
+                return 0
+            poses.append(pose)
 
+        group_id = max(
+            [int(item.get("group_id", 0)) for item in self._interactive_spray_records],
+            default=0,
+        ) + 1
+        stroke_id = max(
+            [int(item.get("stroke_id", -1)) for item in self._interactive_spray_records],
+            default=-1,
+        ) + 1
+        self._interactive_spray_stroke_id = stroke_id
+        for pose in poses:
             local = self._interactive_pose_to_product_frame(pose)
-            self._interactive_spray_stroke_id = stroke_id
             self._interactive_store_record_sample(
-                {
-                    **pose,
-                    "group_id": group_id,
-                },
-                local,
+                {**pose, "group_id": group_id}, local
             )
-            stored += 1
 
-        self._interactive_hole_circle_preview_invalid = invalid_points
         self._interactive_cancel_hole_circle_gesture()
         self._interactive_hole_circle_mode = False
-        if stored:
+        if poses:
             self._interactive_recorded_replay_timing = None
             self._refresh_interactive_recorded_path_actor()
             self._optimize_interactive_recorded_path()
             self.spray_samples_changed.emit()
-        return stored
+        self.plotter.render()
+        return len(poses)
 
     def _interactive_is_postfinish_point_editing(self):
         return bool(
