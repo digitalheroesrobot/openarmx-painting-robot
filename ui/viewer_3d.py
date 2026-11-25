@@ -6554,6 +6554,7 @@ class ProductViewer(QWidget):
             lighting=False,
             pickable=False,
         )
+        self._interactive_set_cursor_overlay_depth(actor)
         self._interactive_spray_live_actors.append(actor)
 
         # Trace the nominal cone's outer generators against the product.
