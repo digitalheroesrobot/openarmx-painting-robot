@@ -2376,6 +2376,7 @@ class ProductViewer(QWidget):
             lighting=False,
             pickable=False,
         )
+        self._interactive_set_cursor_overlay_depth(actor)
         self._interactive_spray_live_actors.append(actor)
 
         particle_fractions = np.asarray([0.18, 0.36, 0.54, 0.72, 0.90])
@@ -5802,6 +5803,27 @@ class ProductViewer(QWidget):
             "PRECOMPUTED_SURFACE_SAMPLE_GAUSSIAN_BAKE"
         )
 
+    @staticmethod
+    def _interactive_set_cursor_overlay_depth(actor):
+        """Keep interactive sprayer overlays visible through the product mesh.
+
+        The nozzle and spray cone are cursor guides, not product geometry. When
+        the nozzle is inserted into a real mesh opening, normal depth testing
+        lets the front wall hide these guides even though they are still being
+        rendered. Disable depth testing/writes for these overlay actors only.
+        """
+        if actor is None:
+            return actor
+        try:
+            prop = actor.GetProperty()
+            if hasattr(prop, "SetDepthTest"):
+                prop.SetDepthTest(False)
+            if hasattr(prop, "SetDepthWrite"):
+                prop.SetDepthWrite(False)
+        except Exception:
+            pass
+        return actor
+
     def _interactive_build_gun_visual(self, nozzle, spray_direction, render=True):
         """Build a lightweight sprayer envelope from the active profile."""
         profile = self._interactive_sprayer_profile or {}
@@ -5864,6 +5886,7 @@ class ProductViewer(QWidget):
                     lighting=True,
                     pickable=False,
                 )
+                self._interactive_set_cursor_overlay_depth(actor)
                 actors.append(actor)
         return actors, gun_polydata
 
@@ -6479,6 +6502,7 @@ class ProductViewer(QWidget):
                     boundary, color="#FF9F1C", line_width=2.0,
                     lighting=False, pickable=False,
                 )
+                self._interactive_set_cursor_overlay_depth(actor)
                 self._interactive_spray_live_actors.append(actor)
 
         nozzle = pose["nozzle_point_world"]
