@@ -3125,9 +3125,20 @@ class MainWindow(QMainWindow):
         if route_page and route_exists and not recording:
             self.route_next_button.show()
             self.route_next_button.raise_()
-        self.route_edit_button.setVisible(route_page and route_exists and not recording)
+        # Keep an entry point available after every recorded group has
+        # been deleted. In that state this action starts a fresh route rather
+        # than trying to resume a route that no longer exists.
+        self.route_edit_button.setText(
+            "ADD TO EXISTING ROUTE" if route_exists else "START NEW ROUTE"
+        )
+        self.route_edit_button.setToolTip(
+            "Continue the existing route and preserve its coating state."
+            if route_exists
+            else "No route remains. Start a new spray-route recording session."
+        )
+        self.route_edit_button.setVisible(route_page and not recording)
         self.route_edit_button.setEnabled(
-            route_page and route_exists and not recording and not self._operation_running
+            route_page and not recording and not self._operation_running
         )
         self.simulation_back_button.setVisible(simulation_page)
         self.simulation_back_button.setEnabled(
@@ -4567,6 +4578,7 @@ class MainWindow(QMainWindow):
         self.stage_completed[STAGE_SPRAY_SIMULATION] = False
         self._refresh_recorded_spray_path_panel()
 
+        self._refresh_workflow_ui()
         self.status_bar.showMessage(
             f"SPRAY GROUP {group_id} DELETED · "
             f"{len(old_group_ids)} GROUP(S) REMAIN · "
@@ -4798,18 +4810,30 @@ class MainWindow(QMainWindow):
         )
 
     def _continue_interactive_spray_path(self):
-        """Continue the existing route while preserving its accumulated coating."""
+        """Resume an existing route, or start a fresh one when none remains."""
         if (
             self._operation_running
             or self.active_stage != STAGE_SPRAY_TRAJECTORY
-            or self.interactive_spray_path is None
-            or not self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
+            or self.current_mesh is None
         ):
             return
 
+        route_exists = (
+            self.interactive_spray_path is not None
+            and self.stage_completed.get(STAGE_SPRAY_TRAJECTORY, False)
+        )
+        if self.viewer._interactive_spray_active:
+            return
+
+        # A route with no finalized trajectory is a new recording, not an
+        # additive edit. This is the expected state after deleting every group.
         self.stage_completed[STAGE_SPRAY_SIMULATION] = False
+        if not route_exists:
+            self.interactive_spray_path = None
+            self.stage_completed[STAGE_SPRAY_TRAJECTORY] = False
+
         self.viewer.set_recorded_path_page("route")
-        self._start_interactive_spray_path(resume_existing=True)
+        self._start_interactive_spray_path(resume_existing=route_exists)
         self._refresh_workflow_ui()
 
     def _display_current_trajectory(self):
