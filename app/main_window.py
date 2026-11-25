@@ -4468,7 +4468,8 @@ class MainWindow(QMainWindow):
         if len(remaining_records) == len(records):
             return
 
-        old_group_order = []
+        # Close the numbering gap while preserving the current group order.
+        group_id_mapping = {}
         for record in remaining_records:
             old_group_id = int(
                 record.get(
@@ -4476,13 +4477,8 @@ class MainWindow(QMainWindow):
                     int(record.get("stroke_id", 0)) + 1,
                 )
             )
-            if old_group_id not in old_group_order:
-                old_group_order.append(old_group_id)
-
-        group_id_mapping = {
-            old_id: new_id
-            for new_id, old_id in enumerate(old_group_order, start=1)
-        }
+            if old_group_id not in group_id_mapping:
+                group_id_mapping[old_group_id] = len(group_id_mapping) + 1
 
         renumbered_records = []
         for record in remaining_records:
@@ -4504,109 +4500,25 @@ class MainWindow(QMainWindow):
             renumbered_records.append(updated)
 
         self.viewer._interactive_spray_records = renumbered_records
-        self.viewer._optimize_interactive_recorded_path()
-        self.viewer._interactive_spray_route_optimization["stroke_order"] = (
-            "USER_DEFINED_DELETE"
-        )
-        self.viewer._refresh_interactive_recorded_path_actor()
 
-        route = self.interactive_spray_path
-        if isinstance(route, dict):
-            mm_factor = self.viewer._get_source_mm_factor() or 1.0
-            route.update({
-                "nozzle_points_product": np.asarray(
-                    [item["nozzle_point_product"] for item in renumbered_records],
-                    dtype=float,
-                ).reshape(-1, 3),
-                "surface_points_product": np.asarray(
-                    [item["surface_point_product"] for item in renumbered_records],
-                    dtype=float,
-                ).reshape(-1, 3),
-                "spray_directions_product": np.asarray(
-                    [item["spray_direction_product"] for item in renumbered_records],
-                    dtype=float,
-                ).reshape(-1, 3),
-                "nozzle_points_world": np.asarray(
-                    [item["nozzle_point_world"] for item in renumbered_records],
-                    dtype=float,
-                ).reshape(-1, 3),
-                "surface_points_world": np.asarray(
-                    [item["surface_point_world"] for item in renumbered_records],
-                    dtype=float,
-                ).reshape(-1, 3),
-                "spray_directions_world": np.asarray(
-                    [item["spray_direction_world"] for item in renumbered_records],
-                    dtype=float,
-                ).reshape(-1, 3),
-                "timestamps_monotonic_s": np.asarray(
-                    [item["timestamp"] for item in renumbered_records],
-                    dtype=float,
-                ),
-                "spray_poses_product": np.asarray([
-                    [
-                        item.get("t_product_s", item["timestamp"]),
-                        *np.asarray(
-                            item["nozzle_point_product"],
-                            dtype=float,
-                        ).tolist(),
-                        *np.asarray(
-                            item["quaternion_product_xyzw"],
-                            dtype=float,
-                        ).tolist(),
-                    ]
-                    for item in renumbered_records
-                ], dtype=float).reshape(-1, 8),
-                "face_indices": np.asarray(
-                    [item["face_index"] for item in renumbered_records],
-                    dtype=np.int64,
-                ),
-                "stroke_ids": np.asarray(
-                    [item["stroke_id"] for item in renumbered_records],
-                    dtype=np.int64,
-                ),
-                "group_ids": np.asarray(
-                    [item["group_id"] for item in renumbered_records],
-                    dtype=np.int64,
-                ),
-                "route_timing": {
-                    key: value
-                    for key, value in (
-                        self.viewer._interactive_recorded_replay_timing or {}
-                    ).items()
-                    if key != "timeline"
-                },
-                "route_optimization": dict(
-                    getattr(
-                        self.viewer,
-                        "_interactive_spray_route_optimization",
-                        {},
-                    )
-                ),
-                "route_optimization_metrics": dict(
-                    getattr(
-                        self.viewer,
-                        "_interactive_route_optimization_metrics",
-                        {},
-                    )
-                ),
-            })
+        if not renumbered_records:
+            self.viewer._optimize_interactive_recorded_path()
+            self.viewer._refresh_interactive_recorded_path_actor()
+            self.viewer._interactive_spray_route_optimization = {}
+            self.viewer._interactive_recorded_replay_timing = {}
+            self.viewer._interactive_route_optimization_metrics = {}
+            self.interactive_spray_path = None
+            self.stage_completed[STAGE_SPRAY_TRAJECTORY] = False
+            self.stage_completed[STAGE_SPRAY_SIMULATION] = False
+            self._refresh_recorded_spray_path_panel()
+            self.status_bar.showMessage(
+                f"SPRAY GROUP {group_id} DELETED · NO RECORDED SPRAY GROUPS REMAIN"
+            )
+            return
 
-            timing = self.viewer._interactive_recorded_replay_timing or {}
-            route["spray_length_mm"] = float(
-                timing.get("spray_distance_mm", 0.0)
-            )
-            route["total_route_distance_mm"] = float(
-                timing.get("total_route_distance_mm", 0.0)
-            )
-            route["estimated_duration_s"] = float(
-                timing.get("estimated_duration_s", 0.0)
-            )
-            route["route_length_product_units"] = (
-                route["spray_length_mm"] / float(mm_factor)
-            )
-
-        self._show_interactive_route_summary(route)
+        # Rebuild the route through the existing ordering implementation.
         self._refresh_recorded_spray_path_panel()
+        self._on_recorded_spray_groups_reordered()
         self.status_bar.showMessage(
             f"SPRAY GROUP {group_id} DELETED · REMAINING GROUPS RENUMBERED"
         )
