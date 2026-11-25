@@ -6191,22 +6191,6 @@ class ProductViewer(QWidget):
         route_only = bool(
             getattr(self, "_interactive_route_generation_only", False)
         )
-        if route_only and self._interactive_spray_recording:
-            # Preserve every valid mouse control pose for the final smoothing
-            # pass. Do not run VTK footprint/collision work at mouse-event
-            # frequency; FINISH performs the authoritative checks on the
-            # fixed-distance samples.
-            self._interactive_spray_stroke_input_poses.append(
-                self._interactive_copy_input_pose(pose)
-            )
-            now = time.monotonic()
-            previous = getattr(
-                self, "_interactive_spray_last_expensive_preview_time", 0.0
-            )
-            if previous > 0.0 and now - previous < (1.0 / 30.0):
-                return
-            self._interactive_spray_last_expensive_preview_time = now
-
         # Evaluate the complete sprayer envelope before allowing this mouse
         # sample to record or deposit paint.
         gun_actors, gun_polydata = self._interactive_build_gun_visual(
@@ -6237,6 +6221,55 @@ class ProductViewer(QWidget):
             surface=self._interactive_spray_surface,
             locator=self._interactive_spray_locator,
         )
+
+        # Block the complete spray footprint when even one cone ray touches an
+        # explicitly excluded source face. The picked center point alone is
+        # not sufficient: the cone rim can overlap a neighboring keep-out face.
+        footprint_excluded = False
+        if footprints and footprints[0][0].n_cells:
+            footprint_ids = footprints[0][0].cell_data.get(
+                "InteractiveOriginalCellId"
+            )
+            excluded_mask = self._interactive_spray_excluded_face_mask
+            if footprint_ids is not None and excluded_mask is not None:
+                footprint_ids = np.asarray(
+                    footprint_ids, dtype=np.int64
+                ).reshape(-1)
+                excluded_mask = np.asarray(excluded_mask, dtype=bool)
+                valid_ids = footprint_ids[
+                    (footprint_ids >= 0) & (footprint_ids < len(excluded_mask))
+                ]
+                footprint_excluded = bool(
+                    valid_ids.size and np.any(excluded_mask[valid_ids])
+                )
+        if footprint_excluded:
+            surface_excluded = True
+            self._interactive_spray_surface_excluded = True
+            spray_blocked = True
+            self._interactive_spray_last_deposition_timestamp = None
+            self._interactive_spray_previous_nozzle_world = None
+            self._interactive_spray_sampling_previous_pose = None
+            self._interactive_spray_sampling_distance_accumulator = 0.0
+
+        # Route-generation mode stores raw mouse control poses for FINISH.
+        # Insert a stroke break instead of a point whenever the cone footprint
+        # overlaps an excluded face, so the smoothed route cannot bridge it.
+        if route_only and self._interactive_spray_recording:
+            raw_poses = self._interactive_spray_stroke_input_poses
+            if surface_excluded:
+                if not raw_poses or not raw_poses[-1].get("_stroke_break", False):
+                    raw_poses.append({"_stroke_break": True})
+            else:
+                raw_poses.append(self._interactive_copy_input_pose(pose))
+
+            now = time.monotonic()
+            previous = getattr(
+                self, "_interactive_spray_last_expensive_preview_time", 0.0
+            )
+            if previous > 0.0 and now - previous < (1.0 / 30.0):
+                return
+            self._interactive_spray_last_expensive_preview_time = now
+
         recorded_samples = []
         if footprints and footprints[0][0].n_cells:
             patch, boundary = footprints[0]
