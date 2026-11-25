@@ -503,6 +503,7 @@ class ProductViewer(QWidget):
         )
         self._interactive_hole_circle_mode = False
         self._interactive_hole_circle_drawing = False
+        self._interactive_hole_circle_auto_generated = False
         self._interactive_hole_circle_center_world = None
         self._interactive_hole_circle_axis_world = None
         self._interactive_hole_circle_basis_u = None
@@ -7019,6 +7020,7 @@ class ProductViewer(QWidget):
 
     def _interactive_cancel_hole_circle_gesture(self):
         self._interactive_hole_circle_drawing = False
+        self._interactive_hole_circle_auto_generated = False
         self._interactive_hole_circle_center_world = None
         self._interactive_hole_circle_axis_world = None
         self._interactive_hole_circle_basis_u = None
@@ -7318,6 +7320,7 @@ class ProductViewer(QWidget):
         self._interactive_hole_circle_last_angle = 2.0 * math.pi
         self._interactive_hole_circle_total_angle = 2.0 * math.pi
         self._interactive_hole_circle_drawing = True
+        self._interactive_hole_circle_auto_generated = True
         count = max(36, int(math.ceil(2.0 * math.pi * best / spacing)))
         count = min(count, 720)
         angles = np.linspace(0.0, 2.0 * math.pi, count + 1)
@@ -8158,6 +8161,7 @@ class ProductViewer(QWidget):
         if (
             self._interactive_hole_circle_mode
             and self._interactive_hole_circle_drawing
+            and not self._interactive_hole_circle_auto_generated
             and self._interactive_spray_active
             and self._interactive_spray_mode == "spray"
         ):
@@ -8822,7 +8826,8 @@ class ProductViewer(QWidget):
             and self._interactive_spray_active
             and self._interactive_spray_mode == "spray"
         ):
-            self._interactive_start_hole_circle(interactor)
+            # H mode is fully automatic; left-click no longer starts a manual
+            # mouse-drawn circle or a normal paint stroke.
             return
         if (
             not self._interactive_spray_active
@@ -8961,6 +8966,7 @@ class ProductViewer(QWidget):
         if (
             self._interactive_hole_circle_mode
             and self._interactive_hole_circle_drawing
+            and not self._interactive_hole_circle_auto_generated
             and self._interactive_spray_active
             and self._interactive_spray_mode == "spray"
         ):
