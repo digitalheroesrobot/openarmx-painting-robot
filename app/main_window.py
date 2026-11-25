@@ -4468,40 +4468,9 @@ class MainWindow(QMainWindow):
         if len(remaining_records) == len(records):
             return
 
-        # Close the numbering gap while preserving the current group order.
-        group_id_mapping = {}
-        for record in remaining_records:
-            old_group_id = int(
-                record.get(
-                    "group_id",
-                    int(record.get("stroke_id", 0)) + 1,
-                )
-            )
-            if old_group_id not in group_id_mapping:
-                group_id_mapping[old_group_id] = len(group_id_mapping) + 1
+        self.viewer._interactive_spray_records = remaining_records
 
-        renumbered_records = []
-        for record in remaining_records:
-            old_group_id = int(
-                record.get(
-                    "group_id",
-                    int(record.get("stroke_id", 0)) + 1,
-                )
-            )
-            new_group_id = group_id_mapping[old_group_id]
-
-            updated = dict(record)
-            updated["group_id"] = new_group_id
-            updated["stroke_id"] = (
-                new_group_id - 1
-                if bool(updated.get("spray_on", True))
-                else -new_group_id
-            )
-            renumbered_records.append(updated)
-
-        self.viewer._interactive_spray_records = renumbered_records
-
-        if not renumbered_records:
+        if not remaining_records:
             self.viewer._optimize_interactive_recorded_path()
             self.viewer._refresh_interactive_recorded_path_actor()
             self.viewer._interactive_spray_route_optimization = {}
@@ -4516,7 +4485,9 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Rebuild the route through the existing ordering implementation.
+        # Refresh the visible list first. The existing reorder handler then
+        # renumbers groups, rebuilds route data, optimizes, and refreshes the
+        # 3D recorded-path actor using the same tested code path.
         self._refresh_recorded_spray_path_panel()
         self._on_recorded_spray_groups_reordered()
         self.status_bar.showMessage(
