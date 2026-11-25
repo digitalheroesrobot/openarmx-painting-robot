@@ -2453,6 +2453,10 @@ class ProductViewer(QWidget):
         return True
 
     def _start_interactive_recorded_replay(self):
+        self._interactive_selected_spray_point_index = None
+        self._interactive_spray_point_drag_state = None
+        self._interactive_remove_selected_point_visuals()
+        self._interactive_end_point_edit_mode()
         records = self._interactive_spray_records
         if len(records) < 2:
             self.recorded_path_status_label.setText("No replayable recorded path")
