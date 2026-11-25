@@ -1116,7 +1116,8 @@ class MainWindow(QMainWindow):
         self.route_controls_scroll.setFrameShape(QFrame.NoFrame)
         self.route_controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.route_controls_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.route_controls_scroll.setMaximumHeight(800)
+        self.route_controls_scroll.setMinimumHeight(520)
+        self.route_controls_scroll.setMaximumHeight(1000)
 
         route_controls_body = QWidget()
         self.route_controls_layout = QVBoxLayout(route_controls_body)
@@ -1131,6 +1132,8 @@ class MainWindow(QMainWindow):
         self.recorded_spray_group_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarAlwaysOff
         )
+        self.recorded_spray_group_list.setMinimumHeight(220)
+        self.recorded_spray_group_list.setMaximumHeight(520)
         self.recorded_spray_group_list.orderChanged.connect(
             self._on_recorded_spray_groups_reordered
         )
@@ -4392,8 +4395,13 @@ class MainWindow(QMainWindow):
                         np.sum(np.linalg.norm(np.diff(points, axis=0), axis=1))
                     )
             distance_mm = distance_units * mm_factor
+            draw_order = min(
+                int(record.get("_draw_order", group_id))
+                for record in group_records
+            )
             result.append({
                 "group_id": group_id,
+                "draw_order": draw_order,
                 "distance_mm": distance_mm,
                 "duration_s": distance_mm / speed,
             })
@@ -4425,98 +4433,79 @@ class MainWindow(QMainWindow):
             for index, metric in enumerate(metrics, start=1):
                 item = QListWidgetItem()
                 item.setData(Qt.UserRole, int(metric["group_id"]))
-                item.setSizeHint(QSize(350, 62))
+                item.setSizeHint(QSize(350, 68))
                 list_widget.addItem(item)
 
                 row = QWidget()
-                row.setObjectName("SprayGroupRow")
+                row.setObjectName("SprayGroupHudRow")
                 row.setAttribute(Qt.WA_StyledBackground, True)
                 row.setStyleSheet(
-                    "QWidget#SprayGroupRow {"
-                    " background-color: #202A35;"
-                    " border: 1px solid #354454;"
-                    " border-radius: 8px;"
-                    "}"
-                    "QLabel#SprayGroupOrder {"
-                    " color: #AFC8E2;"
-                    " background-color: #30465C;"
-                    " border: 1px solid #48647F;"
-                    " border-radius: 5px;"
-                    " font-size: 11px;"
-                    " font-weight: 700;"
+                    "QWidget#SprayGroupHudRow {"
+                    " background-color: rgba(31, 42, 54, 185);"
+                    " border: none;"
+                    " border-bottom: 1px solid #3A4A5A;"
                     "}"
                     "QLabel#SprayGroupName {"
-                    " color: #F0F4F8;"
+                    " color: #E6EDF4;"
                     " font-size: 12px;"
                     " font-weight: 700;"
                     "}"
-                    "QLabel#SprayGroupMetrics {"
-                    " color: #B8C6D4;"
-                    " font-size: 11px;"
+                    "QLabel#SprayGroupMetric {"
+                    " color: #AEBECD;"
+                    " font-size: 10px;"
                     "}"
                 )
                 row_layout = QHBoxLayout(row)
-                row_layout.setContentsMargins(10, 6, 9, 6)
-                row_layout.setSpacing(9)
+                row_layout.setContentsMargins(10, 5, 8, 5)
+                row_layout.setSpacing(10)
 
-                drag_handle = QLabel("⠿")
-                drag_handle.setObjectName("Muted")
-                drag_handle.setFixedWidth(13)
-                drag_handle.setAlignment(Qt.AlignCenter)
-                drag_handle.setToolTip("Drag to reorder this spray group")
-                row_layout.addWidget(drag_handle)
-
-                order_label = QLabel(f"{index:02d}")
-                order_label.setObjectName("SprayGroupOrder")
-                order_label.setAlignment(Qt.AlignCenter)
-                order_label.setFixedSize(28, 28)
-                row_layout.addWidget(order_label)
-
-                group_label = QLabel(f"SPRAY GROUP {index}")
+                group_label = QLabel(f"SPRAY {int(metric['draw_order'])}")
                 group_label.setObjectName("SprayGroupName")
-                row_layout.addWidget(group_label, 1)
+                group_label.setMinimumWidth(76)
+                row_layout.addWidget(group_label)
 
-                metrics_label = QLabel(
-                    f"{metric['distance_mm']:.1f} mm"
-                    f"   ·   {self.viewer._format_route_time(metric['duration_s'])}"
-                )
-                metrics_label.setObjectName("SprayGroupMetrics")
-                metrics_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                metrics_label.setToolTip(
-                    f"Spray length: {metric['distance_mm']:.1f} mm\n"
-                    f"Spray time: {self.viewer._format_route_time(metric['duration_s'])}"
-                )
-                row_layout.addWidget(metrics_label)
+                metric_layout = QVBoxLayout()
+                metric_layout.setContentsMargins(0, 0, 0, 0)
+                metric_layout.setSpacing(2)
 
-                delete_button = QPushButton("DELETE")
-                delete_button.setFixedSize(62, 30)
-                delete_button.setSizePolicy(
-                    QSizePolicy.Fixed,
-                    QSizePolicy.Fixed,
+                length_label = QLabel(f"LENGTH  {metric['distance_mm']:.1f} mm")
+                length_label.setObjectName("SprayGroupMetric")
+                metric_layout.addWidget(length_label)
+
+                time_label = QLabel(
+                    f"TIME  {self.viewer._format_route_time(metric['duration_s'])}"
+                )
+                time_label.setObjectName("SprayGroupMetric")
+                metric_layout.addWidget(time_label)
+                row_layout.addLayout(metric_layout, 1)
+
+                delete_button = QPushButton()
+                delete_button.setObjectName("SprayGroupDeleteButton")
+                delete_button.setFixedSize(30, 30)
+                delete_button.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
+                delete_button.setIconSize(QSize(15, 15))
+                delete_button.setToolTip(
+                    f"Delete SPRAY {int(metric['draw_order'])}"
+                )
+                delete_button.setAccessibleName(
+                    f"Delete SPRAY {int(metric['draw_order'])}"
                 )
                 delete_button.setStyleSheet(
-                    "QPushButton {"
-                    " background-color: #442A30;"
-                    " color: #F2B8C0;"
+                    "QPushButton#SprayGroupDeleteButton {"
+                    " background: transparent;"
+                    " color: #AAB8C5;"
+                    " border: 1px solid transparent;"
+                    " border-radius: 5px;"
+                    " padding: 3px;"
+                    "}"
+                    "QPushButton#SprayGroupDeleteButton:hover {"
+                    " background-color: #493039;"
                     " border: 1px solid #76505A;"
-                    " border-radius: 6px;"
-                    " font-size: 10px;"
-                    " font-weight: 700;"
-                    " padding: 2px 5px;"
                     "}"
-                    "QPushButton:hover {"
-                    " background-color: #69343E;"
-                    " color: #FFFFFF;"
-                    " border: 1px solid #C47783;"
-                    "}"
-                    "QPushButton:pressed {"
+                    "QPushButton#SprayGroupDeleteButton:pressed {"
                     " background-color: #352027;"
                     "}"
                 )
-                delete_button.setToolTip(
-                    f"Delete SPRAY GROUP {index}"
-                )
-
                 group_id = int(metric["group_id"])
                 delete_button.clicked.connect(
                     lambda checked=False, gid=group_id:
@@ -4667,6 +4656,10 @@ class MainWindow(QMainWindow):
             new_group_id = new_index + 1
             for record in grouped_records.get(old_group_id, []):
                 updated = dict(record)
+                # Keep the first-drawn identity separate from mutable execution order.
+                updated["_draw_order"] = int(
+                    updated.get("_draw_order", old_group_id)
+                )
                 updated["group_id"] = new_group_id
                 updated["stroke_id"] = (
                     new_index if bool(updated.get("spray_on", True))
