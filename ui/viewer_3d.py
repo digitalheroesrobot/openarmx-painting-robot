@@ -8060,10 +8060,13 @@ class ProductViewer(QWidget):
             and self._interactive_spray_active
             and self._interactive_spray_mode == "spray"
         ):
-            if bool(QApplication.mouseButtons() & Qt.MouseButton.LeftButton):
-                self._interactive_update_hole_circle_from_mouse(interactor)
-            else:
-                self._interactive_finalize_hole_circle()
+            # VTK MouseMoveEvent is not guaranteed to expose Qt's global
+            # QApplication.mouseButtons() state. On some PyVista/Qt
+            # combinations it reports no pressed button during a real drag,
+            # which finalized the circle on the very first move before any
+            # green preview could be drawn. The VTK LeftButtonReleaseEvent
+            # observer is the authoritative end of this gesture.
+            self._interactive_update_hole_circle_from_mouse(interactor)
             return
         if self._interactive_is_postfinish_point_editing():
             if self._interactive_spray_angle_dragging:
