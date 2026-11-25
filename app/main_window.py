@@ -4545,45 +4545,39 @@ class MainWindow(QMainWindow):
             self.viewer._interactive_route_optimization_metrics = {}
             self.viewer._refresh_interactive_recorded_path_actor()
 
-        # A deletion always invalidates the finalized route. It must not
-        # advance to simulation and must require a replacement stroke.
+        # A deletion invalidates the finalized route, but must not change
+        # the current viewport or interaction mode when other groups remain.
         self.interactive_spray_path = None
         self.stage_completed[STAGE_SPRAY_TRAJECTORY] = False
         self.stage_completed[STAGE_SPRAY_SIMULATION] = False
-        self.viewer.set_recorded_path_page("route")
         self._refresh_recorded_spray_path_panel()
-
-        # Re-enter the route-generation viewport according to what remains:
-        #
-        # 1. Remaining groups exist:
-        #    Keep the current spray-mode editing state active so the operator
-        #    can immediately draw the replacement group. Do not change the
-        #    viewing mode again.
-        #
-        # 2. No groups remain:
-        #    There is no recorded spray path to preserve. Start a fresh
-        #    interactive session in CAMERA mode so the operator gets the
-        #    normal route-generation view automatically.
-        start_in_spray_mode = bool(remaining_records)
-
-        self._start_interactive_spray_path(
-            resume_existing=bool(remaining_records),
-            start_in_spray_mode=start_in_spray_mode,
-        )
-
-        self._refresh_recorded_spray_path_panel()
-        self._refresh_workflow_ui()
 
         if remaining_records:
+            # Keep the current session, camera, and interaction mode exactly
+            # as they are. Do not restart the viewer or force spray mode.
+            # Only the selected group is removed and the surviving groups are
+            # renumbered/re-optimized by the existing reorder handler above.
+            self._refresh_workflow_ui()
             self.status_bar.showMessage(
-                f"SPRAY GROUP {group_id} DELETED · SPRAY MODE ACTIVE · "
-                "DRAW THE REPLACEMENT GROUP"
+                f"SPRAY GROUP {group_id} DELETED · "
+                f"{len({int(r.get('group_id', int(r.get('stroke_id', 0)) + 1)) for r in remaining_records})} "
+                "SPRAY GROUP(S) REMAIN · VIEW UNCHANGED"
             )
-        else:
-            self.status_bar.showMessage(
-                f"SPRAY GROUP {group_id} DELETED · NO SPRAY GROUPS REMAIN · "
-                "CAMERA VIEW ACTIVE"
-            )
+            return
+
+        # Only when the last group is deleted do we start a fresh route
+        # generation session and automatically enter CAMERA view.
+        self.viewer.set_recorded_path_page("route")
+        self._start_interactive_spray_path(
+            resume_existing=False,
+            start_in_spray_mode=False,
+        )
+        self._refresh_recorded_spray_path_panel()
+        self._refresh_workflow_ui()
+        self.status_bar.showMessage(
+            f"SPRAY GROUP {group_id} DELETED · NO SPRAY GROUPS REMAIN · "
+            "CAMERA VIEW ACTIVE"
+        )
 
     def _on_recorded_spray_groups_reordered(self):
         """Apply the visible list order to the actual route records and replay."""
