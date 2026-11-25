@@ -493,6 +493,22 @@ class ProductViewer(QWidget):
         self._interactive_spray_edit_gun_actors = []
         self._interactive_spray_edit_marker_actor = None
         self._interactive_spray_point_drag_state = None
+        # Manual hole-interior circle drawing. The operator first inserts the
+        # sprayer with the existing working-distance wheel, then enables this
+        # mode and draws a circular perimeter with the left mouse button.
+        self._interactive_hole_circle_mode = False
+        self._interactive_hole_circle_drawing = False
+        self._interactive_hole_circle_center_world = None
+        self._interactive_hole_circle_axis_world = None
+        self._interactive_hole_circle_basis_u = None
+        self._interactive_hole_circle_basis_v = None
+        self._interactive_hole_circle_radius = None
+        self._interactive_hole_circle_start_angle = None
+        self._interactive_hole_circle_last_angle = None
+        self._interactive_hole_circle_total_angle = 0.0
+        self._interactive_hole_circle_raw_angles = []
+        self._interactive_hole_circle_preview_actor = None
+        self._interactive_hole_circle_invalid_actor = None
         self._interactive_point_edit_saved_style = None
         self._interactive_point_edit_saved_style_enabled = False
         self._interactive_point_edit_input_style = None
@@ -6829,6 +6845,447 @@ class ProductViewer(QWidget):
         return emitted
 
 
+    def set_hole_circle_mode(self, enabled=True):
+        """Enable manual circular painting inside a detected product hole."""
+        self._interactive_hole_circle_mode = bool(
+            enabled
+            and self._interactive_spray_active
+            and self._interactive_spray_mode == "spray"
+        )
+        if not self._interactive_hole_circle_mode:
+            self._interactive_cancel_hole_circle_gesture()
+        return self._interactive_hole_circle_mode
+
+    def is_hole_circle_mode(self):
+        return bool(self._interactive_hole_circle_mode)
+
+    def _interactive_remove_hole_circle_preview(self):
+        for name in (
+            "_interactive_hole_circle_preview_actor",
+            "_interactive_hole_circle_invalid_actor",
+        ):
+            actor = getattr(self, name, None)
+            if actor is not None:
+                try:
+                    self.plotter.remove_actor(actor, render=False)
+                except Exception:
+                    pass
+                setattr(self, name, None)
+
+    def _interactive_cancel_hole_circle_gesture(self):
+        self._interactive_hole_circle_drawing = False
+        self._interactive_hole_circle_center_world = None
+        self._interactive_hole_circle_axis_world = None
+        self._interactive_hole_circle_basis_u = None
+        self._interactive_hole_circle_basis_v = None
+        self._interactive_hole_circle_radius = None
+        self._interactive_hole_circle_start_angle = None
+        self._interactive_hole_circle_last_angle = None
+        self._interactive_hole_circle_total_angle = 0.0
+        self._interactive_hole_circle_raw_angles = []
+        self._interactive_remove_hole_circle_preview()
+
+    def _interactive_nearest_hole_candidate(self, point_world):
+        """Return the detected bore nearest to the current inserted nozzle."""
+        candidates = self._filtered_hole_candidates()
+        if not candidates:
+            return None
+        matrix = self._actor_matrix_array()
+        try:
+            inverse_transpose = np.linalg.inv(matrix[:3, :3]).T
+        except np.linalg.LinAlgError:
+            return None
+
+        point = np.asarray(point_world, dtype=np.float64)
+        best = None
+        best_distance = float("inf")
+        for item in candidates:
+            try:
+                center_local = np.asarray(
+                    item["opening_center_coordinate_units"], dtype=np.float64
+                )
+                axis_local = np.asarray(item["axis_direction"], dtype=np.float64)
+                center_world = (
+                    matrix[:3, :3] @ center_local + matrix[:3, 3]
+                )
+                axis_world = inverse_transpose @ axis_local
+                axis_length = float(np.linalg.norm(axis_world))
+                if axis_length <= 1e-12:
+                    continue
+                axis_world /= axis_length
+                delta = point - center_world
+                axial = float(np.dot(delta, axis_world))
+                radial = delta - axial * axis_world
+                distance = float(np.linalg.norm(radial))
+                try:
+                    hole_length = abs(float(item["hole_length_coordinate_units"]))
+                    hole_radius = abs(float(item["diameter_coordinate_units"])) * 0.5
+                except (KeyError, TypeError, ValueError):
+                    continue
+                tolerance = max(float(self._interactive_mesh_diagonal) * 1e-4, 1e-3)
+                if abs(axial) > hole_length + tolerance:
+                    continue
+                if distance > hole_radius + tolerance:
+                    continue
+                if distance < best_distance:
+                    best_distance = distance
+                    best = {
+                        "item": item,
+                        "center_world": center_world,
+                        "axis_world": axis_world,
+                        "radial_distance": distance,
+                    }
+            except (KeyError, TypeError, ValueError):
+                continue
+        return best
+
+    @staticmethod
+    def _interactive_circle_basis(axis_world):
+        """Build a stable horizontal-first basis for the circle plane."""
+        axis = np.asarray(axis_world, dtype=np.float64)
+        axis /= max(float(np.linalg.norm(axis)), 1e-12)
+
+        # For the normal vertical-hole case, X/Y are the first horizontal
+        # directions exactly as requested. For tilted holes, project world X
+        # into the plane normal to the actual bore axis.
+        reference = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        projected = reference - axis * float(np.dot(reference, axis))
+        if np.linalg.norm(projected) <= 1e-8:
+            reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+            projected = reference - axis * float(np.dot(reference, axis))
+        u = projected / max(float(np.linalg.norm(projected)), 1e-12)
+        v = np.cross(axis, u)
+        v /= max(float(np.linalg.norm(v)), 1e-12)
+        return u, v
+
+    def _interactive_circle_plane_hit(self, x, y):
+        if self._interactive_hole_circle_center_world is None:
+            return None
+        return self._interactive_display_ray_plane_hit(
+            x,
+            y,
+            self._interactive_hole_circle_center_world,
+            self._interactive_hole_circle_axis_world,
+        )
+
+    def _interactive_hole_circle_pose(self, nozzle_world, axis_world):
+        """Create a radial spray pose by ray-casting from the nozzle to the bore wall."""
+        nozzle = np.asarray(nozzle_world, dtype=np.float64)
+        axis = np.asarray(axis_world, dtype=np.float64)
+        axis /= max(float(np.linalg.norm(axis)), 1e-12)
+        center = np.asarray(
+            self._interactive_hole_circle_center_world, dtype=np.float64
+        )
+        radial = nozzle - center
+        radial -= axis * float(np.dot(radial, axis))
+        radial_length = float(np.linalg.norm(radial))
+        if radial_length <= 1e-8:
+            return None
+        direction = radial / radial_length
+
+        start_local = (
+            self._interactive_spray_transform_inverse
+            @ np.append(nozzle, 1.0)
+        )[:3]
+        direction_local = (
+            self._interactive_spray_transform_inverse[:3, :3] @ direction
+        )
+        direction_local /= max(float(np.linalg.norm(direction_local)), 1e-12)
+        ray_length = max(float(self._interactive_mesh_diagonal) * 2.0, 100.0)
+        endpoint_local = start_local + direction_local * ray_length
+        intersections = vtkPoints()
+        intersected_cells = vtkIdList()
+        hit = self._interactive_spray_locator.IntersectWithLine(
+            start_local.tolist(),
+            endpoint_local.tolist(),
+            intersections,
+            intersected_cells,
+        )
+        if not hit or intersections.GetNumberOfPoints() == 0:
+            return None
+
+        nearest_index = 0
+        nearest_distance = float("inf")
+        nearest_local = None
+        nearest_cell = -1
+        for hit_index in range(intersections.GetNumberOfPoints()):
+            hit_point = np.asarray(
+                intersections.GetPoint(hit_index), dtype=np.float64
+            )
+            distance = float(np.linalg.norm(hit_point - start_local))
+            if distance < nearest_distance:
+                nearest_distance = distance
+                nearest_local = hit_point
+                if intersected_cells.GetNumberOfIds() > hit_index:
+                    nearest_cell = int(intersected_cells.GetId(hit_index))
+        if nearest_local is None or nearest_cell < 0:
+            return None
+
+        surface_world = (
+            self._interactive_spray_transform[:3, :3] @ nearest_local
+            + self._interactive_spray_transform[:3, 3]
+        )
+        if nearest_cell >= len(self._interactive_mesh_face_normals):
+            return None
+        normal_local = np.asarray(
+            self._interactive_mesh_face_normals[nearest_cell], dtype=np.float64
+        )
+        try:
+            normal_world = (
+                np.linalg.inv(self._interactive_spray_transform[:3, :3]).T
+                @ normal_local
+            )
+        except np.linalg.LinAlgError:
+            return None
+        normal_length = float(np.linalg.norm(normal_world))
+        if normal_length <= 1e-12:
+            return None
+        normal_world /= normal_length
+
+        return {
+            "nozzle_point_world": nozzle.copy(),
+            "surface_point_world": surface_world,
+            "surface_normal_world": normal_world,
+            "spray_direction_world": direction.copy(),
+            "cell_id": int(nearest_cell),
+            "paintable": True,
+            "timestamp": time.monotonic(),
+        }
+
+    def _interactive_update_hole_circle_preview(self, invalid_points=None):
+        self._interactive_remove_hole_circle_preview()
+        points = getattr(self, "_interactive_hole_circle_preview_points", [])
+        if len(points) >= 2:
+            poly = pv.PolyData(np.asarray(points, dtype=np.float64))
+            poly.lines = np.asarray(
+                [len(points), *range(len(points))], dtype=np.int64
+            )
+            self._interactive_hole_circle_preview_actor = self.plotter.add_mesh(
+                poly,
+                color="#00E676",
+                line_width=4.0,
+                lighting=False,
+                pickable=False,
+            )
+        invalid = list(invalid_points or [])
+        if invalid:
+            self._interactive_hole_circle_invalid_actor = self.plotter.add_points(
+                np.asarray(invalid, dtype=np.float64),
+                color="#FF3B30",
+                point_size=10,
+                render_points_as_spheres=True,
+                lighting=False,
+                pickable=False,
+            )
+
+    def _interactive_start_hole_circle(self, interactor):
+        if not self._interactive_hole_circle_mode:
+            return False
+        anchor = self._interactive_spray_latest_pose
+        if anchor is None:
+            x, y = interactor.GetEventPosition()
+            anchor = self._interactive_pick_surface_pose(x, y, estimate_planar=True)
+        if anchor is None:
+            return False
+
+        nozzle = np.asarray(anchor["nozzle_point_world"], dtype=np.float64)
+        hole = self._interactive_nearest_hole_candidate(nozzle)
+        if hole is None:
+            return False
+
+        axis = hole["axis_world"]
+        center_opening = hole["center_world"]
+        axial = float(np.dot(nozzle - center_opening, axis))
+        center = center_opening + axial * axis
+
+        # The default circle plane is horizontal for a vertical bore and
+        # otherwise remains perpendicular to the actual bore axis.
+        u, v = self._interactive_circle_basis(axis)
+        self._interactive_hole_circle_center_world = center
+        self._interactive_hole_circle_axis_world = axis.copy()
+        self._interactive_hole_circle_basis_u = u
+        self._interactive_hole_circle_basis_v = v
+
+        x, y = interactor.GetEventPosition()
+        hit = self._interactive_circle_plane_hit(x, y)
+        if hit is None:
+            return False
+        radial = hit - center
+        radial -= axis * float(np.dot(radial, axis))
+        radius = float(np.linalg.norm(radial))
+        if radius < max(float(self._interactive_spray_sampling_spacing) * 0.5, 1.0):
+            return False
+
+        start_angle = math.atan2(
+            float(np.dot(radial, v)),
+            float(np.dot(radial, u)),
+        )
+        self._interactive_hole_circle_radius = radius
+        self._interactive_hole_circle_start_angle = start_angle
+        self._interactive_hole_circle_last_angle = start_angle
+        self._interactive_hole_circle_total_angle = 0.0
+        self._interactive_hole_circle_raw_angles = [start_angle]
+        self._interactive_hole_circle_drawing = True
+        self._interactive_hole_circle_preview_points = []
+        self._interactive_hole_circle_preview_invalid = []
+        return True
+
+    def _interactive_update_hole_circle_from_mouse(self, interactor):
+        if not self._interactive_hole_circle_drawing:
+            return
+        x, y = interactor.GetEventPosition()
+        hit = self._interactive_circle_plane_hit(x, y)
+        if hit is None:
+            return
+
+        center = self._interactive_hole_circle_center_world
+        axis = self._interactive_hole_circle_axis_world
+        u = self._interactive_hole_circle_basis_u
+        v = self._interactive_hole_circle_basis_v
+        radial = hit - center
+        radial -= axis * float(np.dot(radial, axis))
+        length = float(np.linalg.norm(radial))
+        if length <= 1e-8:
+            return
+        angle = math.atan2(float(np.dot(radial, v)), float(np.dot(radial, u)))
+        previous = float(self._interactive_hole_circle_last_angle)
+        delta = math.atan2(math.sin(angle - previous), math.cos(angle - previous))
+        self._interactive_hole_circle_total_angle += delta
+        self._interactive_hole_circle_last_angle = angle
+        self._interactive_hole_circle_raw_angles.append(angle)
+
+        total = self._interactive_hole_circle_total_angle
+        # Preview is deliberately sparse so the cursor never freezes while
+        # the operator is drawing. FINISH performs the complete collision
+        # check at the configured fixed spatial spacing.
+        sample_count = int(np.clip(
+            abs(total) * max(self._interactive_hole_circle_radius, 1.0)
+            / max(float(self._interactive_spray_sampling_spacing), 1e-6),
+            8,
+            24,
+        ))
+        preview_angles = np.linspace(
+            self._interactive_hole_circle_start_angle,
+            self._interactive_hole_circle_start_angle + total,
+            sample_count,
+        )
+        preview_points = []
+        invalid_points = []
+        for sample_angle in preview_angles:
+            nozzle = center + self._interactive_hole_circle_radius * (
+                math.cos(float(sample_angle)) * u
+                + math.sin(float(sample_angle)) * v
+            )
+            pose = self._interactive_hole_circle_pose(nozzle, axis)
+            if pose is None:
+                invalid_points.append(nozzle)
+                continue
+            gun_actors, gun_polydata = self._interactive_build_gun_visual(
+                nozzle, pose["spray_direction_world"], render=False
+            )
+            collision = self._interactive_check_gun_collision(gun_polydata)
+            for actor in gun_actors:
+                try:
+                    self.plotter.remove_actor(actor, render=False)
+                except Exception:
+                    pass
+            if collision:
+                invalid_points.append(nozzle)
+                continue
+            preview_points.append(nozzle)
+
+        self._interactive_hole_circle_preview_points = preview_points
+        self._interactive_hole_circle_preview_invalid = invalid_points
+        self._interactive_update_hole_circle_preview(invalid_points)
+        if preview_points:
+            last_pose = self._interactive_hole_circle_pose(preview_points[-1], axis)
+            if last_pose is not None:
+                self._interactive_spray_latest_pose = last_pose
+                self._interactive_spray_gun_collision = False
+                self._interactive_build_gun_visual(
+                    last_pose["nozzle_point_world"],
+                    last_pose["spray_direction_world"],
+                    render=False,
+                )
+        self.plotter.render()
+
+    def _interactive_finalize_hole_circle(self):
+        if not self._interactive_hole_circle_drawing:
+            return 0
+        center = self._interactive_hole_circle_center_world
+        axis = self._interactive_hole_circle_axis_world
+        u = self._interactive_hole_circle_basis_u
+        v = self._interactive_hole_circle_basis_v
+        radius = float(self._interactive_hole_circle_radius or 0.0)
+        total = float(self._interactive_hole_circle_total_angle)
+        spacing = max(float(self._interactive_spray_sampling_spacing), 1e-6)
+
+        if radius <= 0.0 or abs(total) < math.radians(15.0):
+            self._interactive_cancel_hole_circle_gesture()
+            return 0
+
+        circumference_length = abs(total) * radius
+        count = max(2, int(math.floor(circumference_length / spacing)) + 1)
+        angles = np.linspace(
+            self._interactive_hole_circle_start_angle,
+            self._interactive_hole_circle_start_angle + total,
+            count,
+        )
+        existing_group_ids = [
+            int(item.get("group_id", 0))
+            for item in self._interactive_spray_records
+        ]
+        group_id = max(existing_group_ids, default=0) + 1
+        stroke_id = max(
+            [int(item.get("stroke_id", -1)) for item in self._interactive_spray_records],
+            default=-1,
+        ) + 1
+
+        stored = 0
+        invalid_points = []
+        for angle in angles:
+            nozzle = center + radius * (
+                math.cos(float(angle)) * u
+                + math.sin(float(angle)) * v
+            )
+            pose = self._interactive_hole_circle_pose(nozzle, axis)
+            if pose is None:
+                invalid_points.append(nozzle)
+                continue
+            gun_actors, gun_polydata = self._interactive_build_gun_visual(
+                nozzle, pose["spray_direction_world"], render=False
+            )
+            collision = self._interactive_check_gun_collision(gun_polydata)
+            for actor in gun_actors:
+                try:
+                    self.plotter.remove_actor(actor, render=False)
+                except Exception:
+                    pass
+            if collision:
+                invalid_points.append(nozzle)
+                continue
+
+            local = self._interactive_pose_to_product_frame(pose)
+            self._interactive_spray_stroke_id = stroke_id
+            self._interactive_store_record_sample(
+                {
+                    **pose,
+                    "group_id": group_id,
+                },
+                local,
+            )
+            stored += 1
+
+        self._interactive_hole_circle_preview_invalid = invalid_points
+        self._interactive_cancel_hole_circle_gesture()
+        self._interactive_hole_circle_mode = False
+        if stored:
+            self._interactive_recorded_replay_timing = None
+            self._refresh_interactive_recorded_path_actor()
+            self._optimize_interactive_recorded_path()
+            self.spray_samples_changed.emit()
+        return stored
+
     def _interactive_is_postfinish_point_editing(self):
         return bool(
             not self._interactive_spray_active
@@ -7345,6 +7802,17 @@ class ProductViewer(QWidget):
             self.plotter.render()
 
     def _on_interactive_spray_mouse_move(self, interactor, event):
+        if (
+            self._interactive_hole_circle_mode
+            and self._interactive_hole_circle_drawing
+            and self._interactive_spray_active
+            and self._interactive_spray_mode == "spray"
+        ):
+            if bool(QApplication.mouseButtons() & Qt.MouseButton.LeftButton):
+                self._interactive_update_hole_circle_from_mouse(interactor)
+            else:
+                self._interactive_finalize_hole_circle()
+            return
         if self._interactive_is_postfinish_point_editing():
             if self._interactive_spray_angle_dragging:
                 if bool(QApplication.mouseButtons() & Qt.MouseButton.MiddleButton):
@@ -7960,6 +8428,13 @@ class ProductViewer(QWidget):
 
     def _on_interactive_spray_left_press(self, interactor, event):
         if (
+            self._interactive_hole_circle_mode
+            and self._interactive_spray_active
+            and self._interactive_spray_mode == "spray"
+        ):
+            self._interactive_start_hole_circle(interactor)
+            return
+        if (
             not self._interactive_spray_active
             or self._interactive_spray_mode != "spray"
         ):
@@ -8094,6 +8569,14 @@ class ProductViewer(QWidget):
 
     def _on_interactive_spray_left_release(self, interactor, event):
         if (
+            self._interactive_hole_circle_mode
+            and self._interactive_hole_circle_drawing
+            and self._interactive_spray_active
+            and self._interactive_spray_mode == "spray"
+        ):
+            self._interactive_finalize_hole_circle()
+            return
+        if (
             not self._interactive_spray_active
             or self._interactive_spray_mode != "spray"
         ):
@@ -8153,6 +8636,10 @@ class ProductViewer(QWidget):
                 self.plotter.render()
 
     def _on_interactive_spray_leave(self, interactor, event):
+        if self._interactive_hole_circle_drawing:
+            # Keep the current circle gesture alive until mouse release; the
+            # generated circle is only finalized by the explicit left-button up.
+            return
         # Never keep spraying after the pointer leaves the 3D viewport.
         if not self._interactive_spray_active:
             return

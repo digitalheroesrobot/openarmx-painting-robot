@@ -1537,6 +1537,16 @@ class MainWindow(QMainWindow):
         self.finish_spray_path_button.hide()
         action_layout.addWidget(self.finish_spray_path_button)
 
+        self.hole_circle_button = QPushButton("DRAW HOLE CIRCLE")
+        self.hole_circle_button.setObjectName("SecondaryButton")
+        self.hole_circle_button.setToolTip(
+            "After inserting the sprayer into a detected hole with the mouse wheel, "
+            "draw a circular interior spray path with the left mouse button."
+        )
+        self.hole_circle_button.clicked.connect(self._toggle_hole_circle_mode)
+        self.hole_circle_button.hide()
+        action_layout.addWidget(self.hole_circle_button)
+
         self.interactive_paint_color_button = QPushButton("PAINT COLOR")
         self.interactive_paint_color_button.setObjectName("SecondaryButton")
         self.interactive_paint_color_button.setToolTip(
@@ -3117,6 +3127,19 @@ class MainWindow(QMainWindow):
         self.finish_spray_path_button.setVisible(route_page)
         self.finish_spray_path_button.setEnabled(
             can_generate_route and not self._operation_running
+        )
+        hole_circle_available = (
+            route_page
+            and recording
+            and not self._operation_running
+            and bool(getattr(self.viewer, "_interactive_spray_active", False))
+        )
+        self.hole_circle_button.setVisible(hole_circle_available)
+        self.hole_circle_button.setEnabled(hole_circle_available)
+        self.hole_circle_button.setText(
+            "EXIT HOLE CIRCLE"
+            if bool(getattr(self.viewer, "_interactive_hole_circle_mode", False))
+            else "DRAW HOLE CIRCLE"
         )
         self.route_next_button.setMinimumHeight(42)
         self.route_next_button.setText(
@@ -4773,6 +4796,25 @@ class MainWindow(QMainWindow):
             self._simulation_loading = False
             self.simulation_loading_progress.hide()
             self._refresh_workflow_ui()
+
+    def _toggle_hole_circle_mode(self):
+        if not bool(getattr(self.viewer, "_interactive_spray_active", False)):
+            return
+        enabled = not bool(
+            getattr(self.viewer, "_interactive_hole_circle_mode", False)
+        )
+        result = self.viewer.set_hole_circle_mode(enabled)
+        if enabled and not result:
+            self.status_bar.showMessage(
+                "HOLE CIRCLE: could not enter circle mode. Start inside a detected compatible hole."
+            )
+            return
+        self.status_bar.showMessage(
+            "HOLE CIRCLE MODE | INSERT WITH WHEEL, THEN DRAW THE CIRCLE WITH LEFT MOUSE"
+            if result
+            else "HOLE CIRCLE MODE OFF"
+        )
+        self._refresh_workflow_ui()
 
     def _finish_interactive_spray_path(self):
         """Stop interactive input, optimize the recorded stroke route and report it."""
