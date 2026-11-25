@@ -2023,14 +2023,15 @@ class ProductViewer(QWidget):
                 "safety_status": "SAFE",
                 "transfer_planning": "DELEGATED_TO_MOVEIT2"}
 
-    def _optimize_interactive_recorded_path(self):
+    def _optimize_interactive_recorded_path(self, emit_readiness=True):
         """Finalize spray strokes only; never construct inter-stroke transfer paths."""
         records = list(self._interactive_spray_records)
         if len(records) < 2:
             self.recorded_path_status_label.setText("DRAW AT LEAST TWO SPRAY POINTS")
             self.recorded_path_replay_button.setEnabled(False)
             self.recorded_path_export_button.setEnabled(False)
-            self.route_readiness_changed.emit(False)
+            if emit_readiness:
+                self.route_readiness_changed.emit(False)
             return False
         seen, previous = set(), None
         for record in records:
@@ -2071,7 +2072,8 @@ class ProductViewer(QWidget):
         )
         self._interactive_route_optimization_metrics = {"stroke_count": stroke_count}
         self._refresh_interactive_recorded_path_actor()
-        self.route_readiness_changed.emit(bool(ready))
+        if emit_readiness:
+            self.route_readiness_changed.emit(bool(ready))
         return bool(ready)
 
     def _interactive_stroke_ranges(self):
