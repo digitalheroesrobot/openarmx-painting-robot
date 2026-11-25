@@ -2247,9 +2247,9 @@ class ProductViewer(QWidget):
                 )
                 # Make direction obvious even for short, narrow-hole paths.
                 arrow_length = max(
-                    float(np.max(path_extent)) * 0.16,
-                    float(self._interactive_spray_sampling_spacing) * 1.5,
-                    1.0,
+                    float(np.max(path_extent)) * 0.08,
+                    float(self._interactive_spray_sampling_spacing) * 0.75,
+                    0.5,
                 )
                 arrow_data = pv.PolyData(arrow_points_array)
                 arrow_data["spray_direction"] = arrow_vectors_array
