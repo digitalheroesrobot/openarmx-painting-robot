@@ -6988,14 +6988,11 @@ class ProductViewer(QWidget):
             self._interactive_cancel_hole_circle_gesture()
             return False
 
-        # First try the ordinary surface hit. If the pointer is over the empty
-        # opening, resolve the bore from its detected axis and sample the rim
-        # for a face normal instead of silently leaving the sprayer invisible.
+        # H mode always resolves the detected bore axis, even when the
+        # pointer happens to overlap a visible wall triangle.
         interactor = self.plotter.iren.interactor
         x, y = interactor.GetEventPosition()
-        pose = self._interactive_pick_surface_pose(x, y, estimate_planar=True)
-        if pose is None:
-            pose = self._interactive_pick_hole_opening_pose(x, y)
+        pose = self._interactive_pick_hole_opening_pose(x, y)
         if pose is not None:
             self._interactive_update_cursor(pose)
         return True
@@ -8306,21 +8303,18 @@ class ProductViewer(QWidget):
             self._interactive_spray_previous_nozzle_world = None
     
         x, y = interactor.GetEventPosition()
-        pose = self._interactive_pick_surface_pose(x, y)
-        if pose is None and self._interactive_hole_circle_mode:
-            # Over an empty bore there is no mesh triangle to pick. Intersect
-            # the pointer ray with the product bounding box instead, then use
-            # that box-face normal as the nozzle axis. The resulting nozzle
-            # centreline necessarily meets the box face perpendicularly, so
-            # the sprayer remains visible while it is moved into the opening.
+        if self._interactive_hole_circle_mode:
+            # Resolve every H-mode cursor position against the bore axis.
+            # Never fall back to an arbitrary picked triangle normal.
             pose = self._interactive_pick_hole_opening_pose(x, y)
             if pose is not None:
                 self._interactive_update_cursor(pose)
-                return
-            # If the pointer ray cannot reach the box, retain the last valid
-            # pose and live actors rather than making the sprayer disappear.
-            self.plotter.render()
+            else:
+                self._interactive_remove_live_actors()
+                self._interactive_spray_latest_pose = None
+                self.plotter.render()
             return
+        pose = self._interactive_pick_surface_pose(x, y)
         if pose is None:
             self._interactive_remove_live_actors()
             self._interactive_spray_latest_pose = None
