@@ -6952,16 +6952,23 @@ class ProductViewer(QWidget):
         if float(np.dot(camera_position - surface_point, normal_world)) < 0.0:
             normal_world = -normal_world
 
-        spray_direction = self._interactive_rotate_spray_direction(
-            -normal_world,
-            self._interactive_spray_angle_y_deg,
-            self._interactive_spray_angle_x_deg,
-        )
+        # H mode is constrained to the detected bore axis. Do not use the
+        # bounding-box face normal or freehand spray-angle offsets here.
+        hole = self._interactive_nearest_hole_candidate(surface_point)
+        if hole is None:
+            print("[HOLE POINT] No detected hole axis at this location.")
+            return None
+        spray_direction = np.asarray(hole["axis_world"], dtype=np.float64).copy()
+        toward_bore = np.asarray(hole["center_world"], dtype=np.float64) - surface_point
+        if float(np.dot(spray_direction, toward_bore)) < 0.0:
+            spray_direction = -spray_direction
+        spray_direction /= max(float(np.linalg.norm(spray_direction)), 1e-12)
+        normal_world = -spray_direction
         return {
             "surface_point_world": surface_point.copy(),
             "surface_normal_world": normal_world.copy(),
             "nozzle_point_world": (
-                surface_point + normal_world * self._interactive_spray_standoff
+                surface_point - spray_direction * self._interactive_spray_standoff
             ),
             "spray_direction_world": spray_direction,
             "cell_id": -1,
@@ -6981,14 +6988,11 @@ class ProductViewer(QWidget):
             self._interactive_cancel_hole_circle_gesture()
             return False
 
-        # First try the ordinary surface hit. If the pointer is over the empty
-        # opening, resolve the bore from its detected axis and sample the rim
-        # for a face normal instead of silently leaving the sprayer invisible.
+        # H mode always resolves the detected bore axis, even when the
+        # pointer happens to overlap a visible wall triangle.
         interactor = self.plotter.iren.interactor
         x, y = interactor.GetEventPosition()
-        pose = self._interactive_pick_surface_pose(x, y, estimate_planar=True)
-        if pose is None:
-            pose = self._interactive_pick_hole_opening_pose(x, y)
+        pose = self._interactive_pick_hole_opening_pose(x, y)
         if pose is not None:
             self._interactive_update_cursor(pose)
         return True
@@ -7528,7 +7532,7 @@ class ProductViewer(QWidget):
                 )
         self.plotter.render()
 
-    def _interactive_finalize_hole_spray_point(self):
+    def _interactive_finalize_hole_spray_point(self, keep_h_mode=False):
         """Commit the current nozzle pose as exactly one spray route point."""
         pose = getattr(self, "_interactive_spray_latest_pose", None)
         if pose is None:
@@ -7578,7 +7582,8 @@ class ProductViewer(QWidget):
         )
 
         self._interactive_cancel_hole_circle_gesture()
-        self._interactive_hole_circle_mode = False
+        if not keep_h_mode:
+            self._interactive_hole_circle_mode = False
         self._interactive_recorded_replay_timing = None
         self._refresh_interactive_recorded_path_actor()
         self._optimize_interactive_recorded_path()
@@ -8298,21 +8303,18 @@ class ProductViewer(QWidget):
             self._interactive_spray_previous_nozzle_world = None
     
         x, y = interactor.GetEventPosition()
-        pose = self._interactive_pick_surface_pose(x, y)
-        if pose is None and self._interactive_hole_circle_mode:
-            # Over an empty bore there is no mesh triangle to pick. Intersect
-            # the pointer ray with the product bounding box instead, then use
-            # that box-face normal as the nozzle axis. The resulting nozzle
-            # centreline necessarily meets the box face perpendicularly, so
-            # the sprayer remains visible while it is moved into the opening.
+        if self._interactive_hole_circle_mode:
+            # Resolve every H-mode cursor position against the bore axis.
+            # Never fall back to an arbitrary picked triangle normal.
             pose = self._interactive_pick_hole_opening_pose(x, y)
             if pose is not None:
                 self._interactive_update_cursor(pose)
-                return
-            # If the pointer ray cannot reach the box, retain the last valid
-            # pose and live actors rather than making the sprayer disappear.
-            self.plotter.render()
+            else:
+                self._interactive_remove_live_actors()
+                self._interactive_spray_latest_pose = None
+                self.plotter.render()
             return
+        pose = self._interactive_pick_surface_pose(x, y)
         if pose is None:
             self._interactive_remove_live_actors()
             self._interactive_spray_latest_pose = None
@@ -8875,6 +8877,17 @@ class ProductViewer(QWidget):
             ):
                 self.set_hole_circle_mode(not self._interactive_hole_circle_mode)
                 return True
+            if (
+                event.key() == Qt.Key.Key_G
+                and self._interactive_hole_circle_mode
+                and self._interactive_spray_active
+                and self._interactive_spray_mode == "spray"
+                and not event.isAutoRepeat()
+            ):
+                self._interactive_finalize_hole_spray_point(keep_h_mode=True)
+                self._update_interaction_mode_indicators("paint")
+                self.plotter.render()
+                return True
 
         if (
             watched is interactor_widget
@@ -8884,7 +8897,9 @@ class ProductViewer(QWidget):
             and self._interactive_spray_mode == "spray"
         ):
             if self._interactive_hole_circle_mode:
-                self._interactive_finalize_hole_spray_point()
+                # Double-click exits H mode; G is the only point-registration key.
+                self._interactive_cancel_hole_circle_gesture()
+                self._interactive_hole_circle_mode = False
                 self._update_interaction_mode_indicators("paint")
                 self.plotter.render()
                 return True
