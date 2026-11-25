@@ -4305,6 +4305,8 @@ class MainWindow(QMainWindow):
 
     def _on_manual_route_readiness_changed(self, ready):
         """Enable the next stage when independent spray strokes are finalized."""
+        if getattr(self, "_suppress_route_readiness_callback", False):
+            return
         ready = bool(ready)
         self.stage_completed[STAGE_SPRAY_TRAJECTORY] = ready
         if ready:
@@ -4545,12 +4547,18 @@ class MainWindow(QMainWindow):
 
         self.viewer._interactive_spray_records = remaining_records
 
-        # Refresh recorded-path data without emitting the readiness signal.
-        # Qt SignalInstance objects cannot be blocked with blockSignals().
+        # Recompute the recorded path while suppressing only this window's
+        # workflow-readiness callback. The viewer's normal optimizer and
+        # spray-drawing behavior remain unchanged.
         if remaining_records:
-            self.viewer._optimize_interactive_recorded_path(
-                emit_readiness=False
+            was_suppressed = getattr(
+                self, "_suppress_route_readiness_callback", False
             )
+            self._suppress_route_readiness_callback = True
+            try:
+                self.viewer._optimize_interactive_recorded_path()
+            finally:
+                self._suppress_route_readiness_callback = was_suppressed
         else:
             self.viewer._interactive_spray_route_optimization = {}
             self.viewer._interactive_recorded_replay_timing = {}
