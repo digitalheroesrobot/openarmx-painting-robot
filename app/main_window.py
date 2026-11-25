@@ -4391,11 +4391,10 @@ class MainWindow(QMainWindow):
             for index, metric in enumerate(metrics, start=1):
                 item = QListWidgetItem()
                 item.setData(Qt.UserRole, int(metric["group_id"]))
-                item.setSizeHint(QSize(340, 58))
+                item.setSizeHint(QSize(420, 58))
                 list_widget.addItem(item)
 
                 row = QWidget()
-                row.setAttribute(Qt.WA_TransparentForMouseEvents, True)
                 row_layout = QHBoxLayout(row)
                 row_layout.setContentsMargins(8, 5, 8, 5)
                 row_layout.setSpacing(8)
@@ -4421,9 +4420,196 @@ class MainWindow(QMainWindow):
                 metrics_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 row_layout.addWidget(metrics_label)
 
+                delete_button = QPushButton("DELETE")
+                delete_button.setFixedWidth(64)
+                delete_button.setFixedHeight(32)
+                delete_button.setToolTip(
+                    f"Delete SPRAY GROUP {index}"
+                )
+
+                group_id = int(metric["group_id"])
+                delete_button.clicked.connect(
+                    lambda checked=False, gid=group_id:
+                        self._delete_recorded_spray_group(gid)
+                )
+                row_layout.addWidget(delete_button)
+
                 list_widget.setItemWidget(item, row)
         finally:
             self._recorded_spray_list_updating = False
+
+    def _delete_recorded_spray_group(self, group_id):
+        """Delete one recorded spray group and rebuild the route."""
+        if self._recorded_spray_list_updating or self._operation_running:
+            return
+
+        try:
+            group_id = int(group_id)
+        except (TypeError, ValueError):
+            return
+
+        records = list(
+            getattr(self.viewer, "_interactive_spray_records", [])
+        )
+        if not records:
+            return
+
+        remaining_records = []
+        for record in records:
+            record_group_id = int(
+                record.get(
+                    "group_id",
+                    int(record.get("stroke_id", 0)) + 1,
+                )
+            )
+            if record_group_id != group_id:
+                remaining_records.append(dict(record))
+
+        if len(remaining_records) == len(records):
+            return
+
+        old_group_order = []
+        for record in remaining_records:
+            old_group_id = int(
+                record.get(
+                    "group_id",
+                    int(record.get("stroke_id", 0)) + 1,
+                )
+            )
+            if old_group_id not in old_group_order:
+                old_group_order.append(old_group_id)
+
+        group_id_mapping = {
+            old_id: new_id
+            for new_id, old_id in enumerate(old_group_order, start=1)
+        }
+
+        renumbered_records = []
+        for record in remaining_records:
+            old_group_id = int(
+                record.get(
+                    "group_id",
+                    int(record.get("stroke_id", 0)) + 1,
+                )
+            )
+            new_group_id = group_id_mapping[old_group_id]
+
+            updated = dict(record)
+            updated["group_id"] = new_group_id
+            updated["stroke_id"] = (
+                new_group_id - 1
+                if bool(updated.get("spray_on", True))
+                else -new_group_id
+            )
+            renumbered_records.append(updated)
+
+        self.viewer._interactive_spray_records = renumbered_records
+        self.viewer._optimize_interactive_recorded_path()
+        self.viewer._interactive_spray_route_optimization["stroke_order"] = (
+            "USER_DEFINED_DELETE"
+        )
+        self.viewer._refresh_interactive_recorded_path_actor()
+
+        route = self.interactive_spray_path
+        if isinstance(route, dict):
+            mm_factor = self.viewer._get_source_mm_factor() or 1.0
+            route.update({
+                "nozzle_points_product": np.asarray(
+                    [item["nozzle_point_product"] for item in renumbered_records],
+                    dtype=float,
+                ).reshape(-1, 3),
+                "surface_points_product": np.asarray(
+                    [item["surface_point_product"] for item in renumbered_records],
+                    dtype=float,
+                ).reshape(-1, 3),
+                "spray_directions_product": np.asarray(
+                    [item["spray_direction_product"] for item in renumbered_records],
+                    dtype=float,
+                ).reshape(-1, 3),
+                "nozzle_points_world": np.asarray(
+                    [item["nozzle_point_world"] for item in renumbered_records],
+                    dtype=float,
+                ).reshape(-1, 3),
+                "surface_points_world": np.asarray(
+                    [item["surface_point_world"] for item in renumbered_records],
+                    dtype=float,
+                ).reshape(-1, 3),
+                "spray_directions_world": np.asarray(
+                    [item["spray_direction_world"] for item in renumbered_records],
+                    dtype=float,
+                ).reshape(-1, 3),
+                "timestamps_monotonic_s": np.asarray(
+                    [item["timestamp"] for item in renumbered_records],
+                    dtype=float,
+                ),
+                "spray_poses_product": np.asarray([
+                    [
+                        item.get("t_product_s", item["timestamp"]),
+                        *np.asarray(
+                            item["nozzle_point_product"],
+                            dtype=float,
+                        ).tolist(),
+                        *np.asarray(
+                            item["quaternion_product_xyzw"],
+                            dtype=float,
+                        ).tolist(),
+                    ]
+                    for item in renumbered_records
+                ], dtype=float).reshape(-1, 8),
+                "face_indices": np.asarray(
+                    [item["face_index"] for item in renumbered_records],
+                    dtype=np.int64,
+                ),
+                "stroke_ids": np.asarray(
+                    [item["stroke_id"] for item in renumbered_records],
+                    dtype=np.int64,
+                ),
+                "group_ids": np.asarray(
+                    [item["group_id"] for item in renumbered_records],
+                    dtype=np.int64,
+                ),
+                "route_timing": {
+                    key: value
+                    for key, value in (
+                        self.viewer._interactive_recorded_replay_timing or {}
+                    ).items()
+                    if key != "timeline"
+                },
+                "route_optimization": dict(
+                    getattr(
+                        self.viewer,
+                        "_interactive_spray_route_optimization",
+                        {},
+                    )
+                ),
+                "route_optimization_metrics": dict(
+                    getattr(
+                        self.viewer,
+                        "_interactive_route_optimization_metrics",
+                        {},
+                    )
+                ),
+            })
+
+            timing = self.viewer._interactive_recorded_replay_timing or {}
+            route["spray_length_mm"] = float(
+                timing.get("spray_distance_mm", 0.0)
+            )
+            route["total_route_distance_mm"] = float(
+                timing.get("total_route_distance_mm", 0.0)
+            )
+            route["estimated_duration_s"] = float(
+                timing.get("estimated_duration_s", 0.0)
+            )
+            route["route_length_product_units"] = (
+                route["spray_length_mm"] / float(mm_factor)
+            )
+
+        self._show_interactive_route_summary(route)
+        self._refresh_recorded_spray_path_panel()
+        self.status_bar.showMessage(
+            f"SPRAY GROUP {group_id} DELETED · REMAINING GROUPS RENumbered"
+        )
 
     def _on_recorded_spray_groups_reordered(self):
         """Apply the visible list order to the actual route records and replay."""
