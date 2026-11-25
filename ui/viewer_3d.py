@@ -7024,7 +7024,11 @@ class ProductViewer(QWidget):
 
     def _interactive_nearest_hole_candidate(self, point_world):
         """Return the detected bore nearest to the current inserted nozzle."""
-        candidates = self._filtered_hole_candidates()
+        # Circle painting targets every detected bore, not only bores large
+        # enough for the hook. _filtered_hole_candidates() applies the hook
+        # diameter/clearance threshold and can therefore hide valid small
+        # spray holes from this interaction.
+        candidates = list(getattr(self, "hole_candidates", []) or [])
         if not candidates:
             return None
         matrix = self._actor_matrix_array()
