@@ -1537,17 +1537,6 @@ class MainWindow(QMainWindow):
         self.finish_spray_path_button.hide()
         action_layout.addWidget(self.finish_spray_path_button)
 
-        self.hole_circle_button = QPushButton("DRAW HOLE CIRCLE")
-        self.hole_circle_button.setObjectName("SecondaryButton")
-        self.hole_circle_button.setToolTip(
-            "Press H to show the sprayer perpendicular to the face under the cursor. "
-            "Use the mouse wheel to insert/retract it, then left-drag to draw the "
-            "hole's circular perimeter. Double-click to exit hole-circle mode."
-        )
-        self.hole_circle_button.clicked.connect(self._toggle_hole_circle_mode)
-        self.hole_circle_button.hide()
-        action_layout.addWidget(self.hole_circle_button)
-
         self.interactive_paint_color_button = QPushButton("PAINT COLOR")
         self.interactive_paint_color_button.setObjectName("SecondaryButton")
         self.interactive_paint_color_button.setToolTip(
@@ -3128,19 +3117,6 @@ class MainWindow(QMainWindow):
         self.finish_spray_path_button.setVisible(route_page)
         self.finish_spray_path_button.setEnabled(
             can_generate_route and not self._operation_running
-        )
-        hole_circle_available = (
-            route_page
-            and recording
-            and not self._operation_running
-            and bool(getattr(self.viewer, "_interactive_spray_active", False))
-        )
-        self.hole_circle_button.setVisible(hole_circle_available)
-        self.hole_circle_button.setEnabled(hole_circle_available)
-        self.hole_circle_button.setText(
-            "EXIT HOLE CIRCLE"
-            if bool(getattr(self.viewer, "_interactive_hole_circle_mode", False))
-            else "DRAW HOLE CIRCLE"
         )
         self.route_next_button.setMinimumHeight(42)
         self.route_next_button.setText(
