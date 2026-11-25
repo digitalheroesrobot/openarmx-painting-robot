@@ -6846,7 +6846,7 @@ class ProductViewer(QWidget):
 
 
     def set_hole_circle_mode(self, enabled=True):
-        """Enable manual circular painting inside a detected product hole."""
+        """Enable hole insertion/circle mode and show a face-normal sprayer."""
         self._interactive_hole_circle_mode = bool(
             enabled
             and self._interactive_spray_active
@@ -6854,7 +6854,17 @@ class ProductViewer(QWidget):
         )
         if not self._interactive_hole_circle_mode:
             self._interactive_cancel_hole_circle_gesture()
-        return self._interactive_hole_circle_mode
+            return False
+
+        # H first places the nozzle at the configured stand-off from the
+        # surface under the pointer. The nozzle axis is perpendicular to that
+        # picked face and points into the product, ready for wheel insertion.
+        interactor = self.plotter.iren.interactor
+        x, y = interactor.GetEventPosition()
+        pose = self._interactive_pick_surface_pose(x, y, estimate_planar=True)
+        if pose is not None:
+            self._interactive_update_cursor(pose)
+        return True
 
     def is_hole_circle_mode(self):
         return bool(self._interactive_hole_circle_mode)
@@ -7797,7 +7807,19 @@ class ProductViewer(QWidget):
     
         pose = self._interactive_spray_latest_pose
         if pose is not None:
-            self._interactive_update_cursor(dict(pose))
+            # Recompute the nozzle from the fixed surface hit and the newly
+            # selected stand-off. This is essential in hole mode: wheel-down
+            # must physically advance the nozzle along the face normal.
+            updated_pose = dict(pose)
+            distance_source = target_mm / max(
+                float(self._get_source_mm_factor() or 1.0), 1e-12
+            )
+            updated_pose["nozzle_point_world"] = (
+                np.asarray(updated_pose["surface_point_world"], dtype=np.float64)
+                - np.asarray(updated_pose["spray_direction_world"], dtype=np.float64)
+                * distance_source
+            )
+            self._interactive_update_cursor(updated_pose)
         else:
             self.plotter.render()
 
@@ -8410,14 +8432,30 @@ class ProductViewer(QWidget):
         self._interactive_remove_stroke_preview()
 
     def eventFilter(self, watched, event):
-        """Use Qt's native double-click event to reliably enter camera mode."""
+        """Handle H activation and double-click exit for hole-circle mode."""
+        interactor_widget = getattr(getattr(self, "plotter", None), "interactor", None)
+        if watched is interactor_widget and event.type() == QEvent.Type.KeyPress:
+            if (
+                event.key() == Qt.Key.Key_H
+                and self._interactive_spray_active
+                and self._interactive_spray_mode == "spray"
+                and not event.isAutoRepeat()
+            ):
+                self.set_hole_circle_mode(not self._interactive_hole_circle_mode)
+                return True
+
         if (
-            watched is getattr(getattr(self, "plotter", None), "interactor", None)
+            watched is interactor_widget
             and event.type() == QEvent.Type.MouseButtonDblClick
             and event.button() == Qt.MouseButton.LeftButton
             and self._interactive_spray_active
             and self._interactive_spray_mode == "spray"
         ):
+            if self._interactive_hole_circle_mode:
+                self.set_hole_circle_mode(False)
+                self._update_interaction_mode_indicators("paint")
+                self.plotter.render()
+                return True
             self._on_interactive_spray_left_double_click(
                 self.plotter.iren.interactor, event
             )
