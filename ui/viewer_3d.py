@@ -1537,13 +1537,15 @@ class ProductViewer(QWidget):
             if source_group_id < 1:
                 raise ValueError("Trajectory group IDs must be positive 1-based integers.")
 
-            position_product = np.asarray(
+            # CSV XYZ is the physical nozzle-tip TCP in product-local
+            # coordinates. Keep the established CSV columns and ordering.
+            nozzle_tip_product = np.asarray(
                 record["nozzle_point_product"], dtype=np.float64
             )
-            if position_product.shape != (3,) or not np.all(np.isfinite(position_product)):
-                raise ValueError("Recorded nozzle position is invalid.")
+            if nozzle_tip_product.shape != (3,) or not np.all(np.isfinite(nozzle_tip_product)):
+                raise ValueError("Recorded nozzle-tip TCP position is invalid.")
 
-            position_mm = position_product * mm_factor
+            position_mm = nozzle_tip_product * mm_factor
 
             direction_product = np.asarray(
                 record["spray_direction_product"], dtype=np.float64
@@ -5184,6 +5186,13 @@ class ProductViewer(QWidget):
         return quaternion
 
     def _interactive_pose_to_product_frame(self, pose):
+        """Express the spray TCP (physical nozzle tip) in the product CAD frame.
+
+        ``nozzle_point_world`` is the nozzle-tip/TCP position, not the gun
+        body centre and not the surface intersection. Transform that point
+        and the spray orientation into the product frame so the CSV stores
+        the tool pose required by the downstream robot-frame converter.
+        """
         inverse = np.linalg.inv(self._interactive_spray_transform)
         point_h = np.append(pose["nozzle_point_world"], 1.0)
         surface_h = np.append(pose["surface_point_world"], 1.0)
@@ -6772,6 +6781,9 @@ class ProductViewer(QWidget):
             0.0,
             float(pose["timestamp"]) - float(self._interactive_spray_start_timestamp),
         )
+        # ``nozzle_point_*`` always denotes the physical nozzle tip (TCP).
+        # The saved spray-path position is the paint-exit point, expressed
+        # in the product CAD frame by _interactive_pose_to_product_frame().
         record = {
             "nozzle_point_world": np.asarray(pose["nozzle_point_world"], dtype=float).copy(),
             "surface_point_world": np.asarray(pose["surface_point_world"], dtype=float).copy(),
