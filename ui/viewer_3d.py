@@ -7200,7 +7200,11 @@ class ProductViewer(QWidget):
     def _interactive_update_hole_circle_preview(self, invalid_points=None):
         self._interactive_remove_hole_circle_preview()
         points = getattr(self, "_interactive_hole_circle_preview_points", [])
-        if len(points) >= 2:
+        invalid = list(invalid_points or [])
+        # Never draw a continuous green route through skipped collision samples.
+        # A partial green circle is misleading because the user may interpret it
+        # as a valid, recordable orbit.
+        if len(points) >= 2 and not invalid:
             poly = pv.PolyData(np.asarray(points, dtype=np.float64))
             poly.lines = np.asarray(
                 [len(points), *range(len(points))], dtype=np.int64
@@ -7212,7 +7216,6 @@ class ProductViewer(QWidget):
                 lighting=False,
                 pickable=False,
             )
-        invalid = list(invalid_points or [])
         if invalid:
             self._interactive_hole_circle_invalid_actor = self.plotter.add_points(
                 np.asarray(invalid, dtype=np.float64),
@@ -7332,12 +7335,22 @@ class ProductViewer(QWidget):
                     break
 
         if safe_radius is None:
-            print(
-                "[HOLE CIRCLE] Preview is visible, but no collision-free "
-                "nozzle-centre orbit was found. Move the nozzle deeper into "
-                "the bore or adjust its angle."
+            # The initial geometric circle is not a safe trajectory. Mark the
+            # whole candidate invalid and remove its green route appearance.
+            self._interactive_hole_circle_preview_invalid = list(
+                self._interactive_hole_circle_preview_points
             )
-            return preview_radius
+            self._interactive_update_hole_circle_preview(
+                self._interactive_hole_circle_preview_invalid
+            )
+            self._interactive_hole_circle_drawing = False
+            self.plotter.render()
+            print(
+                "[HOLE CIRCLE] No collision-free nozzle-centre orbit was found. "
+                "The candidate is marked invalid and cannot be recorded. "
+                "Move the nozzle deeper into the bore or adjust its angle."
+            )
+            return 0
 
         self._interactive_hole_circle_radius = safe_radius
         show_circle(safe_radius)
