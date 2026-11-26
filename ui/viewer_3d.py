@@ -12752,34 +12752,30 @@ class ProductViewer(QWidget):
         camera = self.plotter.camera
         view_angle = max(float(camera.GetViewAngle()), 10.0)
         distance = half_diagonal / max(math.sin(math.radians(view_angle * 0.5)), 0.1) * 1.08
-        direction = np.array([1.25, 2.0, -1.15], dtype=float)
-        direction /= np.linalg.norm(direction)
+        # Robot-base front view: camera is on -X, looking toward +X.
+        # +Y therefore appears on screen-left and +Z appears upward.
+        direction = np.array([-1.0, 0.0, 0.0], dtype=float)
         position = center + direction * distance
         camera.SetPosition(*position.tolist())
         camera.SetFocalPoint(*center.tolist())
-        camera.SetViewUp(0.0, 0.0, -1.0)
+        camera.SetViewUp(0.0, 0.0, 1.0)
         camera.OrthogonalizeViewUp()
         self.plotter.reset_camera_clipping_range()
 
     def _set_standard_camera(self):
-        # Operator is in front of the box at +Y and looks toward -Y.
-        # Screen-right is +X; the downward World axis is +Z.
-        lx, ly, lz = np.asarray(self.workspace_dimensions, dtype=float)
-        # The box and World origin are centered in X, Y, and Z.
+        # Robot-base front view: camera is on -X and looks toward +X.
+        # Robot-left (+Y) is screen-left; robot-up (+Z) is screen-up.
         center = np.zeros(3, dtype=float)
         distance = max(float(np.linalg.norm(self.workspace_dimensions)), 100.0)
-
-        # Oblique operator-side view: all three positive axes remain
-        # visually separated instead of Y disappearing into depth.
         camera_position = center + np.array(
-            [1.65 * distance, 2.55 * distance, -1.75 * distance],
+            [-distance, 0.0, 0.0],
             dtype=float,
         )
 
         self.plotter.camera_position = (
             tuple(camera_position.tolist()),
             tuple(center.tolist()),
-            (0.0, 0.0, -1.0),
+            (0.0, 0.0, 1.0),
         )
         self.plotter.camera.zoom(1.12)
         self.plotter.reset_camera_clipping_range()
