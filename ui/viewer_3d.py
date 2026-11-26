@@ -3393,8 +3393,21 @@ class ProductViewer(QWidget):
             "ATTITUDE RESET  |  Roll, Pitch and Yaw set to 0.00°."
         )
 
+    def _cad_axes_display_matrix(self, product_matrix=None):
+        """Keep source CAD XYZ directions unchanged; move only the CAD origin."""
+        matrix = (
+            self._actor_matrix_array()
+            if product_matrix is None
+            else np.asarray(product_matrix, dtype=np.float64)
+        )
+        if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
+            raise ValueError("Product transform must be a finite 4x4 matrix.")
+        cad_axes_matrix = np.eye(4, dtype=np.float64)
+        cad_axes_matrix[:3, 3] = matrix[:3, 3]
+        return cad_axes_matrix
+
     def _apply_product_transform_to_display_actors(self, matrix):
-        """Apply one CAD-to-World transform to every visible product actor."""
+        """Apply the product pose to the mesh while leaving CAD axes unrotated."""
         matrix = np.asarray(matrix, dtype=np.float64)
         if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
             raise ValueError("Product transform must be a finite 4x4 matrix.")
@@ -3425,7 +3438,9 @@ class ProductViewer(QWidget):
             actor.SetUserMatrix(vtk_matrix)
 
         if self._cad_axes_actor is not None:
-            self._cad_axes_actor.SetUserMatrix(vtk_matrix)
+            self._cad_axes_actor.SetUserMatrix(
+                self._vtk_matrix_from_numpy(self._cad_axes_display_matrix(matrix))
+            )
 
     def _apply_rpy_inputs(self):
         """Set absolute World-frame ZYX Roll/Pitch/Yaw orientation."""
@@ -3665,11 +3680,11 @@ class ProductViewer(QWidget):
             field.blockSignals(True)
             field.setValue(float(value))
             field.blockSignals(False)
-        # Keep the Product coordinate frame synchronized with the displayed
-        # CAD transform; the fixed World frame is deliberately untouched.
+        # Preserve the source CAD axis directions; only the CAD origin
+        # follows its displayed position. The robot/World frame is untouched.
         if self._cad_axes_actor is not None:
             self._cad_axes_actor.SetUserMatrix(
-                self._vtk_matrix_from_numpy(self._actor_matrix_array())
+                self._vtk_matrix_from_numpy(self._cad_axes_display_matrix())
             )
 
     @staticmethod
@@ -11668,7 +11683,9 @@ class ProductViewer(QWidget):
             text_property.SetColor(*color)
             text_property.SetOpacity(1.0)
 
-        axes.SetUserMatrix(self._vtk_matrix_from_numpy(self._actor_matrix_array()))
+        axes.SetUserMatrix(
+            self._vtk_matrix_from_numpy(self._cad_axes_display_matrix())
+        )
         self._cad_axes_actor = axes
         self.plotter.add_actor(axes, reset_camera=False)
 
