@@ -5110,28 +5110,32 @@ class ProductViewer(QWidget):
 
     @staticmethod
     def _interactive_pose_quaternion_from_direction(direction_product):
-        """Build a product-frame orientation with the tool's local +X on the spray axis.
+        """Build a product-frame orientation with the tool's local +Z on the spray axis.
 
-        The nozzle's local +X axis points along the spray direction. The local
-        +Z axis is kept as close as possible to product/CAD +Z to define roll;
-        if the spray direction is parallel to CAD +Z, CAD +Y is used instead.
+        The real spray axis is the nozzle's local +Z axis. The nozzle mounting
+        convention is local +X aligned with robot/product +X, local +Y aligned
+        with robot/product -Y, and local +Z aligned with robot/product -Z when
+        the spray direction is robot/product -Z. For arbitrary spray directions,
+        local +X is kept as close as possible to product +X to define roll.
         """
-        x_axis = np.asarray(direction_product, dtype=np.float64)
-        x_norm = float(np.linalg.norm(x_axis))
-        if x_axis.shape != (3,) or not np.all(np.isfinite(x_axis)) or x_norm <= 1e-12:
+        z_axis = np.asarray(direction_product, dtype=np.float64)
+        z_norm = float(np.linalg.norm(z_axis))
+        if z_axis.shape != (3,) or not np.all(np.isfinite(z_axis)) or z_norm <= 1e-12:
             raise ValueError("Cannot build orientation from an invalid spray direction.")
-        x_axis = x_axis / x_norm
+        z_axis = z_axis / z_norm
 
-        reference = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-        if abs(float(np.dot(reference, x_axis))) > 0.95:
+        # Preserve the known tool roll convention: local +X follows CAD +X
+        # as closely as possible, then local +Y completes a right-handed frame.
+        reference = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        if abs(float(np.dot(reference, z_axis))) > 0.95:
             reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
 
-        z_axis = reference - float(np.dot(reference, x_axis)) * x_axis
-        z_axis /= max(float(np.linalg.norm(z_axis)), 1e-12)
+        x_axis = reference - float(np.dot(reference, z_axis)) * z_axis
+        x_axis /= max(float(np.linalg.norm(x_axis)), 1e-12)
         y_axis = np.cross(z_axis, x_axis)
         y_axis /= max(float(np.linalg.norm(y_axis)), 1e-12)
-        z_axis = np.cross(x_axis, y_axis)
-        z_axis /= max(float(np.linalg.norm(z_axis)), 1e-12)
+        x_axis = np.cross(y_axis, z_axis)
+        x_axis /= max(float(np.linalg.norm(x_axis)), 1e-12)
 
         rotation = np.column_stack((x_axis, y_axis, z_axis))
         trace = float(np.trace(rotation))
