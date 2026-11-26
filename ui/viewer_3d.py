@@ -5780,7 +5780,7 @@ class ProductViewer(QWidget):
             pass
         return actor
 
-    def _interactive_build_gun_visual(self, nozzle, spray_direction, render=True):
+    def _interactive_build_gun_visual(self, nozzle, spray_direction, render=True, collision=False):
         """Build a lightweight sprayer envelope from the active profile."""
         profile = self._interactive_sprayer_profile or {}
         mm_factor = self._get_source_mm_factor() or 1.0
@@ -5836,7 +5836,7 @@ class ProductViewer(QWidget):
             for part in parts:
                 actor = self.plotter.add_mesh(
                     part,
-                    color="#B9C4CC",
+                    color="#FF3030" if collision else "#B9C4CC",
                     opacity=0.88,
                     smooth_shading=True,
                     lighting=True,
@@ -6283,9 +6283,19 @@ class ProductViewer(QWidget):
         )
         self._interactive_spray_gun_actors = gun_actors
         collision = False
-        if self._interactive_spray_recording and not surface_excluded:
+        if (self._interactive_spray_recording or getattr(self, "_interactive_hole_circle_mode", False)) and not surface_excluded:
             collision = self._interactive_check_gun_collision(gun_polydata)
         self._interactive_spray_gun_collision = collision
+        if collision:
+            for actor in gun_actors:
+                try:
+                    self.plotter.remove_actor(actor, render=False)
+                except Exception:
+                    pass
+            gun_actors, _ = self._interactive_build_gun_visual(
+                nozzle, direction, collision=True
+            )
+            self._interactive_spray_gun_actors = gun_actors
         self._interactive_spray_surface_excluded = surface_excluded
         spray_blocked = collision or surface_excluded
         if spray_blocked:
@@ -7471,6 +7481,8 @@ class ProductViewer(QWidget):
         )
         preview_points = []
         invalid_points = []
+        latest_preview_pose = None
+        latest_preview_collision = False
         for sample_angle in preview_angles:
             nozzle = center + self._interactive_hole_circle_radius * (
                 math.cos(float(sample_angle)) * u
@@ -7479,11 +7491,15 @@ class ProductViewer(QWidget):
             pose = self._interactive_hole_circle_pose(nozzle, axis)
             if pose is None:
                 invalid_points.append(nozzle)
+                latest_preview_pose = None
+                latest_preview_collision = True
                 continue
+            latest_preview_pose = pose
             gun_actors, gun_polydata = self._interactive_build_gun_visual(
                 nozzle, pose["spray_direction_world"], render=False
             )
             collision = self._interactive_check_gun_collision(gun_polydata)
+            latest_preview_collision = bool(collision)
             for actor in gun_actors:
                 try:
                     self.plotter.remove_actor(actor, render=False)
@@ -7497,16 +7513,22 @@ class ProductViewer(QWidget):
         self._interactive_hole_circle_preview_points = preview_points
         self._interactive_hole_circle_preview_invalid = invalid_points
         self._interactive_update_hole_circle_preview(invalid_points)
-        if preview_points:
-            last_pose = self._interactive_hole_circle_pose(preview_points[-1], axis)
-            if last_pose is not None:
-                self._interactive_spray_latest_pose = last_pose
-                self._interactive_spray_gun_collision = False
-                self._interactive_build_gun_visual(
-                    last_pose["nozzle_point_world"],
-                    last_pose["spray_direction_world"],
-                    render=False,
-                )
+        if latest_preview_pose is not None:
+            self._interactive_spray_latest_pose = latest_preview_pose
+            self._interactive_spray_gun_collision = latest_preview_collision
+            for actor in getattr(self, "_interactive_spray_gun_actors", []):
+                try:
+                    self.plotter.remove_actor(actor, render=False)
+                except Exception:
+                    pass
+            visible_actors, _ = self._interactive_build_gun_visual(
+                latest_preview_pose["nozzle_point_world"],
+                latest_preview_pose["spray_direction_world"],
+                collision=latest_preview_collision,
+            )
+            self._interactive_spray_gun_actors = visible_actors
+        elif invalid_points:
+            self._interactive_spray_gun_collision = True
         self.plotter.render()
 
     def _interactive_finalize_hole_spray_point(self, keep_h_mode=False):
