@@ -6782,9 +6782,11 @@ class ProductViewer(QWidget):
             self._interactive_spray_sampling_previous_pose = current
             return emitted
 
+        # Sample the operator-drawn surface path itself; nozzle standoff
+        # must not change the recorded path coordinates or point spacing.
         segment_length = float(np.linalg.norm(
-            np.asarray(current["nozzle_point_world"], dtype=np.float64)
-            - np.asarray(previous["nozzle_point_world"], dtype=np.float64)
+            np.asarray(current["surface_point_world"], dtype=np.float64)
+            - np.asarray(previous["surface_point_world"], dtype=np.float64)
         ))
         accumulated = float(getattr(
             self, "_interactive_spray_sampling_distance_accumulator", 0.0
