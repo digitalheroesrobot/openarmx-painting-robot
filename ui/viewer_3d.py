@@ -5067,8 +5067,27 @@ class ProductViewer(QWidget):
             return None
         normal_local = normal_local / normal_length
 
-        # Normals transform by the inverse transpose, including when the
-        # product actor has non-uniform scale.
+        # The spray direction is defined directly in the original CAD /
+        # product frame. Apply the operator's yaw/pitch there, not in a
+        # renderer/world frame. Convert it to scene coordinates only for
+        # transient viewport geometry (gun, cone and collision checks).
+        spray_direction_product = -normal_local.copy()
+        spray_direction_product = self._interactive_rotate_spray_direction(
+            spray_direction_product,
+            self._interactive_spray_angle_y_deg,
+            self._interactive_spray_angle_x_deg,
+        )
+        direction_length = float(np.linalg.norm(spray_direction_product))
+        if not np.isfinite(direction_length) or direction_length <= 1e-12:
+            return None
+        spray_direction_product /= direction_length
+        spray_direction_world = transform[:3, :3] @ spray_direction_product
+        world_direction_length = float(np.linalg.norm(spray_direction_world))
+        if not np.isfinite(world_direction_length) or world_direction_length <= 1e-12:
+            return None
+        spray_direction_world /= world_direction_length
+
+        # Surface normals use the inverse transpose under non-uniform scale.
         try:
             normal_world = np.linalg.inv(transform[:3, :3]).T @ normal_local
         except np.linalg.LinAlgError:
@@ -5077,18 +5096,12 @@ class ProductViewer(QWidget):
         if normal_world_length <= 1e-12:
             return None
         normal_world /= normal_world_length
-
         nozzle_world = hit_world + normal_world * self._interactive_spray_standoff
-        spray_direction_world = -normal_world
-
-        spray_direction_world = self._interactive_rotate_spray_direction(
-            spray_direction_world, self._interactive_spray_angle_y_deg,
-            self._interactive_spray_angle_x_deg,
-        )
         return {
             "surface_point_world": hit_world,
             "surface_normal_world": normal_world,
             "nozzle_point_world": nozzle_world,
+            "spray_direction_product": spray_direction_product.copy(),
             "spray_direction_world": spray_direction_world,
             "cell_id": cell_id,
             "paintable": not surface_excluded,
@@ -5159,8 +5172,15 @@ class ProductViewer(QWidget):
         product_rotation = self._interactive_product_rotation_matrix(
             self._interactive_spray_transform[:3, :3]
         )
-        direction_product = product_rotation.T @ np.asarray(
-            pose["spray_direction_world"], dtype=np.float64
+        # The authoritative direction is already expressed in product
+        # coordinates at the picking stage. Keep a compatibility fallback
+        # for poses created by older interpolation / hole-mode code.
+        direction_product = np.asarray(
+            pose.get("spray_direction_product"), dtype=np.float64
+        ) if pose.get("spray_direction_product") is not None else (
+            product_rotation.T @ np.asarray(
+                pose["spray_direction_world"], dtype=np.float64
+            )
         )
         direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
         spray_point_product = (inverse @ point_h)[:3]
