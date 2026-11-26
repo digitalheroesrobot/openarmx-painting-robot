@@ -1532,8 +1532,8 @@ class ProductViewer(QWidget):
             if source_group_id < 1:
                 raise ValueError("Trajectory group IDs must be positive 1-based integers.")
 
-            # XYZ is the directly drawn spray point in the original CAD frame.
-            # The next stage may interpret it as the nozzle spray-exit point.
+            # XYZ is the actual nozzle/spray-exit point in the original CAD frame,
+            # already offset from the picked surface by the working distance.
             spray_point_product = np.asarray(
                 record["nozzle_point_product"], dtype=np.float64
             )
@@ -1720,13 +1720,16 @@ class ProductViewer(QWidget):
                         raise ValueError(f"Line {row_number}: pose values must be finite.")
                     quaternion = pose_values[3:7]
                     rotation_product = self._csv_quaternion_rotation_xyzw(quaternion)
-                    # The nozzle tool's local +Z axis points away from the
-                    # surface, opposite the spray direction.
-                    direction_product = -(
+                    # The nozzle tool's local +Z axis IS the spray direction.
+                    # Therefore the product-frame spray direction is exactly
+                    # the rotated local +Z axis; do not negate it.
+                    direction_product = (
                         rotation_product @ np.array([0.0, 0.0, 1.0], dtype=np.float64)
                     )
                     direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
                     nozzle_product = pose_values[:3] / mm_factor
+                    # The spray ray starts at the nozzle and travels along
+                    # +Z-tool/spray_direction until it reaches the surface.
                     surface_product = nozzle_product + direction_product * standoff
                     nozzle_world = (transform @ np.append(nozzle_product, 1.0))[:3]
                     surface_world = (transform @ np.append(surface_product, 1.0))[:3]
@@ -5167,14 +5170,16 @@ class ProductViewer(QWidget):
         return quaternion / max(float(np.linalg.norm(quaternion)), 1e-12)
 
     def _interactive_pose_to_product_frame(self, pose):
-        """Express the drawn spray point and its direction in the original CAD frame.
+        """Express the nozzle pose and surface point in the original CAD frame.
 
-        The recorded position is the picked point on the product surface.
-        No nozzle offset, TCP, gun-centre, or robot-frame calculation is made.
-        The next stage may interpret this point as the nozzle spray-exit point.
+        The mouse hit is the surface point, while the actual recorded spray
+        pose is the nozzle point offset from that surface by the configured
+        working distance. Both points are preserved separately in the product
+        frame. No robot-frame or TCP transformation is applied here.
         """
         inverse = np.linalg.inv(self._interactive_spray_transform)
-        point_h = np.append(pose["surface_point_world"], 1.0)
+        nozzle_h = np.append(pose["nozzle_point_world"], 1.0)
+        surface_h = np.append(pose["surface_point_world"], 1.0)
         product_rotation = self._interactive_product_rotation_matrix(
             self._interactive_spray_transform[:3, :3]
         )
@@ -5189,17 +5194,17 @@ class ProductViewer(QWidget):
             )
         )
         direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
-        spray_point_product = (inverse @ point_h)[:3]
-        # Keep the legacy surface keys because the finish/recording pipeline
-        # still consumes them. They now refer to the same directly drawn point;
-        # no nozzle standoff or TCP offset is applied to the saved trajectory.
+
+        nozzle_point_product = (inverse @ nozzle_h)[:3]
+        surface_point_product = (inverse @ surface_h)[:3]
+
         normal_product = self._interactive_spray_transform[:3, :3].T @ np.asarray(
             pose["surface_normal_world"], dtype=np.float64
         )
         normal_product /= max(float(np.linalg.norm(normal_product)), 1e-12)
         return {
-            "nozzle_point": spray_point_product.copy(),
-            "surface_point": spray_point_product.copy(),
+            "nozzle_point": nozzle_point_product.copy(),
+            "surface_point": surface_point_product.copy(),
             "surface_normal": normal_product,
             "spray_direction": direction_product,
             "quaternion_xyzw": self._interactive_pose_quaternion_from_direction(
@@ -6784,8 +6789,8 @@ class ProductViewer(QWidget):
             0.0,
             float(pose["timestamp"]) - float(self._interactive_spray_start_timestamp),
         )
-        # Product-local position stores the directly drawn surface spray point.
-        # No nozzle offset or robot-frame reference is applied at this stage.
+        # Product-local position stores the actual nozzle/spray-exit point.
+        # The separately stored surface point remains the mouse-hit point.
         record = {
             "nozzle_point_world": np.asarray(pose["nozzle_point_world"], dtype=float).copy(),
             "surface_point_world": np.asarray(pose["surface_point_world"], dtype=float).copy(),
