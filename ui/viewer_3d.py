@@ -3394,7 +3394,7 @@ class ProductViewer(QWidget):
         )
 
     def _cad_axes_display_matrix(self, product_matrix=None):
-        """Keep source CAD XYZ directions unchanged; move only the CAD origin."""
+        """Apply the product pose to the original CAD axes without robot-frame alignment."""
         matrix = (
             self._actor_matrix_array()
             if product_matrix is None
@@ -3402,12 +3402,13 @@ class ProductViewer(QWidget):
         )
         if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
             raise ValueError("Product transform must be a finite 4x4 matrix.")
-        cad_axes_matrix = np.eye(4, dtype=np.float64)
-        cad_axes_matrix[:3, 3] = matrix[:3, 3]
-        return cad_axes_matrix
+        # The CAD axes are attached to the product: preserve their source
+        # orientation at the neutral pose, then follow every user RPY rotation
+        # and translation exactly as the product mesh does.
+        return matrix.copy()
 
     def _apply_product_transform_to_display_actors(self, matrix):
-        """Apply the product pose to the mesh while leaving CAD axes unrotated."""
+        """Apply the same product pose to the mesh and its attached CAD axes."""
         matrix = np.asarray(matrix, dtype=np.float64)
         if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
             raise ValueError("Product transform must be a finite 4x4 matrix.")
