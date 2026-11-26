@@ -1540,7 +1540,9 @@ class ProductViewer(QWidget):
             if spray_point_product.shape != (3,) or not np.all(np.isfinite(spray_point_product)):
                 raise ValueError("Recorded CAD-frame spray point is invalid.")
 
-            position_mm = spray_point_product * mm_factor
+            # Convert only at CSV export: source CAD units -> mm -> meters.
+            # All internal CAD coordinates and trajectory calculations remain unchanged.
+            position_m = spray_point_product * (mm_factor * 0.001)
 
             direction_product = np.asarray(
                 record["spray_direction_product"], dtype=np.float64
@@ -1571,9 +1573,9 @@ class ProductViewer(QWidget):
 
             output_rows.append({
                 "t": f"{max(timestamp - first_timestamp, 0.0):.9f}",
-                "x": f"{position_mm[0]:.6f}",
-                "y": f"{position_mm[1]:.6f}",
-                "z": f"{position_mm[2]:.6f}",
+                "x": f"{position_m[0]:.9f}",
+                "y": f"{position_m[1]:.9f}",
+                "z": f"{position_m[2]:.9f}",
                 "qx": f"{quaternion[0]:.9f}",
                 "qy": f"{quaternion[1]:.9f}",
                 "qz": f"{quaternion[2]:.9f}",
@@ -1622,7 +1624,7 @@ class ProductViewer(QWidget):
             f"Exported {len(output_rows):,} recorded spray points in "
             f"{len({row['group_id'] for row in output_rows})} groups.\\n"
             f"Recorded duration: {recorded_duration:.3f} s\\n"
-            "CSV columns: t, XYZ (product-local mm), XYZW quaternion, group_id.\\n"
+            "CSV columns: t, XYZ (product-local meters), XYZW quaternion, group_id.\\n"
             "No robot control-frequency resampling, interpolation, or extra spray points were generated.",
         )
         return True
@@ -1727,7 +1729,9 @@ class ProductViewer(QWidget):
                         rotation_product @ np.array([0.0, 0.0, 1.0], dtype=np.float64)
                     )
                     direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
-                    nozzle_product = pose_values[:3] / mm_factor
+                    # CSV XYZ is meters; convert back to the loaded CAD source units
+                    # for viewport playback. Export performs the inverse conversion.
+                    nozzle_product = (pose_values[:3] * 1000.0) / mm_factor
                     # The spray ray starts at the nozzle and travels along
                     # +Z-tool/spray_direction until it reaches the surface.
                     surface_product = nozzle_product + direction_product * standoff
@@ -1921,7 +1925,7 @@ class ProductViewer(QWidget):
         QMessageBox.information(
             self, "Import trajectory",
             f"Loaded {len(records):,} samples for simulation.\\n"
-            "CSV rows contain product-local XYZ, XYZW quaternion, and group_id; all rows are spray poses.\\n"
+            "CSV rows contain product-local XYZ in meters, XYZW quaternion, and group_id; all rows are spray poses.\\n"
             "A group_id change marks an implicit SPRAY-OFF transfer boundary; no connector is interpolated.\\n"
             "Legacy CSV files containing the on/off column are also accepted."
         )
