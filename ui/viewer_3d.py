@@ -1506,144 +1506,89 @@ class ProductViewer(QWidget):
         ], dtype=np.float64)
 
     def _export_interactive_trajectory_csv(self):
-        """Export only spray-ON poses; group_id changes mark transfer boundaries.
+        """Export the recorded spray points exactly as stored.
 
-        The CSV contains no transfer geometry or SPRAY-OFF rows. MoveIt2
-        detects group changes and plans the inter-group robot motion.
+        The CSV is a direct serialization of the current spray records.
+        Robot control frequency is not used for resampling, interpolation,
+        timing, or point generation.
         """
         records = list(getattr(self, "_interactive_spray_records", []))
-        if len(records) < 2:
-            QMessageBox.warning(self, "Export trajectory", "There is no completed spray route to export.")
-            return False
-
-        # Always rebuild the export timeline from the current authoritative
-        # record list. A previously cached SAFE timeline can still contain
-        # references to groups that were subsequently deleted or edited.
-        if not self._optimize_interactive_recorded_path():
+        if not records:
             QMessageBox.warning(
-                self, "Export trajectory",
-                "The remaining spray route could not be finalized."
-            )
-            return False
-        timing = getattr(self, "_interactive_recorded_replay_timing", None)
-        if not timing or timing.get("safety_status") != "SAFE" or not timing.get("timeline"):
-            QMessageBox.warning(
-                self, "Export trajectory",
-                "The remaining spray route has no valid export timeline."
+                self, "Export trajectory", "There are no recorded spray points to export."
             )
             return False
 
         mm_factor = self._get_source_mm_factor()
         if mm_factor is None or not np.isfinite(mm_factor) or mm_factor <= 0.0:
-            QMessageBox.warning(self, "Export trajectory", "The CAD source unit is unknown; positions cannot be converted to millimetres.")
-            return False
-
-        frequency = float(self._robot_motion_settings.get("control_frequency_hz", 100.0))
-        if not np.isfinite(frequency) or frequency <= 0.0:
-            QMessageBox.warning(self, "Export trajectory", "Robot control frequency must be greater than zero.")
-            return False
-
-        timeline = timing["timeline"]
-        spray_edges = [edge for edge in timeline if bool(edge.get("spray_on"))]
-        if not spray_edges:
-            QMessageBox.warning(self, "Export trajectory", "The route contains no spray-ON segments.")
-            return False
-        period = 1.0 / frequency
-
-        # Export only spray segments. Group changes encode transfer boundaries;
-        # OFF transfer markers are intentionally absent from the CSV.
-        grouped_edges = []
-        for edge in spray_edges:
-            source_group_id = int(edge["start_record"].get(
-                "group_id", int(edge["start_record"]["stroke_id"]) + 1
-            ))
-            if source_group_id < 1:
-                raise ValueError("Trajectory group IDs must be positive 1-based integers.")
-            if not grouped_edges or grouped_edges[-1]["source_group_id"] != source_group_id:
-                grouped_edges.append({"source_group_id": source_group_id, "edges": []})
-            grouped_edges[-1]["edges"].append(edge)
-
-        source_group_ids = [group["source_group_id"] for group in grouped_edges]
-        if len(set(source_group_ids)) != len(source_group_ids):
-            QMessageBox.critical(
-                self, "Export trajectory",
-                "A spray group appears again after a later group. Finish or reload the route before exporting.",
+            QMessageBox.warning(
+                self,
+                "Export trajectory",
+                "The CAD source unit is unknown; positions cannot be converted to millimetres.",
             )
             return False
 
-        inverse = self._interactive_spray_transform_inverse
-        product_rotation = self._interactive_product_rotation_matrix(
-            self._interactive_spray_transform[:3, :3]
-        )
         output_rows = []
-        spray_duration = 0.0
-        output_time = 0.0
+        first_timestamp = float(records[0].get("timestamp", 0.0))
+        for record in records:
+            source_group_id = int(
+                record.get("group_id", int(record.get("stroke_id", 0)) + 1)
+            )
+            if source_group_id < 1:
+                raise ValueError("Trajectory group IDs must be positive 1-based integers.")
 
-        for compact_group_id, group in enumerate(grouped_edges, start=1):
-            edges = group["edges"]
-            edge_durations = np.asarray([
-                max(float(edge["end_s"] - edge["start_s"]), 0.0)
-                for edge in edges
-            ], dtype=np.float64)
-            valid = edge_durations > 1e-12
-            edges = [edge for edge, keep in zip(edges, valid) if keep]
-            edge_durations = edge_durations[valid]
-            if not edges:
-                continue
+            position_product = np.asarray(
+                record["nozzle_point_product"], dtype=np.float64
+            )
+            if position_product.shape != (3,) or not np.all(np.isfinite(position_product)):
+                raise ValueError("Recorded nozzle position is invalid.")
 
-            local_end_times = np.cumsum(edge_durations)
-            group_duration = float(local_end_times[-1])
-            spray_duration += group_duration
-            sample_count = max(1, int(math.ceil(group_duration * frequency - 1e-10)))
-            local_sample_times = np.arange(sample_count + 1, dtype=np.float64) * period
-            local_sample_times[-1] = min(local_sample_times[-1], group_duration)
-            local_sample_times = np.unique(local_sample_times)
+            position_mm = position_product * mm_factor
 
-            for local_t in local_sample_times:
-                edge_index = min(
-                    int(np.searchsorted(local_end_times, local_t + 1e-10, side="right")),
-                    len(edges) - 1,
+            direction_product = np.asarray(
+                record["spray_direction_product"], dtype=np.float64
+            )
+            direction_length = float(np.linalg.norm(direction_product))
+            if direction_product.shape != (3,) or not np.all(np.isfinite(direction_product)):
+                raise ValueError("Recorded spray direction is invalid.")
+            direction_product /= max(direction_length, 1e-12)
+
+            quaternion = record.get("quaternion_product_xyzw")
+            if quaternion is None:
+                quaternion = self._interactive_pose_quaternion_from_direction(
+                    direction_product
                 )
-                edge = edges[edge_index]
-                edge_start = float(local_end_times[edge_index] - edge_durations[edge_index])
-                fraction = float(np.clip(
-                    (local_t - edge_start) / max(float(edge_durations[edge_index]), 1e-12),
-                    0.0, 1.0,
-                ))
-                pose = self._interpolate_replay_record(
-                    edge["start_record"], edge["end_record"], fraction
-                )
-                nozzle_world = np.asarray(pose["nozzle_point_world"], dtype=np.float64)
-                nozzle_product = (inverse @ np.append(nozzle_world, 1.0))[:3]
-                position_mm = nozzle_product * mm_factor
-                direction_world = np.asarray(pose["spray_direction_world"], dtype=np.float64)
-                direction_world /= max(float(np.linalg.norm(direction_world)), 1e-12)
-                direction_product = product_rotation.T @ direction_world
-                direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
-                quaternion = pose.get("nozzle_quaternion_product_xyzw")
-                if quaternion is None:
-                    quaternion = self._interactive_pose_quaternion_from_direction(direction_product)
-                quaternion = np.asarray(quaternion, dtype=np.float64)
-                quaternion /= max(float(np.linalg.norm(quaternion)), 1e-12)
-                output_rows.append({
-                    "t": f"{output_time + float(local_t):.9f}",
-                    "x": f"{position_mm[0]:.6f}",
-                    "y": f"{position_mm[1]:.6f}",
-                    "z": f"{position_mm[2]:.6f}",
-                    "qx": f"{quaternion[0]:.9f}",
-                    "qy": f"{quaternion[1]:.9f}",
-                    "qz": f"{quaternion[2]:.9f}",
-                    "qw": f"{quaternion[3]:.9f}",
-                    "group_id": str(compact_group_id),
-                })
+            quaternion = np.asarray(quaternion, dtype=np.float64)
+            quaternion_length = float(np.linalg.norm(quaternion))
+            if (
+                quaternion.shape != (4,)
+                or not np.all(np.isfinite(quaternion))
+                or quaternion_length <= 1e-12
+            ):
+                raise ValueError("Recorded spray quaternion is invalid.")
+            quaternion /= quaternion_length
 
-            # Timestamp sequence increment only; it is not transfer time.
-            output_time = float(output_rows[-1]["t"]) + period
+            timestamp = float(record.get("timestamp", first_timestamp))
+            if not np.isfinite(timestamp):
+                timestamp = first_timestamp
 
-        if len(output_rows) < 2:
-            QMessageBox.warning(self, "Export trajectory", "The route has fewer than two exportable spray poses.")
+            output_rows.append({
+                "t": f"{max(timestamp - first_timestamp, 0.0):.9f}",
+                "x": f"{position_mm[0]:.6f}",
+                "y": f"{position_mm[1]:.6f}",
+                "z": f"{position_mm[2]:.6f}",
+                "qx": f"{quaternion[0]:.9f}",
+                "qy": f"{quaternion[1]:.9f}",
+                "qz": f"{quaternion[2]:.9f}",
+                "qw": f"{quaternion[3]:.9f}",
+                "group_id": str(source_group_id),
+            })
+
+        if not output_rows:
+            QMessageBox.warning(
+                self, "Export trajectory", "There are no exportable spray points."
+            )
             return False
-        duration = spray_duration
 
         filename, _ = QFileDialog.getSaveFileName(
             self, "Export robot trajectory CSV", "spray_trajectory.csv", "CSV files (*.csv)"
@@ -1652,6 +1597,7 @@ class ProductViewer(QWidget):
             return False
         if not filename.lower().endswith(".csv"):
             filename += ".csv"
+
         try:
             with open(filename, "w", newline="", encoding="utf-8") as stream:
                 writer = csv.DictWriter(
@@ -1661,19 +1607,26 @@ class ProductViewer(QWidget):
                 writer.writeheader()
                 writer.writerows(output_rows)
         except (OSError, csv.Error) as exc:
-            QMessageBox.critical(self, "Export trajectory", f"Could not write CSV file:\n{exc}")
+            QMessageBox.critical(
+                self, "Export trajectory", f"Could not write CSV file:\\n{exc}"
+            )
             return False
 
+        recorded_duration = max(
+            float(output_rows[-1]["t"]) if output_rows else 0.0,
+            0.0,
+        )
         self.recorded_path_status_label.setText(
-            f"CSV EXPORTED · {len(output_rows):,} samples · {duration:.2f} s"
+            f"CSV EXPORTED · {len(output_rows):,} recorded points · {recorded_duration:.2f} s"
         )
         QMessageBox.information(
-            self, "Export trajectory",
-            f"Exported {len(output_rows):,} spray poses in {len(grouped_edges)} groups.\\n"
-            f"Sampling frequency: {frequency:g} Hz\\n"
-            f"Total spray duration: {duration:.3f} s\\n"
+            self,
+            "Export trajectory",
+            f"Exported {len(output_rows):,} recorded spray points in "
+            f"{len({row['group_id'] for row in output_rows})} groups.\\n"
+            f"Recorded duration: {recorded_duration:.3f} s\\n"
             "CSV columns: t, XYZ (product-local mm), XYZW quaternion, group_id.\\n"
-            "No on/off column, SPRAY-OFF rows, or transfer poses are exported. MoveIt2 uses group_id changes to switch spray OFF and plan transfers."
+            "No robot control-frequency resampling, interpolation, or extra spray points were generated.",
         )
         return True
 
