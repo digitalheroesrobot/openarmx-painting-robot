@@ -5163,8 +5163,18 @@ class ProductViewer(QWidget):
             pose["spray_direction_world"], dtype=np.float64
         )
         direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
+        spray_point_product = (inverse @ point_h)[:3]
+        # Keep the legacy surface keys because the finish/recording pipeline
+        # still consumes them. They now refer to the same directly drawn point;
+        # no nozzle standoff or TCP offset is applied to the saved trajectory.
+        normal_product = self._interactive_spray_transform[:3, :3].T @ np.asarray(
+            pose["surface_normal_world"], dtype=np.float64
+        )
+        normal_product /= max(float(np.linalg.norm(normal_product)), 1e-12)
         return {
-            "nozzle_point": (inverse @ point_h)[:3],
+            "nozzle_point": spray_point_product.copy(),
+            "surface_point": spray_point_product.copy(),
+            "surface_normal": normal_product,
             "spray_direction": direction_product,
             "quaternion_xyzw": self._interactive_pose_quaternion_from_direction(
                 direction_product
