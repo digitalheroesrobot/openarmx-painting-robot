@@ -228,11 +228,6 @@ INTERACTIVE_SPRAY_MIN_STANDOFF_MM = 10.0
 INTERACTIVE_SPRAY_MAX_STANDOFF_MM = 500.0
 INTERACTIVE_SPRAY_WHEEL_STEP_MM = 5.0
 
-# Must match PRODUCT_RPY in the downstream ROS2 CSV-to-robot-frame converter.
-# The user's supplied converter currently uses (0, 0, 0), so product +X/+Y
-# coincide with robot-base +X/+Y. Keep this value synchronized if calibration changes.
-INTERACTIVE_ROBOT_PRODUCT_RPY = (0.0, 0.0, 0.0)
-
 FACE_EXCLUDED = 0
 FACE_PAINTABLE_CANDIDATE = 1
 FACE_REQUIRES_INSPECTION = 2
@@ -1537,15 +1532,15 @@ class ProductViewer(QWidget):
             if source_group_id < 1:
                 raise ValueError("Trajectory group IDs must be positive 1-based integers.")
 
-            # CSV XYZ is the physical nozzle-tip TCP in product-local
-            # coordinates. Keep the established CSV columns and ordering.
-            nozzle_tip_product = np.asarray(
+            # XYZ is the directly drawn spray point in the original CAD frame.
+            # The next stage may interpret it as the nozzle spray-exit point.
+            spray_point_product = np.asarray(
                 record["nozzle_point_product"], dtype=np.float64
             )
-            if nozzle_tip_product.shape != (3,) or not np.all(np.isfinite(nozzle_tip_product)):
-                raise ValueError("Recorded nozzle-tip TCP position is invalid.")
+            if spray_point_product.shape != (3,) or not np.all(np.isfinite(spray_point_product)):
+                raise ValueError("Recorded CAD-frame spray point is invalid.")
 
-            position_mm = nozzle_tip_product * mm_factor
+            position_mm = spray_point_product * mm_factor
 
             direction_product = np.asarray(
                 record["spray_direction_product"], dtype=np.float64
@@ -5101,114 +5096,75 @@ class ProductViewer(QWidget):
         }
 
     @staticmethod
-    def _interactive_robot_axes_in_product_frame():
-        """Return robot forward/left unit axes expressed in product coordinates.
-
-        INTERACTIVE_ROBOT_PRODUCT_RPY must match PRODUCT_RPY in the downstream
-        ROS2 converter. R_base_product maps product vectors into the robot base;
-        its transpose therefore maps robot-base axes into the product frame.
-        """
-        roll, pitch, yaw = INTERACTIVE_ROBOT_PRODUCT_RPY
-        cr, sr = math.cos(roll), math.sin(roll)
-        cp, sp = math.cos(pitch), math.sin(pitch)
-        cy, sy = math.cos(yaw), math.sin(yaw)
-        rotation_base_product = np.asarray([
-            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
-            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
-            [-sp, cp * sr, cp * cr],
-        ], dtype=np.float64)
-        rotation_product_base = rotation_base_product.T
-        forward_product = rotation_product_base @ np.array([1.0, 0.0, 0.0])
-        left_product = rotation_product_base @ np.array([0.0, 1.0, 0.0])
-        return forward_product, left_product
-
-    @staticmethod
     def _interactive_pose_quaternion_from_direction(direction_product):
-        """Build a product-frame XYZW pose using the URDF nozzle-axis convention.
+        """Build an orientation in the original CAD frame from spray direction.
 
-        Tool +Z is opposite the spray direction (therefore tool -Z sprays).
-        Tool +X follows the robot-forward direction projected onto the plane
-        perpendicular to tool +Z. Tool +Y completes the right-handed frame;
-        this also keeps it aligned with robot-left as far as the spray-axis
-        constraint permits.
+        The tool +Z axis points opposite the spray direction. Roll is fixed
+        against the CAD +X axis (or CAD +Y when parallel); no robot-frame
+        alignment or robot/product calibration is involved at this stage.
         """
         z_axis = -np.asarray(direction_product, dtype=np.float64)
         z_norm = float(np.linalg.norm(z_axis))
-        if z_norm <= 1e-12:
-            raise ValueError("Cannot build nozzle orientation from a zero direction.")
+        if z_axis.shape != (3,) or not np.all(np.isfinite(z_axis)) or z_norm <= 1e-12:
+            raise ValueError("Cannot build orientation from an invalid spray direction.")
         z_axis /= z_norm
 
-        forward_product, left_product = ProductViewer._interactive_robot_axes_in_product_frame()
-        x_axis = forward_product - float(np.dot(forward_product, z_axis)) * z_axis
-        x_norm = float(np.linalg.norm(x_axis))
-        if x_norm <= 1e-8:
-            # If spray +Z is parallel to robot forward, use robot-left to
-            # determine roll while preserving the right-handed frame.
-            left_tangent = left_product - float(np.dot(left_product, z_axis)) * z_axis
-            left_norm = float(np.linalg.norm(left_tangent))
-            if left_norm <= 1e-8:
-                raise ValueError("Robot forward and left axes cannot define the nozzle roll.")
-            left_tangent /= left_norm
-            x_axis = np.cross(left_tangent, z_axis)
+        reference = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        if abs(float(np.dot(reference, z_axis))) > 0.95:
+            reference = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        x_axis = reference - float(np.dot(reference, z_axis)) * z_axis
         x_axis /= max(float(np.linalg.norm(x_axis)), 1e-12)
         y_axis = np.cross(z_axis, x_axis)
         y_axis /= max(float(np.linalg.norm(y_axis)), 1e-12)
-        # Recompute X to remove accumulated numerical non-orthogonality.
         x_axis = np.cross(y_axis, z_axis)
         rotation = np.column_stack((x_axis, y_axis, z_axis))
+
         trace = float(np.trace(rotation))
         if trace > 0.0:
-            s = math.sqrt(trace + 1.0) * 2.0
-            qw = 0.25 * s
-            qx = (rotation[2, 1] - rotation[1, 2]) / s
-            qy = (rotation[0, 2] - rotation[2, 0]) / s
-            qz = (rotation[1, 0] - rotation[0, 1]) / s
+            scale = math.sqrt(trace + 1.0) * 2.0
+            qw = 0.25 * scale
+            qx = (rotation[2, 1] - rotation[1, 2]) / scale
+            qy = (rotation[0, 2] - rotation[2, 0]) / scale
+            qz = (rotation[1, 0] - rotation[0, 1]) / scale
         elif rotation[0, 0] > rotation[1, 1] and rotation[0, 0] > rotation[2, 2]:
-            s = math.sqrt(1.0 + rotation[0, 0] - rotation[1, 1] - rotation[2, 2]) * 2.0
-            qw = (rotation[2, 1] - rotation[1, 2]) / s
-            qx = 0.25 * s
-            qy = (rotation[0, 1] + rotation[1, 0]) / s
-            qz = (rotation[0, 2] + rotation[2, 0]) / s
+            scale = math.sqrt(1.0 + rotation[0, 0] - rotation[1, 1] - rotation[2, 2]) * 2.0
+            qw = (rotation[2, 1] - rotation[1, 2]) / scale
+            qx = 0.25 * scale
+            qy = (rotation[0, 1] + rotation[1, 0]) / scale
+            qz = (rotation[0, 2] + rotation[2, 0]) / scale
         elif rotation[1, 1] > rotation[2, 2]:
-            s = math.sqrt(1.0 + rotation[1, 1] - rotation[0, 0] - rotation[2, 2]) * 2.0
-            qw = (rotation[0, 2] - rotation[2, 0]) / s
-            qx = (rotation[0, 1] + rotation[1, 0]) / s
-            qy = 0.25 * s
-            qz = (rotation[1, 2] + rotation[2, 1]) / s
+            scale = math.sqrt(1.0 + rotation[1, 1] - rotation[0, 0] - rotation[2, 2]) * 2.0
+            qw = (rotation[0, 2] - rotation[2, 0]) / scale
+            qx = (rotation[0, 1] + rotation[1, 0]) / scale
+            qy = 0.25 * scale
+            qz = (rotation[1, 2] + rotation[2, 1]) / scale
         else:
-            s = math.sqrt(1.0 + rotation[2, 2] - rotation[0, 0] - rotation[1, 1]) * 2.0
-            qw = (rotation[1, 0] - rotation[0, 1]) / s
-            qx = (rotation[0, 2] + rotation[2, 0]) / s
-            qy = (rotation[1, 2] + rotation[2, 1]) / s
-            qz = 0.25 * s
+            scale = math.sqrt(1.0 + rotation[2, 2] - rotation[0, 0] - rotation[1, 1]) * 2.0
+            qw = (rotation[1, 0] - rotation[0, 1]) / scale
+            qx = (rotation[0, 2] + rotation[2, 0]) / scale
+            qy = (rotation[1, 2] + rotation[2, 1]) / scale
+            qz = 0.25 * scale
         quaternion = np.asarray([qx, qy, qz, qw], dtype=np.float64)
-        quaternion /= max(float(np.linalg.norm(quaternion)), 1e-12)
-        return quaternion
+        return quaternion / max(float(np.linalg.norm(quaternion)), 1e-12)
 
     def _interactive_pose_to_product_frame(self, pose):
-        """Express the spray TCP (physical nozzle tip) in the product CAD frame.
+        """Express the drawn spray point and its direction in the original CAD frame.
 
-        ``nozzle_point_world`` is the nozzle-tip/TCP position, not the gun
-        body centre and not the surface intersection. Transform that point
-        and the spray orientation into the product frame so the CSV stores
-        the tool pose required by the downstream robot-frame converter.
+        The recorded position is the picked point on the product surface.
+        No nozzle offset, TCP, gun-centre, or robot-frame calculation is made.
+        The next stage may interpret this point as the nozzle spray-exit point.
         """
         inverse = np.linalg.inv(self._interactive_spray_transform)
-        point_h = np.append(pose["nozzle_point_world"], 1.0)
-        surface_h = np.append(pose["surface_point_world"], 1.0)
+        point_h = np.append(pose["surface_point_world"], 1.0)
         product_rotation = self._interactive_product_rotation_matrix(
             self._interactive_spray_transform[:3, :3]
         )
-        direction_product = product_rotation.T @ pose["spray_direction_world"]
-        direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
-        normal_product = self._interactive_spray_transform[:3, :3].T @ np.asarray(
-            pose["surface_normal_world"], dtype=np.float64
+        direction_product = product_rotation.T @ np.asarray(
+            pose["spray_direction_world"], dtype=np.float64
         )
-        normal_product /= max(float(np.linalg.norm(normal_product)), 1e-12)
+        direction_product /= max(float(np.linalg.norm(direction_product)), 1e-12)
         return {
             "nozzle_point": (inverse @ point_h)[:3],
-            "surface_point": (inverse @ surface_h)[:3],
-            "surface_normal": normal_product,
             "spray_direction": direction_product,
             "quaternion_xyzw": self._interactive_pose_quaternion_from_direction(
                 direction_product
@@ -6781,9 +6737,8 @@ class ProductViewer(QWidget):
             0.0,
             float(pose["timestamp"]) - float(self._interactive_spray_start_timestamp),
         )
-        # ``nozzle_point_*`` always denotes the physical nozzle tip (TCP).
-        # The saved spray-path position is the paint-exit point, expressed
-        # in the product CAD frame by _interactive_pose_to_product_frame().
+        # Product-local position stores the directly drawn surface spray point.
+        # No nozzle offset or robot-frame reference is applied at this stage.
         record = {
             "nozzle_point_world": np.asarray(pose["nozzle_point_world"], dtype=float).copy(),
             "surface_point_world": np.asarray(pose["surface_point_world"], dtype=float).copy(),
