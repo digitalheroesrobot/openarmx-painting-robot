@@ -6741,6 +6741,17 @@ class ProductViewer(QWidget):
             if key in ("surface_normal_world", "spray_direction_world"):
                 value /= max(float(np.linalg.norm(value)), 1e-12)
             result[key] = value
+        # Interpolate the authoritative direction in product coordinates too;
+        # sampled trajectory points must not reconstruct it from scene vectors.
+        if (
+            first.get("spray_direction_product") is not None
+            and second.get("spray_direction_product") is not None
+        ):
+            a = np.asarray(first["spray_direction_product"], dtype=np.float64)
+            b = np.asarray(second["spray_direction_product"], dtype=np.float64)
+            direction = a + (b - a) * fraction
+            direction /= max(float(np.linalg.norm(direction)), 1e-12)
+            result["spray_direction_product"] = direction
         result["timestamp"] = (
             float(first["timestamp"])
             + (float(second["timestamp"]) - float(first["timestamp"])) * fraction
